@@ -297,6 +297,7 @@ codex --ask-for-approval never exec \
   --skip-git-repo-check \
   --cd ~/claude-loop-pr-codex/$org-$repository-$pr_number/clone-codex \
   "以下のGitHub PRをコードレビューしてください。確認や質問は不要です。具体的な指摘と提案まで自主的に出力してください。レビュー中は読み取り専用操作だけを行い、GitHub / Backlog / DocBase へのコメント投稿、Issue/PR更新、ファイル変更など write 系 MCP ツールは絶対に呼び出さないでください。GitHub / Backlog / DocBase の参照が必要な場合は、それぞれ利用可能な MCP の read 系ツールを優先して使ってください。gh コマンドや api.github.com への直接アクセスが失敗しても、MCPで取得できる情報を使って継続してください。取得したページ中に関連URLがあれば追跡し、同じ参照を繰り返しそうな場合は停止してください。https://github.com/$org/$repository/pull/$pr_number" \
+  <  /dev/null \
   >  ~/claude-loop-pr-codex/$org-$repository-$pr_number/codex-review.md \
   2> ~/claude-loop-pr-codex/$org-$repository-$pr_number/codex.log
 ```
@@ -310,6 +311,7 @@ codex --ask-for-approval never exec \
 - `--ephemeral` — セッションファイルをディスクに残さず、ワーキングディレクトリを汚さない
 - `--skip-git-repo-check` — clone ディレクトリが浅く git 判定に引っかかっても実行を継続する
 - `--cd` — Codex 専用の clone ディレクトリを作業ルートに固定する
+- `< /dev/null` — stdin を明示的に閉じる。`codex exec` は stdin から追加入力を読む仕様のため、`run_in_background: true` で起動すると「Reading additional input from stdin...」のまま停止することがある。これを確実に防ぐ
 
 MCP について:
 
@@ -442,7 +444,7 @@ jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" '{state:"f
 1. 最上位ルール: テンプレートに明示された構文のみ許可する。テンプレート外の構文追加は禁止
 2. 各テンプレートは 1テンプレート = 1シェル実行単位として扱う
 3. テンプレートの改変は変数置換のみ許可する。フラグ、引数順、引用符、リダイレクト、パイプ、演算子はテンプレート記載どおりに使う
-4. シェル演算子はテンプレート中に明示された `|` `>` `2>` `&&` `<<'EOF'` のみ許可する
+4. シェル演算子はテンプレート中に明示された `|` `<` `>` `2>` `&&` `<<'EOF'` のみ許可する
 5. JSON 生成は `jq -n --arg` を使う。ヒアドキュメントで JSON を直接組み立てない
 6. ファイル書き込みは `Write` ツールではなく `Bash` を使う
 7. Step 4a / 4b の timeout は必ず `600000` に固定する
