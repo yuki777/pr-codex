@@ -259,7 +259,7 @@ Claude Code と Codex CLI の両方で独立にレビューし、結果を統合
 env -u CLAUDECODE claude -p "/review $org/$repository $pr_number" \
   --permission-mode dontAsk \
   --effort max \
-  --allowedTools "Read Glob Grep Bash(git diff:*) Bash(git show:*) Bash(git log:*) Bash(git rev-parse:*) Bash(gh pr view:*) Bash(gh pr diff:*)" \
+  --allowedTools "Read Glob Grep Bash(git diff *) Bash(git show *) Bash(git log *) Bash(git rev-parse *) Bash(gh pr view *) Bash(gh pr diff *)" \
   --add-dir ~/claude-loop-pr-codex/$org-$repository-$pr_number/clone-claude \
   >  ~/claude-loop-pr-codex/$org-$repository-$pr_number/claude-review.md \
   2> ~/claude-loop-pr-codex/$org-$repository-$pr_number/claude.log
