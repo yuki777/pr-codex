@@ -1,0 +1,460 @@
+---
+user-invocable: true
+name: pr-codex
+description: "GitHub PRを Claude Code と Codex CLI の2者レビュー方式で自動レビューする"
+argument-hint: ""
+allowed-tools: ["Bash", "Read", "Glob", "Grep"]
+---
+
+# pr-codex
+
+GitHubのレビュー依頼PRを自動レビューするコマンド。Claude Code と Codex CLI の2者レビュー方式。
+
+## セットアップ
+
+`~/claude-loop-pr-codex/` をワーキングディレクトリとしてClaude Codeを起動する:
+
+```bash
+cd ~/claude-loop-pr-codex && claude
+```
+
+起動後:
+
+```
+/loop 10m /pr-codex:review
+```
+
+ワーキングディレクトリを `~/claude-loop-pr-codex/` にすることで、配下のファイルに直接アクセスできる。
+
+## フロー
+
+### Step 1: レビュー対象PR候補の取得
+
+GitHub Search API でレビュー依頼されている Open PR を取得する。
+Notifications API と異なり、リポジトリの Watch 設定に依存しない。
+
+各テンプレートはコードブロックの内容をそのまま1回のシェル実行単位として使うこと。変数（`$MY_LOGIN`, `$org`, `$repository`, `$pr_number`, `$title`, `$pr_url`, `$branch`, `$head_sha`, `$started_at`, `$finished_at`, `$exit_code` など）の置換以外の改変は不可。
+
+まず自分のログイン名を取得する。
+
+- いつ使うか: Step 1 の開始時に必ず実行する
+- 判定条件: 標準出力が空でない
+- 次アクション: 出力を `$MY_LOGIN` として次の検索テンプレートに使う
+
+```bash
+gh api user | jq -r '.login'
+```
+
+取得したログイン名を `$MY_LOGIN` として、Search API でレビュー依頼PRを検索する。
+
+- いつ使うか: `$MY_LOGIN` 取得後に必ず実行する
+- 判定条件: 各行から `org`, `repository`, `pr_number`, `title`, `pr_url` を取得できる
+- 次アクション: 上から順に Step 2 の判定テンプレートへ渡す
+
+```bash
+gh api -H "Accept: application/vnd.github+json" \
+  "/search/issues?q=is:pr+state:open+draft:false+review-requested:$MY_LOGIN&sort=updated&order=desc&per_page=100" \
+  | jq -c '.items[] | {
+    org: (.repository_url | split("/")[-2]),
+    repository: (.repository_url | split("/")[-1]),
+    pr_number: .number,
+    title,
+    pr_url: (.pull_request.html_url // .html_url)
+  }'
+```
+
+**クエリパラメータの説明:**
+
+- `is:pr` - PR のみ（Issue を除外）
+- `state:open` - Open な PR のみ
+- `draft:false` - Draft PR を除外
+- `review-requested:$MY_LOGIN` - 自分がレビュー依頼されている PR（チームレビュー依頼も含む）
+- `sort=updated&order=desc` - 更新日時の降順（最新を優先。best match のデフォルトだと古い PR が漏れる）
+- `per_page=100` - 最大 100 件取得
+
+**注意事項:**
+
+- Search API はインデックスベースのため、レビュー依頼から数分の遅延が発生し得る（10分ポーリングなら許容範囲）
+- レスポンスに `head_sha` と `branch` は含まれない（Step 2b で選定PRに対して必ず取得する）
+- `review-requested:USERNAME` は GitHub docs 上、ユーザー直接指定とチーム経由の両方を含むと明記されている
+
+### Step 2: 候補PRの選定
+
+取得した候補（`$org`, `$repository`, `$pr_number`, `$title`, `$pr_url`）を上から順に走査し、以下の条件で最初の1件を選定する:
+
+1. 自分が実際にレビュー対象かチェック
+
+- いつ使うか: 各候補PRの最初の判定で実行する
+- 判定条件: 出力された `users` または `teams` を後続テンプレートで判定できる
+- 次アクション: user 直接指定または team 経由指定なら次へ、どちらでもなければスキップ
+
+```bash
+gh api repos/$org/$repository/pulls/$pr_number/requested_reviewers | jq '{users: [.users[].login], teams: [.teams[].slug]}'
+```
+
+- いつ使うか: 上の requested reviewers 出力に `.teams[].slug` が1件以上ある場合のみ実行する
+- 判定条件: 出力された team slug 一覧に requested team slug が含まれるなら team 経由レビュー対象
+- 次アクション: 含まれるなら approve 済み判定へ、含まれないなら user 直接指定も確認し、どちらでもなければスキップ
+
+```bash
+gh api user/teams | jq -r '.[].slug'
+```
+
+2. 自分がすでに approve 済みかチェック
+
+- いつ使うか: レビュー対象であると判定できた候補に対して実行する
+- 判定条件: 出力に `$MY_LOGIN` が含まれるなら approve 済み
+- 次アクション: approve 済みならスキップ、含まれなければ status 判定へ進む
+
+```bash
+gh pr view $pr_number --repo $org/$repository --json reviews | jq -r '.reviews[] | select(.state == "APPROVED") | .author.login'
+```
+
+3. `status.json` を確認
+
+- いつ使うか: approve 済みでない候補に対して実行する
+- 判定条件: ファイルが存在しなければ未レビュー
+- 次アクション: 存在しなければ選定、存在すれば内容判定へ進む
+
+```bash
+test -f ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json
+```
+
+- いつ使うか: `status.json` が存在する場合に実行する
+- 判定条件: `state` が `failed` なら再実行対象
+- 次アクション: `failed` なら選定、それ以外は次の状態判定へ進む
+
+```bash
+jq -r '.state' ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json
+```
+
+- いつ使うか: `state == "running"` の場合に実行する
+- 判定条件: `started_at` から30分超過なら stale
+- 次アクション: stale なら選定、30分以内ならスキップ
+
+```bash
+jq -r '.started_at' ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json
+```
+
+4. `state == "completed"` の場合は現在の `head_sha` を取得して、保存済み `head_sha` と比較する
+
+- いつ使うか: `state == "completed"` の場合に実行する
+- 判定条件: 保存済み `head_sha` を取得できる
+- 次アクション: Step 2b で現在の `$head_sha` を取得後、異なれば追加コミットありとして選定、一致ならスキップ
+
+```bash
+jq -r '.head_sha' ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json
+```
+
+全候補がスキップなら何もせず終了。
+
+### Step 2b: 選定PRの `head_sha` と `branch` を取得
+
+Step 2 で対象PRを1件選定した直後、未レビュー / failed / stale / completed のどの経路でも必ず実行する。Step 3 の clone と `metadata.json` 作成は `$head_sha` と `$branch` に依存するため、欠落すると後続が破綻する。
+
+- いつ使うか: Step 2 で対象PRを1件選定した直後に必ず実行する
+- 判定条件: 現在の head_sha を取得できる（出力を `$head_sha` として保持する）
+- 次アクション: branch 名の取得へ進む
+
+```bash
+gh pr view $pr_number --repo $org/$repository --json headRefOid | jq -r '.headRefOid'
+```
+
+- いつ使うか: 上の `$head_sha` 取得後に実行する
+- 判定条件: 現在のブランチ名を取得できる（出力を `$branch` として保持する）
+- 次アクション: `state == "completed"` の場合は保存済み `head_sha` と比較、それ以外は Step 3 へ進む
+
+```bash
+gh pr view $pr_number --repo $org/$repository --json headRefName | jq -r '.headRefName'
+```
+
+### Step 3: 作業ディレクトリの準備
+
+- いつ使うか: Step 2 で対象PRを1件選定した直後に実行する
+- 判定条件: 作業ディレクトリが存在する
+- 次アクション: Desktop シンボリックリンク作成へ進む
+
+```bash
+install -d ~/claude-loop-pr-codex/$org-$repository-$pr_number
+```
+
+- いつ使うか: 作業ディレクトリ作成後に実行する
+- 判定条件: Desktop シンボリックリンクが存在する
+- 次アクション: clone の初回作成または更新へ進む
+
+```bash
+ln -sfn ~/claude-loop-pr-codex/$org-$repository-$pr_number ~/Desktop/$org-$repository-$pr_number
+```
+
+PRブランチのソースコードを各ツール用に個別に clone する。初回 clone と既存 clone 更新を明確に分離する。
+
+- いつ使うか: `clone-claude` が存在しない初回のみ実行する
+- 判定条件: clone が正常作成される
+- 次アクション: `clone-codex` 初回 clone テンプレートへ進む
+
+```bash
+gh repo clone $org/$repository ~/claude-loop-pr-codex/$org-$repository-$pr_number/clone-claude -- --branch $branch --depth 1
+```
+
+- いつ使うか: `clone-codex` が存在しない初回のみ実行する
+- 判定条件: clone が正常作成される
+- 次アクション: status/metadata 作成へ進む
+
+```bash
+gh repo clone $org/$repository ~/claude-loop-pr-codex/$org-$repository-$pr_number/clone-codex -- --branch $branch --depth 1
+```
+
+- いつ使うか: `clone-claude` が既に存在する再実行時のみ実行する
+- 判定条件: fetch と checkout が成功する
+- 次アクション: `clone-codex` 更新テンプレートへ進む
+
+```bash
+git -C ~/claude-loop-pr-codex/$org-$repository-$pr_number/clone-claude fetch origin $branch && git -C ~/claude-loop-pr-codex/$org-$repository-$pr_number/clone-claude checkout FETCH_HEAD
+```
+
+- いつ使うか: `clone-codex` が既に存在する再実行時のみ実行する
+- 判定条件: fetch と checkout が成功する
+- 次アクション: status/metadata 作成へ進む
+
+```bash
+git -C ~/claude-loop-pr-codex/$org-$repository-$pr_number/clone-codex fetch origin $branch && git -C ~/claude-loop-pr-codex/$org-$repository-$pr_number/clone-codex checkout FETCH_HEAD
+```
+
+- `--depth 1` で shallow clone し、ディスク・時間を節約
+- Claude Code 用: `clone-claude/`、Codex CLI 用: `clone-codex/`
+- 各ツールが独立したディレクトリで動作するため、git/file操作の競合が発生しない
+
+以下のファイルを Bash で作成する（`Write` ツールは使わない。理由は「実装上の制約」を参照）。
+
+まず現在時刻を取得する（出力を `$started_at` として保持する）。
+
+```bash
+date -u +%Y-%m-%dT%H:%M:%S+00:00
+```
+
+- いつ使うか: 作業ディレクトリと clone の準備完了後に実行する
+- 判定条件: `status.json` が `running` で作成される
+- 次アクション: metadata 作成へ進む
+
+```bash
+jq -n --arg started_at "$started_at" '{state:"running",started_at:$started_at}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json
+```
+
+- いつ使うか: `status.json` 作成後に実行する
+- 判定条件: `metadata.json` が作成される
+- 次アクション: Step 4 のレビュー実行へ進む
+
+```bash
+jq -n --arg org "$org" --arg repository "$repository" --arg pr_number "$pr_number" --arg pr_url "$pr_url" --arg head_sha "$head_sha" --arg branch "$branch" --arg title "$title" '{org:$org,repository:$repository,pr_number:$pr_number,pr_url:$pr_url,head_sha:$head_sha,branch:$branch,title:$title}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json
+```
+
+### Step 4: レビュー実行（2者レビュー方式）
+
+Claude Code と Codex CLI の両方で独立にレビューし、結果を統合する。
+
+**4a と 4b は並行実行する。** 各ツールは独立した clone ディレクトリを使うため競合しない。両方の Bash コマンドを `run_in_background: true` で同時に発行し、両方の完了を待ってから 4c に進む。
+
+#### 4a: Claude Code レビュー
+
+子プロセスの claude code でレビューを実行する。Bash ツールで以下のコマンドを一字一句変えずに実行する。
+
+- いつ使うか: Step 3 完了後に 4b と同時に実行する（`run_in_background: true`）
+- 判定条件: `claude-review.md` が生成され、終了コードが 0
+- 次アクション: 4b と合わせて両方完了したら 4c へ、失敗または timeout なら Step 5 の failed 更新へ進む
+- timeout: `600000`
+
+```bash
+env -u CLAUDECODE claude -p "/review $org/$repository $pr_number" \
+  --permission-mode dontAsk \
+  --allowedTools "Read Glob Grep Bash(git diff:*) Bash(git show:*) Bash(git log:*) Bash(git rev-parse:*) Bash(gh pr view:*) Bash(gh pr diff:*)" \
+  --add-dir ~/claude-loop-pr-codex/$org-$repository-$pr_number/clone-claude \
+  >  ~/claude-loop-pr-codex/$org-$repository-$pr_number/claude-review.md \
+  2> ~/claude-loop-pr-codex/$org-$repository-$pr_number/claude.log
+```
+
+注意:
+
+- `env -u CLAUDECODE` — 環境変数 `CLAUDECODE` をクリアし、ネスト起動制限を回避する
+- `--permission-mode dontAsk` — 非対話で自動承認（許可ツール制限が効く）
+- `--allowedTools` — レビューに必要な read-only コマンドのみ許可（gh pr view/diff, git diff/show/log/rev-parse）
+- `--add-dir` — clone ディレクトリへのアクセスを明示的に許可
+
+#### 4b: Codex CLI レビュー
+
+Codex CLI を使い、同じPRをレビューさせる。Bash ツールで以下のコマンドを一字一句変えずに実行する。
+
+- いつ使うか: Step 3 完了後に 4a と同時に実行する（`run_in_background: true`）
+- 判定条件: `codex-review.md` が生成され、終了コードが 0
+- 次アクション: 4a と合わせて両方完了したら 4c へ、失敗または timeout なら Step 5 の failed 更新へ進む
+- timeout: `600000`
+
+```bash
+codex --ask-for-approval never exec \
+  --sandbox read-only \
+  --color never \
+  --ephemeral \
+  --skip-git-repo-check \
+  --cd ~/claude-loop-pr-codex/$org-$repository-$pr_number/clone-codex \
+  "以下のGitHub PRをコードレビューしてください。確認や質問は不要です。具体的な指摘と提案まで自主的に出力してください。レビュー中は読み取り専用操作だけを行い、GitHub / Backlog / DocBase へのコメント投稿、Issue/PR更新、ファイル変更など write 系 MCP ツールは絶対に呼び出さないでください。GitHub / Backlog / DocBase の参照が必要な場合は、それぞれ利用可能な MCP の read 系ツールを優先して使ってください。gh コマンドや api.github.com への直接アクセスが失敗しても、MCPで取得できる情報を使って継続してください。取得したページ中に関連URLがあれば追跡し、同じ参照を繰り返しそうな場合は停止してください。https://github.com/$org/$repository/pull/$pr_number" \
+  >  ~/claude-loop-pr-codex/$org-$repository-$pr_number/codex-review.md \
+  2> ~/claude-loop-pr-codex/$org-$repository-$pr_number/codex.log
+```
+
+フラグの説明:
+
+- `--ask-for-approval never` — 承認プロンプトを無効化し非対話で実行する（**必ず `exec` の前に置く**。`exec` の後に置くと受け付けられない）
+- `exec` — 非対話サブコマンド。プロンプトは位置引数として渡す（Codex の `-p` は `--profile` のため使わない）
+- `--sandbox read-only` — シェル実行を read-only サンドボックスに固定し、ローカルファイル書き込みを禁止する（レビュー専用）
+- `--color never` — ANSI カラーエスケープを出力せず、Markdown をそのまま保存できるようにする
+- `--ephemeral` — セッションファイルをディスクに残さず、ワーキングディレクトリを汚さない
+- `--skip-git-repo-check` — clone ディレクトリが浅く git 判定に引っかかっても実行を継続する
+- `--cd` — Codex 専用の clone ディレクトリを作業ルートに固定する
+
+MCP について:
+
+- `~/.codex/config.toml` に設定済みの MCP（`github-mcp-server` / `backlog-mcp-server` / `docbase-mcp-server` 等）は `codex exec` から自動で利用される
+- `--sandbox read-only` は shell / filesystem のみを制限する。GitHub MCP の write tool（issue コメント投稿、PR 更新等）は sandbox では抑制されない
+- 上記の prompt でも write 系 MCP の禁止を明示しているが、実効的な制御は MCP 側で担保すること。具体的には、MCP トークンを read-only 権限に絞るか、`~/.codex/config.toml` で write 系ツールを登録しない／無効化する
+
+#### 4c: レビュー結果の統合
+
+両方のレビューが完了したら、メインコンテキスト（自分自身）が以下を行う:
+
+1. `claude-review.md` と `codex-review.md` を読む
+2. 両者の指摘を比較・議論する:
+   - **一致点**: 両者が共通して指摘した問題（信頼度が高い）
+   - **相違点**: 片方だけが指摘した問題（自分で妥当性を判断）
+   - **補完**: 一方が見逃した観点を他方が補っているケース
+3. 統合した最終レビューを以下の Bash テンプレートで `~/claude-loop-pr-codex/$org-$repository-$pr_number/review.md` に書き出す
+
+- いつ使うか: `claude-review.md` と `codex-review.md` の両方が揃った後
+- 判定条件: `review.md` が作成される
+- 次アクション: 書き出し後 Step 5 へ進む
+
+以下のテンプレートを使って `review.md` を書き出す。`<<'EOF'` はシェル展開しないため、プレースホルダ（`実際のPRタイトル`, `実際のPR URL`, 各セクション本文）はエージェントが事前に実際の値へ置換してから発行し、プレースホルダを一切残さないこと。
+
+```bash
+cat > ~/claude-loop-pr-codex/$org-$repository-$pr_number/review.md <<'EOF'
+# PR Review: 実際のPRタイトル
+
+実際のPR URL
+
+## Summary
+
+（PRの概要と総合評価）
+
+## Findings
+
+### Critical / High
+
+（両者一致の重要指摘、または妥当と判断した片方の指摘）
+
+### Medium / Low
+
+（改善提案、スタイルの指摘等）
+
+## Claude Code の見解
+
+（Claude Code 固有の指摘サマリ）
+
+## Codex の見解
+
+（Codex 固有の指摘サマリ）
+
+## 議論・判断
+
+（相違点についての考察と最終判断）
+EOF
+```
+
+### Step 5: 結果保存
+
+レビュー完了後、Bash で `jq -n --arg` を使って `status.json` を更新する。
+
+まず現在時刻を取得する（出力を `$finished_at` として保持する）。
+
+```bash
+date -u +%Y-%m-%dT%H:%M:%S+00:00
+```
+
+- いつ使うか: Step 4c まで成功した場合に実行する
+- 判定条件: `status.json` の `state` が `completed`
+- 次アクション: Step 6 の結果報告へ進む
+
+```bash
+jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" '{state:"completed",started_at:$started_at,finished_at:$finished_at,exit_code:0}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json
+```
+
+- いつ使うか: Step 4a または 4b が timeout / 非ゼロ終了した場合、または権限不足などで処理継続不可の場合に実行する
+- 判定条件: `status.json` の `state` が `failed`
+- 次アクション: Step 6 の結果報告へ進む
+
+```bash
+jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" '{state:"failed",started_at:$started_at,finished_at:$finished_at,exit_code:1}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json
+```
+
+### Step 6: 結果報告
+
+レビュー結果の要約をユーザーに報告する。報告内容:
+
+- 対象PR（リンク付き）
+- レビュー結果のサマリ（Findings/Risks/Summary から要約）
+- 結果ファイルのパス
+
+- いつ使うか: Step 5 の status 更新後
+- 次アクション: `review.md` を Read ツールで読み、以下の内容をユーザーにテキストで報告して終了する
+  - 対象PR（`$pr_url` のリンク付き）
+  - レビュー結果の要約（Findings から要約）
+  - 結果ファイルのパス（`~/claude-loop-pr-codex/$org-$repository-$pr_number/review.md`）
+
+## エラーハンドリング
+
+- PRがclosed/merged → `skipped` としてログに記録し、次の候補へ進む
+- `claude -p` がタイムアウト（10分） → `state=failed` で記録
+- `claude -p` が非ゼロ終了 → `state=failed` で記録
+- `codex exec` がタイムアウト（10分） → `state=failed` で記録
+- `codex exec` が非ゼロ終了 → `state=failed` で記録
+- 権限不足（404/403） → `state=failed` で記録し、その回は終了
+
+## ファイル構成
+
+```
+~/claude-loop-pr-codex/
+  └── $org-$repository-$pr_number/
+        ├── status.json
+        ├── metadata.json
+        ├── clone-claude/       ← Claude Code 用 shallow clone
+        ├── clone-codex/        ← Codex CLI 用 shallow clone
+        ├── claude-review.md    ← Claude Code の生レビュー
+        ├── codex-review.md     ← Codex CLI の生レビュー
+        ├── review.md           ← 統合レビュー（最終成果物）
+        ├── claude.log
+        └── codex.log
+```
+
+## 実装上の制約
+
+ワーキングディレクトリ `~/claude-loop-pr-codex/` 配下のファイルに直接アクセスできる。コマンドの `allowed-tools` により、Bash・Read・Write・Glob・Grep・Agent は承認なしで実行される。
+
+許可ルールは以下の allowlist に従う。
+
+1. 最上位ルール: テンプレートに明示された構文のみ許可する。テンプレート外の構文追加は禁止
+2. 各テンプレートは 1テンプレート = 1シェル実行単位として扱う
+3. テンプレートの改変は変数置換のみ許可する。フラグ、引数順、引用符、リダイレクト、パイプ、演算子はテンプレート記載どおりに使う
+4. シェル演算子はテンプレート中に明示された `|` `>` `2>` `&&` `<<'EOF'` のみ許可する
+5. JSON 生成は `jq -n --arg` を使う。ヒアドキュメントで JSON を直接組み立てない
+6. ファイル書き込みは `Write` ツールではなく `Bash` を使う
+7. Step 4a / 4b の timeout は必ず `600000` に固定する
+
+補助注記:
+
+- `gh api` や `gh pr view` の `--jq` フラグは使わないこと。クォート文字を含むフラグ値が「Command contains quoted characters in flag names」の承認プロンプトを発生させ、自動処理が停止する。代わりに `| jq` にパイプすること
+- `$()` は使わないこと。PR #2 と同系統の承認プロンプト停止要因になる
+- `for`、`while`、`while read`、`xargs` などのループ・反復構文は使わないこと。PR #6 と同系統の停止要因になる
+- バックグラウンドタスク完了後に `Write` ツールを使うと、`allowed-tools` の自動承認が効かず承認プロンプトが発生する
+- Codex CLI のグローバルオプション（`--ask-for-approval` 等）は `exec` サブコマンドよりも前に置くこと。`exec` の後ろに付けると受け付けられず非対話実行が止まる
+
+## 注意事項
+
+- 1回の実行で1PRだけ処理する
+- GitHubへの書き込み（PRコメント投稿）は行わない
