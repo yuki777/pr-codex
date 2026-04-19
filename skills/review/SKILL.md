@@ -153,11 +153,11 @@ jq -r '.head_sha' ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.js
 Step 2 で対象PRを1件選定した直後、未レビュー / failed / stale / completed のどの経路でも必ず実行する。Step 3 の clone と `metadata.json` 作成は `$head_sha` と `$branch` に依存するため、欠落すると後続が破綻する。
 
 - いつ使うか: Step 2 で対象PRを1件選定した直後に必ず実行する
-- 判定条件: 標準出力の1行にタブ区切りで `head_sha` と `branch` が出力される
-- 次アクション: 出力の左列を `$head_sha`、右列を `$branch` として保持する。`state == "completed"` の場合は保存済み `head_sha` と比較、それ以外は Step 3 へ進む
+- 判定条件: 標準出力に `{"head_sha":"...","branch":"..."}` の JSON が出力される（どちらかが欠落した場合は `jq` が非ゼロ終了し、stderr に `missing <field>` が出る）
+- 次アクション: 出力 JSON の `.head_sha` を `$head_sha`、`.branch` を `$branch` として保持する。`state == "completed"` の場合は保存済み `head_sha` と比較、それ以外は Step 3 へ進む
 
 ```bash
-gh pr view $pr_number --repo $org/$repository --json headRefOid,headRefName | jq -r '[.headRefOid, .headRefName] | @tsv'
+gh pr view $pr_number --repo $org/$repository --json headRefOid,headRefName | jq -ce 'if ((.headRefOid // "") == "") then error("missing headRefOid") elif ((.headRefName // "") == "") then error("missing headRefName") else {head_sha:.headRefOid,branch:.headRefName} end'
 ```
 
 ### Step 3: 作業ディレクトリの準備
