@@ -153,19 +153,11 @@ jq -r '.head_sha' ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.js
 Step 2 で対象PRを1件選定した直後、未レビュー / failed / stale / completed のどの経路でも必ず実行する。Step 3 の clone と `metadata.json` 作成は `$head_sha` と `$branch` に依存するため、欠落すると後続が破綻する。
 
 - いつ使うか: Step 2 で対象PRを1件選定した直後に必ず実行する
-- 判定条件: 現在の head_sha を取得できる（出力を `$head_sha` として保持する）
-- 次アクション: branch 名の取得へ進む
+- 判定条件: 標準出力の1行にタブ区切りで `head_sha` と `branch` が出力される
+- 次アクション: 出力の左列を `$head_sha`、右列を `$branch` として保持する。`state == "completed"` の場合は保存済み `head_sha` と比較、それ以外は Step 3 へ進む
 
 ```bash
-gh pr view $pr_number --repo $org/$repository --json headRefOid | jq -r '.headRefOid'
-```
-
-- いつ使うか: 上の `$head_sha` 取得後に実行する
-- 判定条件: 現在のブランチ名を取得できる（出力を `$branch` として保持する）
-- 次アクション: `state == "completed"` の場合は保存済み `head_sha` と比較、それ以外は Step 3 へ進む
-
-```bash
-gh pr view $pr_number --repo $org/$repository --json headRefName | jq -r '.headRefName'
+gh pr view $pr_number --repo $org/$repository --json headRefOid,headRefName | jq -r '[.headRefOid, .headRefName] | @tsv'
 ```
 
 ### Step 3: 作業ディレクトリの準備
