@@ -311,7 +311,7 @@ codex --ask-for-approval never exec \
 - `--ephemeral` — セッションファイルをディスクに残さず、ワーキングディレクトリを汚さない
 - `--skip-git-repo-check` — clone ディレクトリが浅く git 判定に引っかかっても実行を継続する
 - `--cd` — Codex 専用の clone ディレクトリを作業ルートに固定する
-- `< /dev/null` — stdin を明示的に閉じる。`codex exec` は stdin から追加入力を読む仕様のため、`run_in_background: true` で起動すると「Reading additional input from stdin...」のまま停止することがある。これを確実に防ぐ
+- `< /dev/null` — stdin を `/dev/null` に接続し、即 EOF を返す。`codex exec` は stdin から追加入力を読む仕様のため、`run_in_background: true` で起動すると「Reading additional input from stdin...」のまま停止することがある。これを確実に防ぐ
 
 MCP について:
 
