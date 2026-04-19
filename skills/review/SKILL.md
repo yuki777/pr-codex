@@ -431,29 +431,31 @@ jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" '{state:"f
 
 ## 実装上の制約
 
-ワーキングディレクトリ `~/claude-loop-pr-codex/` 配下のファイルに直接アクセスできる。コマンドの `allowed-tools` により、Bash・Read・Write・Glob・Grep・Agent は承認なしで実行される。
+本スキルは Claude Code を `--permission-mode auto` で起動することを前提とする（README の「使い方」参照）。auto mode 下では、`allowed-tools` に列挙された `Bash` / `Read` / `Write` / `Glob` / `Grep` は分類器が読み取り系と判定したものについて承認プロンプトなしで実行される。
+
+ただし auto mode は「読み取り系なら自動承認」であって「何でも自動実行」ではない。本スキルは再現性と監査可能性を確保するため、テンプレート一字一句実行の原則を採る。エージェントがテンプレート外のシェル構文を追加することは禁止する。
 
 許可ルールは以下の allowlist に従う。
 
 1. 最上位ルール: テンプレートに明示された構文のみ許可する。テンプレート外の構文追加は禁止
 2. 各テンプレートは 1テンプレート = 1シェル実行単位として扱う
 3. テンプレートの改変は変数置換のみ許可する。フラグ、引数順、引用符、リダイレクト、パイプ、演算子はテンプレート記載どおりに使う
-4. シェル演算子はテンプレート中に明示された `|` `<` `>` `2>` `&&` `<<'EOF'` のみ許可する
+4. シェル演算子はテンプレート中に明示された `|` `<` `>` `2>` `&&` のみ許可する
 5. JSON 生成は `jq -n --arg` を使う。ヒアドキュメントで JSON を直接組み立てない
 6. ファイル書き込みの使い分け:
    - 統合レビュー `review.md` は `Write` ツールで書き出す（`file_path` は `~` / `$...` を展開しないため、実値の絶対パスを渡す）
    - `status.json` / `metadata.json` は `jq -n --arg` の出力を `Bash` の `>` で書く
    - `claude-review.md` / `codex-review.md` / `claude.log` / `codex.log` は Step 4a / 4b の標準出力・標準エラーを `>` / `2>` でリダイレクトして作成する
 7. Step 4a / 4b の timeout は必ず `600000` に固定する
+8. auto mode であっても、破壊的操作は一切実行しない: `git push` / `git reset --hard` / `git merge` / `rm -rf` 系のシェル操作、および GitHub / Backlog / DocBase への PR コメント投稿・Issue 更新・ファイル変更など write 系 MCP ツール
 
-補助注記:
+補助注記（いずれもテンプレート一字一句原則の具体適用例）:
 
-- `gh api` や `gh pr view` の `--jq` フラグは使わないこと。クォート文字を含むフラグ値が「Command contains quoted characters in flag names」の承認プロンプトを発生させ、自動処理が停止する。代わりに `| jq` にパイプすること
-- `$()` は使わないこと。PR #2 と同系統の承認プロンプト停止要因になる
-- `for`、`while`、`while read`、`xargs` などのループ・反復構文は使わないこと。PR #6 と同系統の停止要因になる
+- `gh api` や `gh pr view` の `--jq` フラグは使わない。テンプレートはすべて `| jq` パイプ形式で統一している
+- `$()` は使わない。変数展開 `$org` 等は利用するが、コマンド置換 `$(...)` はテンプレートに含まれない
+- `for` / `while` / `while read` / `xargs` などのループ・反復構文はテンプレートに含まれないため使わない
 - Codex CLI のグローバルオプション（`--ask-for-approval` 等）は `exec` サブコマンドよりも前に置くこと。`exec` の後ろに付けると受け付けられず非対話実行が止まる
 
 ## 注意事項
 
 - 1回の実行で1PRだけ処理する
-- GitHubへの書き込み（PRコメント投稿）は行わない
