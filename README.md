@@ -45,6 +45,9 @@ mkdir -p ~/claude-loop-pr-codex
 cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
 ```
 
+- `--permission-mode auto` — `/loop` による定期自動レビューを承認プロンプトなしで回すために必須。読み取り系は分類器が自動承認し、書き込みはスキル側の allowlist で制御する
+- `--effort max` — レビュー時の推論深度を最大に引き上げる
+
 10分間隔で自動レビューを開始:
 
 ```
