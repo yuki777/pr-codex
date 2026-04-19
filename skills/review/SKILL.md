@@ -3,7 +3,7 @@ user-invocable: true
 name: pr-codex
 description: "GitHub PRを Claude Code と Codex CLI の2者レビュー方式で自動レビューする"
 argument-hint: ""
-allowed-tools: ["Bash", "Read", "Glob", "Grep"]
+allowed-tools: ["Bash", "Read", "Write", "Glob", "Grep"]
 ---
 
 # pr-codex
@@ -328,16 +328,17 @@ MCP について:
    - **一致点**: 両者が共通して指摘した問題（信頼度が高い）
    - **相違点**: 片方だけが指摘した問題（自分で妥当性を判断）
    - **補完**: 一方が見逃した観点を他方が補っているケース
-3. 統合した最終レビューを以下の Bash テンプレートで `~/claude-loop-pr-codex/$org-$repository-$pr_number/review.md` に書き出す
+3. 統合した最終レビューを `Write` ツールで `~/claude-loop-pr-codex/$org-$repository-$pr_number/review.md` に書き出す
 
 - いつ使うか: `claude-review.md` と `codex-review.md` の両方が揃った後
 - 判定条件: `review.md` が作成される
 - 次アクション: 書き出し後 Step 5 へ進む
 
-以下のテンプレートを使って `review.md` を書き出す。`<<'EOF'` はシェル展開しないため、プレースホルダ（`実際のPRタイトル`, `実際のPR URL`, 各セクション本文）はエージェントが事前に実際の値へ置換してから発行し、プレースホルダを一切残さないこと。
+`Write` ツールで以下の構造に沿った Markdown を書き出す。プレースホルダ（`実際のPRタイトル`, `実際のPR URL`, 各セクション本文）は必ず実値に置換し、残してはならない。シェル展開やヒアドキュメントは使わず、Markdown 本文を直接 `Write` へ渡すことでクォートやプレースホルダ漏れを回避する。
 
-```bash
-cat > ~/claude-loop-pr-codex/$org-$repository-$pr_number/review.md <<'EOF'
+`review.md` のテンプレート構造:
+
+````markdown
 # PR Review: 実際のPRタイトル
 
 実際のPR URL
@@ -367,8 +368,7 @@ cat > ~/claude-loop-pr-codex/$org-$repository-$pr_number/review.md <<'EOF'
 ## 議論・判断
 
 （相違点についての考察と最終判断）
-EOF
-```
+````
 
 ### Step 5: 結果保存
 
@@ -446,7 +446,7 @@ jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" '{state:"f
 3. テンプレートの改変は変数置換のみ許可する。フラグ、引数順、引用符、リダイレクト、パイプ、演算子はテンプレート記載どおりに使う
 4. シェル演算子はテンプレート中に明示された `|` `<` `>` `2>` `&&` `<<'EOF'` のみ許可する
 5. JSON 生成は `jq -n --arg` を使う。ヒアドキュメントで JSON を直接組み立てない
-6. ファイル書き込みは `Write` ツールではなく `Bash` を使う
+6. 統合レビュー `review.md` の書き出しは `Write` ツールを使う。`status.json` / `metadata.json` は `jq -n --arg` で生成し `Bash` の `>` でリダイレクトする
 7. Step 4a / 4b の timeout は必ず `600000` に固定する
 
 補助注記:
@@ -454,7 +454,6 @@ jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" '{state:"f
 - `gh api` や `gh pr view` の `--jq` フラグは使わないこと。クォート文字を含むフラグ値が「Command contains quoted characters in flag names」の承認プロンプトを発生させ、自動処理が停止する。代わりに `| jq` にパイプすること
 - `$()` は使わないこと。PR #2 と同系統の承認プロンプト停止要因になる
 - `for`、`while`、`while read`、`xargs` などのループ・反復構文は使わないこと。PR #6 と同系統の停止要因になる
-- バックグラウンドタスク完了後に `Write` ツールを使うと、`allowed-tools` の自動承認が効かず承認プロンプトが発生する
 - Codex CLI のグローバルオプション（`--ask-for-approval` 等）は `exec` サブコマンドよりも前に置くこと。`exec` の後ろに付けると受け付けられず非対話実行が止まる
 
 ## 注意事項
