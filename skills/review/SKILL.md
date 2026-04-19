@@ -224,7 +224,7 @@ git -C ~/claude-loop-pr-codex/$org-$repository-$pr_number/clone-codex fetch orig
 - Claude Code 用: `clone-claude/`、Codex CLI 用: `clone-codex/`
 - 各ツールが独立したディレクトリで動作するため、git/file操作の競合が発生しない
 
-以下のファイルを Bash で作成する（`Write` ツールは使わない。理由は「実装上の制約」を参照）。
+以下の `status.json` / `metadata.json` は Bash で作成する（`jq -n --arg` の出力を `>` でリダイレクト）。統合レビュー `review.md` のみ Step 4c で `Write` ツールを使う。
 
 まず現在時刻を取得する（出力を `$started_at` として保持する）。
 
@@ -328,13 +328,15 @@ MCP について:
    - **一致点**: 両者が共通して指摘した問題（信頼度が高い）
    - **相違点**: 片方だけが指摘した問題（自分で妥当性を判断）
    - **補完**: 一方が見逃した観点を他方が補っているケース
-3. 統合した最終レビューを `Write` ツールで `~/claude-loop-pr-codex/$org-$repository-$pr_number/review.md` に書き出す
+3. 統合した最終レビューを `Write` ツールで `$HOME/claude-loop-pr-codex/<org>-<repository>-<pr_number>/review.md` に書き出す（`<...>` は実値に置換した絶対パスで指定する）
 
 - いつ使うか: `claude-review.md` と `codex-review.md` の両方が揃った後
 - 判定条件: `review.md` が作成される
 - 次アクション: 書き出し後 Step 5 へ進む
 
-`Write` ツールで以下の構造に沿った Markdown を書き出す。プレースホルダ（`実際のPRタイトル`, `実際のPR URL`, 各セクション本文）は必ず実値に置換し、残してはならない。シェル展開やヒアドキュメントは使わず、Markdown 本文を直接 `Write` へ渡すことでクォートやプレースホルダ漏れを回避する。
+`Write` ツールは `~` やシェル変数（`$org` 等）を展開しない。`file_path` にはホームディレクトリを `$HOME` の実値（例: `/Users/adachi`）に展開済みの絶対パスを渡し、`$org` / `$repository` / `$pr_number` も実値に置換してから呼び出すこと。
+
+本文についても、プレースホルダ（`実際のPRタイトル`, `実際のPR URL`, 各セクション本文）は必ず実値に置換し、残してはならない。シェル展開やヒアドキュメントは使わず、Markdown 本文を直接 `Write` へ渡すことでクォートやプレースホルダ漏れを回避する。
 
 `review.md` のテンプレート構造:
 
@@ -446,7 +448,10 @@ jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" '{state:"f
 3. テンプレートの改変は変数置換のみ許可する。フラグ、引数順、引用符、リダイレクト、パイプ、演算子はテンプレート記載どおりに使う
 4. シェル演算子はテンプレート中に明示された `|` `<` `>` `2>` `&&` `<<'EOF'` のみ許可する
 5. JSON 生成は `jq -n --arg` を使う。ヒアドキュメントで JSON を直接組み立てない
-6. 統合レビュー `review.md` の書き出しは `Write` ツールを使う。`status.json` / `metadata.json` は `jq -n --arg` で生成し `Bash` の `>` でリダイレクトする
+6. ファイル書き込みの使い分け:
+   - 統合レビュー `review.md` は `Write` ツールで書き出す（`file_path` は `~` / `$...` を展開しないため、実値の絶対パスを渡す）
+   - `status.json` / `metadata.json` は `jq -n --arg` の出力を `Bash` の `>` で書く
+   - `claude-review.md` / `codex-review.md` / `claude.log` / `codex.log` は Step 4a / 4b の標準出力・標準エラーを `>` / `2>` でリダイレクトして作成する
 7. Step 4a / 4b の timeout は必ず `600000` に固定する
 
 補助注記:
