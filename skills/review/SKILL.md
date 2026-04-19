@@ -431,9 +431,9 @@ jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" '{state:"f
 
 ## 実装上の制約
 
-本スキルは Claude Code を `--permission-mode auto` で起動することを前提とする（README の「使い方」参照）。auto mode 下では、`allowed-tools` に列挙された `Bash` / `Read` / `Write` / `Glob` / `Grep` は分類器が読み取り系と判定したものについて承認プロンプトなしで実行される。
+本スキルは Claude Code を `--permission-mode auto` で起動することを前提とする（README の「使い方」参照）。auto mode でも、許可済みツールやコマンドの内容によっては分類器の判断で承認が必要になり得るため、本スキルではテンプレートに明示された操作だけを実行する。
 
-ただし auto mode は「読み取り系なら自動承認」であって「何でも自動実行」ではない。本スキルは再現性と監査可能性を確保するため、テンプレート一字一句実行の原則を採る。エージェントがテンプレート外のシェル構文を追加することは禁止する。
+ローカルの書き込みは作業ディレクトリ `~/claude-loop-pr-codex/` 配下に限り、`clone-claude/` / `clone-codex/` の作成と更新、`status.json` / `metadata.json` / `claude.log` / `codex.log` / `claude-review.md` / `codex-review.md` / `review.md` の成果物作成のみ許可する。
 
 許可ルールは以下の allowlist に従う。
 
@@ -447,15 +447,12 @@ jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" '{state:"f
    - `status.json` / `metadata.json` は `jq -n --arg` の出力を `Bash` の `>` で書く
    - `claude-review.md` / `codex-review.md` / `claude.log` / `codex.log` は Step 4a / 4b の標準出力・標準エラーを `>` / `2>` でリダイレクトして作成する
 7. Step 4a / 4b の timeout は必ず `600000` に固定する
-8. auto mode であっても、破壊的操作は一切実行しない: `git push` / `git reset --hard` / `git merge` / `rm -rf` 系のシェル操作、および GitHub / Backlog / DocBase への PR コメント投稿・Issue 更新・ファイル変更など write 系 MCP ツール
+8. テンプレートに明示された `git fetch` / `git checkout FETCH_HEAD` / 成果物ファイル作成以外の状態変更操作は実行しない。禁止例: `git push` / `git merge` / `git reset --*` / `git clean -fd[x]` / `git stash` / `git commit` / `git tag` / `git branch -D`、`rm -rf` 系、`gh pr` / `gh issue` の write 操作、および GitHub / Backlog / DocBase の write 系 MCP ツール
+9. 1回の実行で選定・処理する PR は 1 件のみとする
 
 補助注記（いずれもテンプレート一字一句原則の具体適用例）:
 
-- `gh api` や `gh pr view` の `--jq` フラグは使わない。テンプレートはすべて `| jq` パイプ形式で統一している
-- `$()` は使わない。変数展開 `$org` 等は利用するが、コマンド置換 `$(...)` はテンプレートに含まれない
-- `for` / `while` / `while read` / `xargs` などのループ・反復構文はテンプレートに含まれないため使わない
+- `gh api` や `gh pr view` の `--jq` フラグは使わない。テンプレートはすべて `| jq` パイプ形式で統一しており、クォートを含むフラグ値は auto mode の分類器でも停止要因になり得る
+- `$()` は使わない。コマンド置換はテンプレートに含まれず、auto mode でも承認プロンプトや停止要因になり得る（変数展開 `$org` 等はテンプレート内で使用する）
+- `for` / `while` / `while read` / `xargs` などのループ・反復構文は使わない。テンプレート外であり、実行単位・ログの再現性を崩す
 - Codex CLI のグローバルオプション（`--ask-for-approval` 等）は `exec` サブコマンドよりも前に置くこと。`exec` の後ろに付けると受け付けられず非対話実行が止まる
-
-## 注意事項
-
-- 1回の実行で1PRだけ処理する
