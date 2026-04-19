@@ -1,12 +1,18 @@
 {
   "name": "pr-codex",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "GitHub PRを Claude Code と Codex CLI の2者レビュー方式で自動レビューするプラグイン",
   "author": {
     "name": "yuki777"
   },
   "repository": "https://github.com/yuki777/pr-codex",
   "license": "MIT",
-  "keywords": ["pr-review", "codex", "code-review", "github", "automation"],
+  "keywords": [
+    "pr-review",
+    "codex",
+    "code-review",
+    "github",
+    "automation"
+  ],
   "skills": "./skills/"
 }

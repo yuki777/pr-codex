@@ -76,6 +76,22 @@ cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
         └── codex.log
 ```
 
+## バージョンアップ（作者向け）
+
+利用者が `/plugin update pr-codex` で最新化できるようにするには、以下の手順でリリースする。
+
+1. `.claude-plugin/plugin.json` と `.claude-plugin/marketplace.json` の `version` を同じ値に bump する（semver: パッチ `1.0.0` → `1.0.1`、マイナー `1.0.0` → `1.1.0`、メジャー `1.0.0` → `2.0.0`）
+2. 変更を commit する
+   ```bash
+   git commit -am "Bump version to 1.0.1"
+   ```
+3. リモートへ push する
+   ```bash
+   git push
+   ```
+
+利用者側は `/plugin update pr-codex` で最新版に更新できる。`version` が上がっていないとキャッシュで古い内容が使われる場合があるため、コード変更と同じコミットで必ず `version` を bump すること。
+
 ## ライセンス
 
 MIT
