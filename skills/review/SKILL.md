@@ -33,7 +33,7 @@ cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
 GitHub Search API でレビュー依頼されている Open PR を取得する。
 Notifications API と異なり、リポジトリの Watch 設定に依存しない。
 
-各テンプレートはコードブロックの内容をそのまま1回のシェル実行単位として使うこと。変数（`$MY_LOGIN`, `$org`, `$repository`, `$pr_number`, `$title`, `$pr_url`, `$branch`, `$head_sha`, `$started_at`, `$finished_at`, `$exit_code` など）の置換以外の改変は不可。
+各テンプレートはコードブロックの内容をそのまま1回のシェル実行単位として使うこと。変数（`$MY_LOGIN`, `$org`, `$repository`, `$pr_number`, `$title`, `$pr_url`, `$branch`, `$base_branch`, `$head_sha`, `$files_json`, `$started_at`, `$finished_at`, `$exit_code` など）の置換以外の改変は不可。
 
 まず自分のログイン名を取得する。
 
@@ -148,17 +148,19 @@ jq -r '.head_sha' ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.js
 
 全候補がスキップなら何もせず終了。
 
-### Step 2b: 選定PRの `head_sha` と `branch` を取得
+### Step 2b: 選定PRの `head_sha` / `branch` / `base_branch` / `files` を取得
 
-Step 2 で対象PRを1件選定した直後、未レビュー / failed / stale / completed のどの経路でも必ず実行する。Step 3 の clone と `metadata.json` 作成は `$head_sha` と `$branch` に依存するため、欠落すると後続が破綻する。
+Step 2 で対象PRを1件選定した直後、未レビュー / failed / stale / completed のどの経路でも必ず実行する。Step 3 の clone と `metadata.json` 作成・Step 4 の PR 差分スコープ制御は `$head_sha` / `$branch` / `$base_branch` / `$files_json` に依存するため、欠落すると後続が破綻する。
 
 - いつ使うか: Step 2 で対象PRを1件選定した直後に必ず実行する
-- 判定条件: 標準出力に `{"head_sha":"...","branch":"..."}` の JSON が出力される（どちらかが欠落した場合は `jq` が非ゼロ終了し、stderr に `missing <field>` が出る）
-- 次アクション: 出力 JSON の `.head_sha` を `$head_sha`、`.branch` を `$branch` として保持する。`state == "completed"` の場合は保存済み `head_sha` と比較、それ以外は Step 3 へ進む
+- 判定条件: 標準出力に `{"head_sha":"...","branch":"...","base_branch":"...","files":[...]}` の JSON が出力される（いずれかが欠落した場合は `jq` が非ゼロ終了し、stderr に `missing <field>` が出る）
+- 次アクション: 出力 JSON の `.head_sha` を `$head_sha`、`.branch` を `$branch`、`.base_branch` を `$base_branch`、`.files` を **JSON 配列文字列**として `$files_json` に保持する（Bash 変数には JSON 配列そのままの文字列を入れる。`jq --argjson` に渡す想定）。`state == "completed"` の場合は保存済み `head_sha` と比較、それ以外は Step 3 へ進む
 
 ```bash
-gh pr view $pr_number --repo $org/$repository --json headRefOid,headRefName | jq -ce 'if ((.headRefOid // "") == "") then error("missing headRefOid") elif ((.headRefName // "") == "") then error("missing headRefName") else {head_sha:.headRefOid,branch:.headRefName} end'
+gh pr view $pr_number --repo $org/$repository --json headRefOid,headRefName,baseRefName,files | jq -ce 'if ((.headRefOid // "") == "") then error("missing headRefOid") elif ((.headRefName // "") == "") then error("missing headRefName") elif ((.baseRefName // "") == "") then error("missing baseRefName") elif ((.files // []) | length) == 0 then error("missing files") else {head_sha:.headRefOid,branch:.headRefName,base_branch:.baseRefName,files:[.files[].path]} end'
 ```
+
+`$files_json` の担保理由: Step 4a / 4b で「PR 差分範囲外のファイルをレビュー対象にしない」制約を効かせるため、PR 変更ファイルの一覧を確定情報として skill 下流に伝達する必要がある。`gh pr view` がここで成功して `files` が空でない場合のみ、Step 3 以降に進む（empty files の PR は Step 2b で `missing files` エラーで fail-fast）。
 
 ### Step 3: 作業ディレクトリの準備
 
@@ -178,43 +180,86 @@ install -d ~/claude-loop-pr-codex/$org-$repository-$pr_number
 ln -sfn ~/claude-loop-pr-codex/$org-$repository-$pr_number ~/Desktop/$org-$repository-$pr_number
 ```
 
-PRブランチのソースコードを各ツール用に個別に clone する。初回 clone と既存 clone 更新を明確に分離する。
+PRブランチのソースコードを各ツール用に個別に clone する。初回 clone と既存 clone 更新を明確に分離する。PR 差分 (`base_branch...head`) を算出可能にするため、head を `--depth 50` で clone し、さらに `base_branch` も同じ深さで fetch する。
 
 - いつ使うか: `clone-claude` が存在しない初回のみ実行する
 - 判定条件: clone が正常作成される
+- 次アクション: `clone-claude` の base 取り込みへ進む
+
+```bash
+gh repo clone $org/$repository ~/claude-loop-pr-codex/$org-$repository-$pr_number/clone-claude -- --branch $branch --depth 50
+```
+
+- いつ使うか: 上の `clone-claude` 初回 clone 直後に実行する
+- 判定条件: `base_branch` が clone 内に fetch される
 - 次アクション: `clone-codex` 初回 clone テンプレートへ進む
 
 ```bash
-gh repo clone $org/$repository ~/claude-loop-pr-codex/$org-$repository-$pr_number/clone-claude -- --branch $branch --depth 1
+git -C ~/claude-loop-pr-codex/$org-$repository-$pr_number/clone-claude fetch origin $base_branch --depth 50
 ```
 
 - いつ使うか: `clone-codex` が存在しない初回のみ実行する
 - 判定条件: clone が正常作成される
-- 次アクション: status/metadata 作成へ進む
+- 次アクション: `clone-codex` の base 取り込みへ進む
 
 ```bash
-gh repo clone $org/$repository ~/claude-loop-pr-codex/$org-$repository-$pr_number/clone-codex -- --branch $branch --depth 1
+gh repo clone $org/$repository ~/claude-loop-pr-codex/$org-$repository-$pr_number/clone-codex -- --branch $branch --depth 50
+```
+
+- いつ使うか: 上の `clone-codex` 初回 clone 直後に実行する
+- 判定条件: `base_branch` が clone 内に fetch される
+- 次アクション: PR diff 生成テンプレートへ進む
+
+```bash
+git -C ~/claude-loop-pr-codex/$org-$repository-$pr_number/clone-codex fetch origin $base_branch --depth 50
 ```
 
 - いつ使うか: `clone-claude` が既に存在する再実行時のみ実行する
 - 判定条件: fetch と checkout が成功する
-- 次アクション: `clone-codex` 更新テンプレートへ進む
+- 次アクション: `clone-claude` の base 再取り込みへ進む
 
 ```bash
-git -C ~/claude-loop-pr-codex/$org-$repository-$pr_number/clone-claude fetch origin $branch && git -C ~/claude-loop-pr-codex/$org-$repository-$pr_number/clone-claude checkout FETCH_HEAD
+git -C ~/claude-loop-pr-codex/$org-$repository-$pr_number/clone-claude fetch origin $branch --depth 50 && git -C ~/claude-loop-pr-codex/$org-$repository-$pr_number/clone-claude checkout FETCH_HEAD
+```
+
+- いつ使うか: 上の `clone-claude` 再実行 fetch/checkout 直後に実行する
+- 判定条件: `base_branch` が最新化される
+- 次アクション: `clone-codex` 再実行 fetch テンプレートへ進む
+
+```bash
+git -C ~/claude-loop-pr-codex/$org-$repository-$pr_number/clone-claude fetch origin $base_branch --depth 50
 ```
 
 - いつ使うか: `clone-codex` が既に存在する再実行時のみ実行する
 - 判定条件: fetch と checkout が成功する
-- 次アクション: status/metadata 作成へ進む
+- 次アクション: `clone-codex` の base 再取り込みへ進む
 
 ```bash
-git -C ~/claude-loop-pr-codex/$org-$repository-$pr_number/clone-codex fetch origin $branch && git -C ~/claude-loop-pr-codex/$org-$repository-$pr_number/clone-codex checkout FETCH_HEAD
+git -C ~/claude-loop-pr-codex/$org-$repository-$pr_number/clone-codex fetch origin $branch --depth 50 && git -C ~/claude-loop-pr-codex/$org-$repository-$pr_number/clone-codex checkout FETCH_HEAD
 ```
 
-- `--depth 1` で shallow clone し、ディスク・時間を節約
+- いつ使うか: 上の `clone-codex` 再実行 fetch/checkout 直後に実行する
+- 判定条件: `base_branch` が最新化される
+- 次アクション: PR diff 生成テンプレートへ進む
+
+```bash
+git -C ~/claude-loop-pr-codex/$org-$repository-$pr_number/clone-codex fetch origin $base_branch --depth 50
+```
+
+PR 差分を unified diff として保存する。Step 4a / 4b のレビュー対象スコープ制御に使う。
+
+- いつ使うか: 両 clone と base fetch が完了した直後に必ず実行する（初回/再実行どちらも）
+- 判定条件: `pr.diff` が非空で生成される
+- 次アクション: status/metadata 作成へ進む。`gh pr diff` が失敗または空出力の場合はここで非ゼロ終了し、Step 5 の failed 更新へ遷移する
+
+```bash
+gh pr diff $pr_number --repo $org/$repository > ~/claude-loop-pr-codex/$org-$repository-$pr_number/pr.diff && test -s ~/claude-loop-pr-codex/$org-$repository-$pr_number/pr.diff
+```
+
+- `--depth 50` で shallow clone し、ディスク・時間を節約しつつ `git diff origin/$base_branch...HEAD` が算出可能な深さを確保する
 - Claude Code 用: `clone-claude/`、Codex CLI 用: `clone-codex/`
 - 各ツールが独立したディレクトリで動作するため、git/file操作の競合が発生しない
+- `pr.diff` は両ツール共通の「PR 差分の確定情報源」として Step 4 で参照される
 
 以下の `status.json` / `metadata.json` は Bash で作成する（`jq -n --arg` の出力を `>` でリダイレクト）。統合レビュー `review.md` のみ Step 4c で `Write` ツールを使う。
 
@@ -237,7 +282,7 @@ jq -n --arg started_at "$started_at" '{state:"running",started_at:$started_at}' 
 - 次アクション: Step 4 のレビュー実行へ進む
 
 ```bash
-jq -n --arg org "$org" --arg repository "$repository" --arg pr_number "$pr_number" --arg pr_url "$pr_url" --arg head_sha "$head_sha" --arg branch "$branch" --arg title "$title" '{org:$org,repository:$repository,pr_number:$pr_number,pr_url:$pr_url,head_sha:$head_sha,branch:$branch,title:$title}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json
+jq -n --arg org "$org" --arg repository "$repository" --arg pr_number "$pr_number" --arg pr_url "$pr_url" --arg head_sha "$head_sha" --arg branch "$branch" --arg base_branch "$base_branch" --arg title "$title" --argjson files "$files_json" '{org:$org,repository:$repository,pr_number:$pr_number,pr_url:$pr_url,head_sha:$head_sha,branch:$branch,base_branch:$base_branch,title:$title,files:$files}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json
 ```
 
 ### Step 4: レビュー実行（2者レビュー方式）
@@ -256,11 +301,11 @@ Claude Code と Codex CLI の両方で独立にレビューし、結果を統合
 - timeout: `600000`
 
 ```bash
-env -u CLAUDECODE claude -p "/review $org/$repository $pr_number" \
+env -u CLAUDECODE claude -p "/review $org/$repository $pr_number レビュー対象は $org-$repository-$pr_number/pr.diff に含まれるファイルと変更行の範囲のみです。それ以外のファイル・行への指摘は絶対に出力しないでください。pr.diff が存在しない／空の場合は 'PR_DIFF_UNAVAILABLE' の1行だけを出力して終了してください。" \
   --permission-mode dontAsk \
   --effort max \
   --allowedTools "Read Glob Grep Bash(git diff *) Bash(git show *) Bash(git log *) Bash(git rev-parse *) Bash(gh pr view *) Bash(gh pr diff *)" \
-  --add-dir ~/claude-loop-pr-codex/$org-$repository-$pr_number/clone-claude \
+  --add-dir ~/claude-loop-pr-codex/$org-$repository-$pr_number \
   >  ~/claude-loop-pr-codex/$org-$repository-$pr_number/claude-review.md \
   2> ~/claude-loop-pr-codex/$org-$repository-$pr_number/claude.log
 ```
@@ -270,7 +315,8 @@ env -u CLAUDECODE claude -p "/review $org/$repository $pr_number" \
 - `env -u CLAUDECODE` — 環境変数 `CLAUDECODE` をクリアし、ネスト起動制限を回避する
 - `--permission-mode dontAsk` — 非対話で自動承認（許可ツール制限が効く）
 - `--allowedTools` — レビューに必要な read-only コマンドのみ許可（gh pr view/diff, git diff/show/log/rev-parse）
-- `--add-dir` — clone ディレクトリへのアクセスを明示的に許可
+- `--add-dir` — Step 3 で生成した `pr.diff` を含むワーキングディレクトリへのアクセスを明示的に許可（`clone-claude/` も同ディレクトリ配下）
+- prompt 末尾の scope 制約は、Claude Code 側の `/review` が `gh pr diff` を常に正しく引けるとは限らないため、`pr.diff` ファイルを確定情報源として最優先参照させる意図
 
 #### 4b: Codex CLI レビュー
 
@@ -287,8 +333,8 @@ codex --ask-for-approval never exec \
   --color never \
   --ephemeral \
   --skip-git-repo-check \
-  --cd ~/claude-loop-pr-codex/$org-$repository-$pr_number/clone-codex \
-  "以下のGitHub PRをコードレビューしてください。確認や質問は不要です。具体的な指摘と提案まで自主的に出力してください。レビュー中は読み取り専用操作だけを行い、GitHub / Backlog / DocBase へのコメント投稿、Issue/PR更新、ファイル変更など write 系 MCP ツールは絶対に呼び出さないでください。GitHub / Backlog / DocBase の参照が必要な場合は、それぞれ利用可能な MCP の read 系ツールを優先して使ってください。gh コマンドや api.github.com への直接アクセスが失敗しても、MCPで取得できる情報を使って継続してください。取得したページ中に関連URLがあれば追跡し、同じ参照を繰り返しそうな場合は停止してください。https://github.com/$org/$repository/pull/$pr_number" \
+  --cd ~/claude-loop-pr-codex/$org-$repository-$pr_number \
+  "以下のGitHub PRをコードレビューしてください。レビュー対象は本ディレクトリ直下の pr.diff に含まれるファイルと変更行の範囲のみです。それ以外のファイル・行 (clone-codex/ 配下の他ファイルを含む) への指摘は絶対に出力しないでください。pr.diff が存在しない／空の場合は 'PR_DIFF_UNAVAILABLE' の1行だけを出力して即座に終了してください。確認や質問は不要で、具体的な指摘と提案まで自主的に出力してください。レビュー中は読み取り専用操作だけを行い、GitHub / Backlog / DocBase へのコメント投稿、Issue/PR更新、ファイル変更など write 系 MCP ツールは絶対に呼び出さないでください。GitHub / Backlog / DocBase の参照が必要な場合は、それぞれ利用可能な MCP の read 系ツールを優先して使ってください。gh コマンドや api.github.com への直接アクセスが失敗しても、pr.diff を一次情報源としてレビューを継続してください（その場合もブランチ全体のスキャンは禁止）。取得したページ中に関連URLがあれば追跡し、同じ参照を繰り返しそうな場合は停止してください。PR: https://github.com/$org/$repository/pull/$pr_number ソース: clone-codex/ 配下に対象ブランチが checkout 済みです。" \
   <  /dev/null \
   >  ~/claude-loop-pr-codex/$org-$repository-$pr_number/codex-review.md \
   2> ~/claude-loop-pr-codex/$org-$repository-$pr_number/codex.log
@@ -302,7 +348,7 @@ codex --ask-for-approval never exec \
 - `--color never` — ANSI カラーエスケープを出力せず、Markdown をそのまま保存できるようにする
 - `--ephemeral` — セッションファイルをディスクに残さず、ワーキングディレクトリを汚さない
 - `--skip-git-repo-check` — clone ディレクトリが浅く git 判定に引っかかっても実行を継続する
-- `--cd` — Codex 専用の clone ディレクトリを作業ルートに固定する
+- `--cd` — PR 作業ディレクトリ (`pr.diff` と `clone-codex/` が同居) を作業ルートに固定する。Codex は `pr.diff` を一次情報源として使える
 - `< /dev/null` — stdin を `/dev/null` に接続し、即 EOF を返す。`codex exec` は stdin から追加入力を読む仕様のため、`run_in_background: true` で起動すると「Reading additional input from stdin...」のまま停止することがある。これを確実に防ぐ
 
 MCP について:
@@ -316,15 +362,17 @@ MCP について:
 両方のレビューが完了したら、メインコンテキスト（自分自身）が以下を行う:
 
 1. `claude-review.md` と `codex-review.md` を読む
-2. 両者の指摘を比較・議論する:
+2. **スコープ検証 (必須)**: どちらか一方でも本文が `PR_DIFF_UNAVAILABLE` のみなら、統合レビューは作成せず Step 5 の **failed 更新** へ遷移する（review.md は生成しない）。
+3. **破棄ルール (必須)**: `metadata.json.files[]` に含まれないパスへの指摘は原則破棄する。ファイルパスが `.md` の見出しやコードブロックで言及されていたら、そのパスが `files[]` 配列に属するかを必ず照合する。有益な一般的指摘で残す価値があるものだけ、`review.md` の `## Out of scope (参考)` セクションへ降格する。Critical / High 級としては採用しない。
+4. 両者の指摘を比較・議論する:
    - **一致点**: 両者が共通して指摘した問題（信頼度が高い）
    - **相違点**: 片方だけが指摘した問題（自分で妥当性を判断）
    - **補完**: 一方が見逃した観点を他方が補っているケース
-3. 統合した最終レビューを `Write` ツールで `$HOME/claude-loop-pr-codex/<org>-<repository>-<pr_number>/review.md` に書き出す（`<...>` は実値に置換した絶対パスで指定する）
+5. 統合した最終レビューを `Write` ツールで `$HOME/claude-loop-pr-codex/<org>-<repository>-<pr_number>/review.md` に書き出す（`<...>` は実値に置換した絶対パスで指定する）
 
 - いつ使うか: `claude-review.md` と `codex-review.md` の両方が揃った後
-- 判定条件: `review.md` が作成される
-- 次アクション: 書き出し後 Step 5 へ進む
+- 判定条件: `review.md` が作成される（両方が `PR_DIFF_UNAVAILABLE` の場合は生成しない）
+- 次アクション: 書き出し後 Step 5 へ進む（`PR_DIFF_UNAVAILABLE` があった場合は Step 5 failed 分岐へ）
 
 `Write` ツールは `~` やシェル変数（`$org` 等）を展開しない。`file_path` にはホームディレクトリを `$HOME` の実値（例: `/Users/adachi`）に展開済みの絶対パスを渡し、`$org` / `$repository` / `$pr_number` も実値に置換してから呼び出すこと。
 
@@ -345,11 +393,11 @@ MCP について:
 
 ### Critical / High
 
-（両者一致の重要指摘、または妥当と判断した片方の指摘）
+（両者一致の重要指摘、または妥当と判断した片方の指摘。`metadata.json.files[]` 範囲内のみ）
 
 ### Medium / Low
 
-（改善提案、スタイルの指摘等）
+（改善提案、スタイルの指摘等。`metadata.json.files[]` 範囲内のみ）
 
 ## Claude Code の見解
 
@@ -362,6 +410,10 @@ MCP について:
 ## 議論・判断
 
 （相違点についての考察と最終判断）
+
+## Out of scope (参考)
+
+（`metadata.json.files[]` に含まれないファイルへの指摘のうち、有益な一般論として残す価値があるものを降格。Critical / High として採用しない。該当がなければセクション丸ごと省略可）
 ````
 
 ### Step 5: 結果保存
@@ -382,7 +434,7 @@ date -u +%Y-%m-%dT%H:%M:%S+00:00
 jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" '{state:"completed",started_at:$started_at,finished_at:$finished_at,exit_code:0}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json
 ```
 
-- いつ使うか: Step 4a または 4b が timeout / 非ゼロ終了した場合、または権限不足などで処理継続不可の場合に実行する
+- いつ使うか: Step 4a または 4b が timeout / 非ゼロ終了した場合、権限不足などで処理継続不可の場合、**または Step 4c のスコープ検証で `claude-review.md` / `codex-review.md` のいずれかが `PR_DIFF_UNAVAILABLE` のみだった場合**に実行する
 - 判定条件: `status.json` の `state` が `failed`
 - 次アクション: Step 6 の結果報告へ進む
 
@@ -407,10 +459,13 @@ jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" '{state:"f
 ## エラーハンドリング
 
 - PRがclosed/merged → `skipped` としてログに記録し、次の候補へ進む
+- Step 2b の `jq -ce` で `missing headRefOid / headRefName / baseRefName / files` が出た → `state=failed` で記録し、その回は終了（PR メタデータが必須フィールドを欠いているため信頼できるレビュー不可）
+- Step 3 の `gh pr diff` が失敗または空出力（`pr.diff` 未生成） → `state=failed` で記録し、その回は終了（PR 差分スコープが確定できないため Step 4 に進まない）
 - `claude -p` がタイムアウト（10分） → `state=failed` で記録
 - `claude -p` が非ゼロ終了 → `state=failed` で記録
 - `codex exec` がタイムアウト（10分） → `state=failed` で記録
 - `codex exec` が非ゼロ終了 → `state=failed` で記録
+- **`claude-review.md` / `codex-review.md` のいずれかが `PR_DIFF_UNAVAILABLE` のみ → `state=failed` で記録し、`review.md` は生成しない**
 - 権限不足（404/403） → `state=failed` で記録し、その回は終了
 
 ## ファイル構成
@@ -419,12 +474,13 @@ jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" '{state:"f
 ~/claude-loop-pr-codex/
   └── $org-$repository-$pr_number/
         ├── status.json
-        ├── metadata.json
-        ├── clone-claude/       ← Claude Code 用 shallow clone
-        ├── clone-codex/        ← Codex CLI 用 shallow clone
-        ├── claude-review.md    ← Claude Code の生レビュー
-        ├── codex-review.md     ← Codex CLI の生レビュー
-        ├── review.md           ← 統合レビュー（最終成果物）
+        ├── metadata.json        ← org/repo/pr_number/pr_url/head_sha/branch/base_branch/title/files を含む
+        ├── pr.diff              ← PR 差分 (unified diff)。Step 4a/4b のスコープ確定情報源
+        ├── clone-claude/        ← Claude Code 用 shallow clone (depth 50, base fetch 済み)
+        ├── clone-codex/         ← Codex CLI 用 shallow clone (depth 50, base fetch 済み)
+        ├── claude-review.md     ← Claude Code の生レビュー
+        ├── codex-review.md      ← Codex CLI の生レビュー
+        ├── review.md            ← 統合レビュー（最終成果物）
         ├── claude.log
         └── codex.log
 ```
@@ -433,7 +489,7 @@ jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" '{state:"f
 
 本スキルは Claude Code を `--permission-mode auto` で起動することを前提とする（README の「使い方」参照）。auto mode でも、許可済みツールやコマンドの内容によっては分類器の判断で承認が必要になり得るため、本スキルではテンプレートに明示された操作だけを実行する。
 
-ローカルの書き込みは作業ディレクトリ `~/claude-loop-pr-codex/` 配下に限り、`clone-claude/` / `clone-codex/` の作成と更新、`status.json` / `metadata.json` / `claude.log` / `codex.log` / `claude-review.md` / `codex-review.md` / `review.md` の成果物作成のみ許可する。
+ローカルの書き込みは作業ディレクトリ `~/claude-loop-pr-codex/` 配下に限り、`clone-claude/` / `clone-codex/` の作成と更新、`status.json` / `metadata.json` / `pr.diff` / `claude.log` / `codex.log` / `claude-review.md` / `codex-review.md` / `review.md` の成果物作成のみ許可する。
 
 許可ルールは以下の allowlist に従う。
 
@@ -444,7 +500,8 @@ jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" '{state:"f
 5. JSON 生成は `jq -n --arg` を使う。ヒアドキュメントで JSON を直接組み立てない
 6. ファイル書き込みの使い分け:
    - 統合レビュー `review.md` は `Write` ツールで書き出す（`file_path` は `~` / `$...` を展開しないため、実値の絶対パスを渡す）
-   - `status.json` / `metadata.json` は `jq -n --arg` の出力を `Bash` の `>` で書く
+   - `status.json` / `metadata.json` は `jq -n --arg` / `--argjson` の出力を `Bash` の `>` で書く
+   - `pr.diff` は Step 3 の `gh pr diff` の標準出力を `>` でリダイレクトして作成する
    - `claude-review.md` / `codex-review.md` / `claude.log` / `codex.log` は Step 4a / 4b の標準出力・標準エラーを `>` / `2>` でリダイレクトして作成する
 7. Step 4a / 4b の timeout は必ず `600000` に固定する
 8. テンプレートに明示された `git fetch` / `git checkout FETCH_HEAD` / 成果物ファイル作成以外の状態変更操作は実行しない。禁止例: `git push` / `git merge` / `git reset --*` / `git clean -fd[x]` / `git stash` / `git commit` / `git tag` / `git branch -D`、`rm -rf` 系、`gh pr` / `gh issue` の write 操作、および GitHub / Backlog / DocBase の write 系 MCP ツール
