@@ -183,6 +183,7 @@ payload は Write ツールで `~/claude-loop-pr-codex/$dir_name/review-payload.
 ```
 対象 PR: <$pr_url> (<$title>)
 event: <REQUEST_CHANGES | COMMENT>
+review file: ~/claude-loop-pr-codex/<$dir_name>/review.md
 body プレビュー:
   <$summary の先頭 200 文字。長ければ "..." で省略>
 インラインコメント: Must Fix N 件 / Should Fix M 件
