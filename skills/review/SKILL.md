@@ -136,15 +136,7 @@ jq -r '.state' ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json
 jq -r '.started_at' ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json
 ```
 
-4. `state == "completed"` の場合は現在の `head_sha` を取得して、保存済み `head_sha` と比較する
-
-- いつ使うか: `state == "completed"` の場合に実行する
-- 判定条件: 保存済み `head_sha` を取得できる
-- 次アクション: Step 2b で現在の `$head_sha` を取得後、異なれば追加コミットありとして選定、一致ならスキップ
-
-```bash
-jq -r '.head_sha' ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json
-```
+4. `state == "completed"` の場合は Step 2b で保存済み `head_sha` と現在の `head_sha` の比較を行うため、**ここでは選定を確定せずに必ず Step 2b に進む**。比較テンプレートは Step 2b 末尾に記載。
 
 全候補がスキップなら何もせず終了。
 
@@ -161,6 +153,27 @@ gh pr view $pr_number --repo $org/$repository --json headRefOid,headRefName,base
 ```
 
 `$files_json` の担保理由: Step 4a / 4b で「PR 差分範囲外のファイルをレビュー対象にしない」制約を効かせるため、PR 変更ファイルの一覧を確定情報として skill 下流に伝達する必要がある。`gh pr view` がここで成功して `files` が空でない場合のみ、Step 3 以降に進む（empty files の PR は Step 2b で `missing files` エラーで fail-fast）。
+
+#### 変数の保持例
+
+上の `jq -ce` の出力が `{"head_sha":"deadbeef01","branch":"feat/dark-mode","base_branch":"main","files":["src/theme.ts","src/App.tsx"]}` の場合、以下のように Bash 変数へ保持する:
+
+- `$head_sha = deadbeef01`（文字列そのまま）
+- `$branch = feat/dark-mode`（文字列そのまま）
+- `$base_branch = main`（文字列そのまま）
+- `$files_json = ["src/theme.ts","src/App.tsx"]`（**JSON 配列そのままの文字列**。Step 3 の metadata.json 生成で `jq --argjson files "$files_json"` に渡す）
+
+`$files_json` はオブジェクトの `.files` フィールドそのままを JSON 配列文字列として取り出したもの。抽出は Claude 側で `jq -ce` の出力を読み取って 4 変数に分解する（シェル側で追加の `jq` パイプは挟まない。1 テンプレート = 1 シェル実行単位の原則に従う）。
+
+#### `state == "completed"` の場合の保存済み `head_sha` 比較
+
+- いつ使うか: Step 2 で `state == "completed"` と判定し、上の `jq -ce` で現在の `$head_sha` を取得した直後に実行する
+- 判定条件: 保存済み `head_sha` を取得できる
+- 次アクション: 保存済みと現在 (`$head_sha`) が異なれば追加コミットありとしてこの候補を選定し Step 3 へ進む。一致するならこの候補はスキップし、Step 2 で次の候補に戻る
+
+```bash
+jq -r '.head_sha' ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json
+```
 
 ### Step 3: 作業ディレクトリの準備
 
