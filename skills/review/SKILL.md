@@ -16,6 +16,10 @@ GitHubのレビュー依頼PRを自動レビューするコマンド。Claude Co
 
 ```bash
 cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
+cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
+cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
+cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
+cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
 ```
 
 起動後:
