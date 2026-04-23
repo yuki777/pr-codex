@@ -285,11 +285,29 @@ jq -n --arg started_at "$started_at" '{state:"running",started_at:$started_at}' 
 jq -n --arg org "$org" --arg repository "$repository" --arg pr_number "$pr_number" --arg pr_url "$pr_url" --arg head_sha "$head_sha" --arg branch "$branch" --arg base_branch "$base_branch" --arg title "$title" --argjson files "$files_json" '{org:$org,repository:$repository,pr_number:$pr_number,pr_url:$pr_url,head_sha:$head_sha,branch:$branch,base_branch:$base_branch,title:$title,files:$files}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json
 ```
 
+### Step 4 前処理: レビュー観点の読み込み
+
+Step 4a / 4b 共通のレビュー観点本文（MCP追加情報収集 / 7観点 / 出力フォーマット / 重要）は、このスキルディレクトリ内の `REVIEW_CRITERIA.md` に外出ししている。4a / 4b のプロンプトには `{REVIEW_CRITERIA}` プレースホルダが埋め込まれており、**Claude 自身が Bash ツール呼び出し前にメモリ上で実値へ置換する**（シェル側で `$()` 展開は行わない）。
+
+- いつ使うか: Step 3 完了後、Step 4a / 4b 起動前に必ず実行する
+- 判定条件: `REVIEW_CRITERIA.md` の全文を Read ツールで取得できる
+- 次アクション: 4a / 4b の Bash コマンド文字列中の `{REVIEW_CRITERIA}` を、**読み込んだ本文のバッククォート (`) を `\`` にエスケープした文字列**で置換してから Bash ツールに渡す（bash の double-quote 内ではバッククォートがコマンド置換扱いになるため、エスケープ必須）
+
+パス解決: Read ツールの `file_path` には `REVIEW_CRITERIA.md` の絶対パスを渡す。プラグイン環境では `$CLAUDE_PLUGIN_ROOT/skills/review/REVIEW_CRITERIA.md` に配置される。`$CLAUDE_PLUGIN_ROOT` が未設定・不明な場合は以下の Bash で値を取得してから絶対パスを組み立てる。
+
+- いつ使うか: `$CLAUDE_PLUGIN_ROOT` の値が不明で Read に渡す絶対パスを確定できない場合に実行する
+- 判定条件: 標準出力が非空
+- 次アクション: 出力値を先頭に `skills/review/REVIEW_CRITERIA.md` を連結した絶対パスを Read に渡す。空の場合は Glob ツールで `**/pr-codex/skills/review/REVIEW_CRITERIA.md` を検索してヒットしたパスを使う
+
+```bash
+echo "$CLAUDE_PLUGIN_ROOT"
+```
+
 ### Step 4: レビュー実行（2者レビュー方式）
 
 Claude Code と Codex CLI の両方で独立にレビューし、結果を統合する。
 
-**4a と 4b は並行実行する。** 各ツールは独立した clone ディレクトリを使うため競合しない。両方の Bash コマンドを `run_in_background: true` で同時に発行し、両方の完了を待ってから 4c に進む。
+**4a と 4b は並行実行する。** 各ツールは独立した clone ディレクトリを使うため競合しない。両方の Bash コマンドを `run_in_background: true` で同時に発行し、両方の完了を待ってから 4c に進む。Step 4 前処理で読み込んだ観点本文で `{REVIEW_CRITERIA}` を置換した **完全体のコマンド文字列**を Bash ツールへ渡すこと。
 
 #### 4a: Claude Code レビュー
 
@@ -301,7 +319,20 @@ Claude Code と Codex CLI の両方で独立にレビューし、結果を統合
 - timeout: `600000`
 
 ```bash
-env -u CLAUDECODE claude -p "/review $org/$repository $pr_number レビュー対象は $org-$repository-$pr_number/pr.diff に含まれるファイルと変更行の範囲のみです。それ以外のファイル・行への指摘は絶対に出力しないでください。すべての指摘には、説明のために必ず対象のファイルパスと行番号（または行範囲）を明記してください。表記は \`path/to/file.ext:L<行番号>\` もしくは \`path/to/file.ext:L<開始>-L<終了>\` を必ず用い、ファイルパスと行番号が特定できない指摘は出力しないでください。pr.diff が存在しない／空の場合は 'PR_DIFF_UNAVAILABLE' の1行だけを出力して終了してください。" \
+env -u CLAUDECODE claude -p "
+GitHub PR をコードレビューしてください。
+PR: https://github.com/$org/$repository/pull/$pr_number
+ソース: clone-claude/ 配下に対象ブランチが checkout 済みです。
+
+## レビュー対象スコープ
+レビュー対象は $org-$repository-$pr_number/pr.diff に含まれるファイルと変更行の範囲のみです。
+すべての指摘には、説明のために必ず対象のファイルパスと行番号（または行範囲）を明記してください。
+表記は \`path/to/file.ext:L<行番号>\` もしくは \`path/to/file.ext:L<開始>-L<終了>\` を必ず用い、ファイルパスと行番号が特定できない指摘は出力しないでください。
+pr.diff が存在しない／空の場合は 'PR_DIFF_UNAVAILABLE' の1行だけを出力して終了してください。
+
+{REVIEW_CRITERIA}
+
+" \
   --permission-mode dontAsk \
   --effort max \
   --allowedTools "Read Glob Grep Bash(git diff *) Bash(git show *) Bash(git log *) Bash(git rev-parse *) Bash(gh pr view *) Bash(gh pr diff *)" \
@@ -334,7 +365,24 @@ codex --ask-for-approval never exec \
   --ephemeral \
   --skip-git-repo-check \
   --cd ~/claude-loop-pr-codex/$org-$repository-$pr_number \
-  "以下のGitHub PRをコードレビューしてください。レビュー対象は本ディレクトリ直下の pr.diff に含まれるファイルと変更行の範囲のみです。それ以外のファイル・行 (clone-codex/ 配下の他ファイルを含む) への指摘は絶対に出力しないでください。すべての指摘には、説明のために必ず対象のファイルパスと行番号（または行範囲）を明記してください。表記は \`path/to/file.ext:L<行番号>\` もしくは \`path/to/file.ext:L<開始>-L<終了>\` を必ず用い、ファイルパスと行番号が特定できない指摘は出力しないでください。pr.diff が存在しない／空の場合は 'PR_DIFF_UNAVAILABLE' の1行だけを出力して即座に終了してください。確認や質問は不要で、具体的な指摘と提案まで自主的に出力してください。レビュー中は読み取り専用操作だけを行い、GitHub / Backlog / DocBase へのコメント投稿、Issue/PR更新、ファイル変更など write 系 MCP ツールは絶対に呼び出さないでください。GitHub / Backlog / DocBase の参照が必要な場合は、それぞれ利用可能な MCP の read 系ツールを優先して使ってください。gh コマンドや api.github.com への直接アクセスが失敗しても、pr.diff を一次情報源としてレビューを継続してください（その場合もブランチ全体のスキャンは禁止）。取得したページ中に関連URLがあれば追跡し、同じ参照を繰り返しそうな場合は停止してください。PR: https://github.com/$org/$repository/pull/$pr_number ソース: clone-codex/ 配下に対象ブランチが checkout 済みです。" \
+  "
+GitHub PR をコードレビューしてください。
+PR: https://github.com/$org/$repository/pull/$pr_number
+ソース: clone-codex/ 配下に対象ブランチが checkout 済みです。
+確認や質問は不要です。
+
+## レビュー対象スコープ
+レビュー対象は本ディレクトリ直下の pr.diff に含まれるファイルと変更行の範囲です。
+すべての指摘には、説明のために必ず対象のファイルパスと行番号（または行範囲）を明記してください。
+表記は \`path/to/file.ext:L<行番号>\` もしくは \`path/to/file.ext:L<開始>-L<終了>\` を必ず用い、ファイルパスと行番号が特定できない指摘は出力しないでください。
+pr.diff が存在しない／空の場合は 'PR_DIFF_UNAVAILABLE' の1行だけを出力して即座に終了してください。
+
+## 読み取り専用制約（必ず厳守）
+レビュー中は読み取り専用操作だけを行い、GitHub / Backlog / DocBase へのコメント投稿、Issue/PR更新、ファイル変更など write 系 MCP ツールは絶対に呼び出さないでください。GitHub / Backlog / DocBase の参照が必要な場合は、それぞれ利用可能な MCP の read 系ツールを優先して使ってください。gh コマンドや api.github.com への直接アクセスが失敗しても、pr.diff を一次情報源としてレビューを継続してください（その場合もブランチ全体のスキャンは禁止）。取得したページ中に関連URLがあれば追跡し、同じ参照を繰り返しそうな場合は停止してください。
+
+{REVIEW_CRITERIA}
+
+" \
   <  /dev/null \
   >  ~/claude-loop-pr-codex/$org-$repository-$pr_number/codex-review.md \
   2> ~/claude-loop-pr-codex/$org-$repository-$pr_number/codex.log
@@ -363,7 +411,7 @@ MCP について:
 
 1. `claude-review.md` と `codex-review.md` を読む
 2. **スコープ検証 (必須)**: どちらか一方でも本文が `PR_DIFF_UNAVAILABLE` のみなら、統合レビューは作成せず Step 5 の **failed 更新** へ遷移する（review.md は生成しない）。
-3. **破棄ルール (必須)**: `metadata.json.files[]` に含まれないパスへの指摘は原則破棄する。ファイルパスが `.md` の見出しやコードブロックで言及されていたら、そのパスが `files[]` 配列に属するかを必ず照合する。有益な一般的指摘で残す価値があるものだけ、`review.md` の `## Out of scope (参考)` セクションへ降格する。Critical / High 級としては採用しない。
+3. **破棄ルール (必須)**: `metadata.json.files[]` に含まれないパスへの指摘は原則破棄する。ファイルパスが `.md` の見出しやコードブロックで言及されていたら、そのパスが `files[]` 配列に属するかを必ず照合する。有益な一般的指摘で残す価値があるものだけ、`## 議論・判断` セクションの末尾に「参考（範囲外）」として補足する。`## 重大な問題 (Must Fix)` / `## 改善提案 (Should Fix)` には絶対に採用しない。
 4. 両者の指摘を比較・議論する:
    - **一致点**: 両者が共通して指摘した問題（信頼度が高い）
    - **相違点**: 片方だけが指摘した問題（自分で妥当性を判断）
@@ -380,33 +428,49 @@ MCP について:
 
 `review.md` のテンプレート構造:
 
-````markdown
+```markdown
 # PR Review: 実際のPRタイトル
 
 実際のPR URL
 
-## Summary
+## 総評
 
-（PRの概要と総合評価）
+（全体評価と承認可否を1-2文で明示）
 
-## Findings
+## 重大な問題 (Must Fix)
 
-### Critical / High
+マージ前に必ず修正すべき問題。両者一致の指摘、または妥当と判断した片方の指摘のみを残す。`metadata.json.files[]` 範囲外の指摘は掲載しない。
 
-#### `path/to/file.ext:L<行番号>` (もしくは `path/to/file.ext:L<開始>-L<終了>`)
+### `path/to/file.ext:L<行番号>` (もしくは `path/to/file.ext:L<開始>-L<終了>`)
 
-（両者一致の重要指摘、または妥当と判断した片方の指摘。`metadata.json.files[]` 範囲内のみ）
+- 問題: （何が問題か）
+- 理由: （なぜ問題か）
+- 提案: （どう修正すべきか）
 
-#### `path/to/file.ext:L<行番号>` (もしくは `path/to/file.ext:L<開始>-L<終了>`)
+## 改善提案 (Should Fix)
 
-（両者一致の重要指摘、または妥当と判断した片方の指摘。`metadata.json.files[]` 範囲内のみ）
+修正が強く推奨される問題。同じフォーマットで記載。
+
+### `path/to/file.ext:L<行番号>` (もしくは `path/to/file.ext:L<開始>-L<終了>`)
+
+- 問題:
+- 理由:
+- 提案:
+
+## 軽微な指摘 (Nit)
+
+スタイルや好みに関する軽微な指摘。箇条書きで簡潔に。各項目に必ず `path/to/file.ext:L<行番号>` 表記を付ける。
+
+## 良い点
+
+評価できるコードや設計判断を簡潔に述べる。厳しいレビューでも、良い点は認める。
 
 ## 議論・判断
 
 - （Claude Code 固有の指摘サマリ）
 - （Codex 固有の指摘サマリ）
 - （相違点についての考察と最終判断）
-````
+```
 
 ### Step 5: 結果保存
 
@@ -439,12 +503,12 @@ jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" '{state:"f
 レビュー結果の要約をユーザーに報告する。報告内容:
 
 - 対象PR（リンク付き）
-- レビュー結果のサマリ（Findings/Risks/Summary から要約）
+- レビュー結果のサマリ（総評 / 重大な問題 / 改善提案 から要約）
 - 結果ファイルのパス
 - いつ使うか: Step 5 の status 更新後
 - 次アクション: `review.md` を Read ツールで読み、以下の内容をユーザーにテキストで報告して終了する
   - 対象PR（`$pr_url` のリンク付き）
-  - レビュー結果の要約（Findings から要約）
+  - レビュー結果の要約（総評 + 重大な問題の件数と代表例、改善提案の件数を含める）
   - 結果ファイルのパス（`~/claude-loop-pr-codex/$org-$repository-$pr_number/review.md`）
 
 ## エラーハンドリング
@@ -460,6 +524,16 @@ jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" '{state:"f
 - 権限不足（404/403） → `state=failed` で記録し、その回は終了
 
 ## ファイル構成
+
+スキル本体（プラグイン側に同梱・参照のみ、作業ディレクトリには置かない）:
+
+```
+$CLAUDE_PLUGIN_ROOT/skills/review/
+  ├── SKILL.md                ← 本ファイル
+  └── REVIEW_CRITERIA.md      ← 4a / 4b 共通のレビュー観点本文。Step 4 前処理で Read し、{REVIEW_CRITERIA} プレースホルダに置換
+```
+
+実行時の作業ディレクトリ:
 
 ```
 ~/claude-loop-pr-codex/
@@ -497,6 +571,7 @@ jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" '{state:"f
 7. Step 4a / 4b の timeout は必ず `600000` に固定する
 8. テンプレートに明示された `git fetch` / `git checkout FETCH_HEAD` / 成果物ファイル作成以外の状態変更操作は実行しない。禁止例: `git push` / `git merge` / `git reset --*` / `git clean -fd[x]` / `git stash` / `git commit` / `git tag` / `git branch -D`、`rm -rf` 系、`gh pr` / `gh issue` の write 操作、および GitHub / Backlog / DocBase の write 系 MCP ツール
 9. 1回の実行で選定・処理する PR は 1 件のみとする
+10. Step 4a / 4b のプロンプト中に含まれる `{REVIEW_CRITERIA}` プレースホルダは、Step 4 前処理で Read した `REVIEW_CRITERIA.md` の本文を **bash double-quote 内で安全になるようバッククォート (`) を `\`` にエスケープした文字列** で置換したうえで、Bash ツールに渡す完全体のコマンド文字列として使う。置換は Claude 側で行い、シェルでのコマンド置換 (`$()`) やヒアドキュメントは使わない
 
 補助注記（いずれもテンプレート一字一句原則の具体適用例）:
 
