@@ -301,7 +301,7 @@ Claude Code と Codex CLI の両方で独立にレビューし、結果を統合
 - timeout: `600000`
 
 ```bash
-env -u CLAUDECODE claude -p "/review $org/$repository $pr_number レビュー対象は $org-$repository-$pr_number/pr.diff に含まれるファイルと変更行の範囲のみです。それ以外のファイル・行への指摘は絶対に出力しないでください。pr.diff が存在しない／空の場合は 'PR_DIFF_UNAVAILABLE' の1行だけを出力して終了してください。" \
+env -u CLAUDECODE claude -p "/review $org/$repository $pr_number レビュー対象は $org-$repository-$pr_number/pr.diff に含まれるファイルと変更行の範囲のみです。それ以外のファイル・行への指摘は絶対に出力しないでください。すべての指摘には、説明のために必ず対象のファイルパスと行番号（または行範囲）を明記してください。表記は \`path/to/file.ext:L<行番号>\` もしくは \`path/to/file.ext:L<開始>-L<終了>\` を必ず用い、ファイルパスと行番号が特定できない指摘は出力しないでください。pr.diff が存在しない／空の場合は 'PR_DIFF_UNAVAILABLE' の1行だけを出力して終了してください。" \
   --permission-mode dontAsk \
   --effort max \
   --allowedTools "Read Glob Grep Bash(git diff *) Bash(git show *) Bash(git log *) Bash(git rev-parse *) Bash(gh pr view *) Bash(gh pr diff *)" \
@@ -334,7 +334,7 @@ codex --ask-for-approval never exec \
   --ephemeral \
   --skip-git-repo-check \
   --cd ~/claude-loop-pr-codex/$org-$repository-$pr_number \
-  "以下のGitHub PRをコードレビューしてください。レビュー対象は本ディレクトリ直下の pr.diff に含まれるファイルと変更行の範囲のみです。それ以外のファイル・行 (clone-codex/ 配下の他ファイルを含む) への指摘は絶対に出力しないでください。pr.diff が存在しない／空の場合は 'PR_DIFF_UNAVAILABLE' の1行だけを出力して即座に終了してください。確認や質問は不要で、具体的な指摘と提案まで自主的に出力してください。レビュー中は読み取り専用操作だけを行い、GitHub / Backlog / DocBase へのコメント投稿、Issue/PR更新、ファイル変更など write 系 MCP ツールは絶対に呼び出さないでください。GitHub / Backlog / DocBase の参照が必要な場合は、それぞれ利用可能な MCP の read 系ツールを優先して使ってください。gh コマンドや api.github.com への直接アクセスが失敗しても、pr.diff を一次情報源としてレビューを継続してください（その場合もブランチ全体のスキャンは禁止）。取得したページ中に関連URLがあれば追跡し、同じ参照を繰り返しそうな場合は停止してください。PR: https://github.com/$org/$repository/pull/$pr_number ソース: clone-codex/ 配下に対象ブランチが checkout 済みです。" \
+  "以下のGitHub PRをコードレビューしてください。レビュー対象は本ディレクトリ直下の pr.diff に含まれるファイルと変更行の範囲のみです。それ以外のファイル・行 (clone-codex/ 配下の他ファイルを含む) への指摘は絶対に出力しないでください。すべての指摘には、説明のために必ず対象のファイルパスと行番号（または行範囲）を明記してください。表記は \`path/to/file.ext:L<行番号>\` もしくは \`path/to/file.ext:L<開始>-L<終了>\` を必ず用い、ファイルパスと行番号が特定できない指摘は出力しないでください。pr.diff が存在しない／空の場合は 'PR_DIFF_UNAVAILABLE' の1行だけを出力して即座に終了してください。確認や質問は不要で、具体的な指摘と提案まで自主的に出力してください。レビュー中は読み取り専用操作だけを行い、GitHub / Backlog / DocBase へのコメント投稿、Issue/PR更新、ファイル変更など write 系 MCP ツールは絶対に呼び出さないでください。GitHub / Backlog / DocBase の参照が必要な場合は、それぞれ利用可能な MCP の read 系ツールを優先して使ってください。gh コマンドや api.github.com への直接アクセスが失敗しても、pr.diff を一次情報源としてレビューを継続してください（その場合もブランチ全体のスキャンは禁止）。取得したページ中に関連URLがあれば追跡し、同じ参照を繰り返しそうな場合は停止してください。PR: https://github.com/$org/$repository/pull/$pr_number ソース: clone-codex/ 配下に対象ブランチが checkout 済みです。" \
   <  /dev/null \
   >  ~/claude-loop-pr-codex/$org-$repository-$pr_number/codex-review.md \
   2> ~/claude-loop-pr-codex/$org-$repository-$pr_number/codex.log
@@ -390,6 +390,8 @@ MCP について:
 （PRの概要と総合評価）
 
 ## Findings
+
+各指摘には、説明のために必ず対象のファイルパスと行番号（または行範囲）を `path/to/file.ext:L<行番号>` もしくは `path/to/file.ext:L<開始>-L<終了>` の形式で明記する。ファイルパスと行番号が特定できない指摘は採用しない。
 
 ### Critical / High
 
