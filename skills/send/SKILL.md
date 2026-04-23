@@ -37,7 +37,7 @@ allowed-tools: ["Bash", "Read", "Write", "Glob", "Grep"]
 - 次アクション: 出力を上から順に走査し、各行を `$candidate` として後続の判定テンプレートへ渡す
 
 ```bash
-ls -1 ~/claude-loop-pr-codex | grep -v '^sent$'
+ls -1 ~/claude-loop-pr-codex | grep -v '^sent$' | grep -v 'clear.sh'
 ```
 
 - いつ使うか: 各 `$candidate` に対して実行する
