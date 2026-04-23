@@ -391,31 +391,21 @@ MCP について:
 
 ## Findings
 
-各指摘には、説明のために必ず対象のファイルパスと行番号（または行範囲）を `path/to/file.ext:L<行番号>` もしくは `path/to/file.ext:L<開始>-L<終了>` の形式で明記する。ファイルパスと行番号が特定できない指摘は採用しない。
-
 ### Critical / High
+
+#### `path/to/file.ext:L<行番号>` (もしくは `path/to/file.ext:L<開始>-L<終了>`)
 
 （両者一致の重要指摘、または妥当と判断した片方の指摘。`metadata.json.files[]` 範囲内のみ）
 
-### Medium / Low
+#### `path/to/file.ext:L<行番号>` (もしくは `path/to/file.ext:L<開始>-L<終了>`)
 
-（改善提案、スタイルの指摘等。`metadata.json.files[]` 範囲内のみ）
-
-## Claude Code の見解
-
-（Claude Code 固有の指摘サマリ）
-
-## Codex の見解
-
-（Codex 固有の指摘サマリ）
+（両者一致の重要指摘、または妥当と判断した片方の指摘。`metadata.json.files[]` 範囲内のみ）
 
 ## 議論・判断
 
-（相違点についての考察と最終判断）
-
-## Out of scope (参考)
-
-（`metadata.json.files[]` に含まれないファイルへの指摘のうち、有益な一般論として残す価値があるものを降格。Critical / High として採用しない。該当がなければセクション丸ごと省略可）
+- （Claude Code 固有の指摘サマリ）
+- （Codex 固有の指摘サマリ）
+- （相違点についての考察と最終判断）
 ````
 
 ### Step 5: 結果保存
@@ -451,7 +441,6 @@ jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" '{state:"f
 - 対象PR（リンク付き）
 - レビュー結果のサマリ（Findings/Risks/Summary から要約）
 - 結果ファイルのパス
-
 - いつ使うか: Step 5 の status 更新後
 - 次アクション: `review.md` を Read ツールで読み、以下の内容をユーザーにテキストで報告して終了する
   - 対象PR（`$pr_url` のリンク付き）
