@@ -74,7 +74,7 @@ gh api -H "Accept: application/vnd.github+json" \
 
 **注意事項:**
 
-- Search API はインデックスベースのため、レビュー依頼から数分の遅延が発生し得る（20分ポーリングなら許容範囲）
+- Search API はインデックスベースのため、レビュー依頼から数分の遅延が発生し得る（10分ポーリングなら許容範囲）
 - レスポンスに `head_sha` と `branch` は含まれない（Step 2b で選定PRに対して必ず取得する）
 - `review-requested:USERNAME` は GitHub docs 上、ユーザー直接指定とチーム経由の両方を含むと明記されている
 
