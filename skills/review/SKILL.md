@@ -329,7 +329,7 @@ Claude Code と Codex CLI の両方で独立にレビューし、結果を統合
 - いつ使うか: Step 3 完了後に 4b と同時に実行する（`run_in_background: true`）
 - 判定条件: `claude-review.md` が生成され、終了コードが 0
 - 次アクション: 4b と合わせて両方完了したら 4c へ、失敗または timeout なら Step 5 の failed 更新へ進む
-- timeout: `600000`
+- timeout: `1200000`
 
 ```bash
 env -u CLAUDECODE claude -p "
@@ -369,7 +369,7 @@ Codex CLI を使い、同じPRをレビューさせる。Bash ツールで以下
 - いつ使うか: Step 3 完了後に 4a と同時に実行する（`run_in_background: true`）
 - 判定条件: `codex-review.md` が生成され、終了コードが 0
 - 次アクション: 4a と合わせて両方完了したら 4c へ、失敗または timeout なら Step 5 の failed 更新へ進む
-- timeout: `600000`
+- timeout: `1200000`
 
 ```bash
 codex --ask-for-approval never exec \
@@ -531,9 +531,9 @@ jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" --arg head
 - PRがclosed/merged → `skipped` としてログに記録し、次の候補へ進む
 - Step 2b の `jq -ce` で `missing headRefOid / headRefName / baseRefName / files` が出た → `state=failed` で記録し、その回は終了（PR メタデータが必須フィールドを欠いているため信頼できるレビュー不可）
 - Step 3 の `gh pr diff` が失敗または空出力（`pr.diff` 未生成） → `state=failed` で記録し、その回は終了（PR 差分スコープが確定できないため Step 4 に進まない）
-- `claude -p` がタイムアウト（10分） → `state=failed` で記録
+- `claude -p` がタイムアウト（20分） → `state=failed` で記録
 - `claude -p` が非ゼロ終了 → `state=failed` で記録
-- `codex exec` がタイムアウト（10分） → `state=failed` で記録
+- `codex exec` がタイムアウト（20分） → `state=failed` で記録
 - `codex exec` が非ゼロ終了 → `state=failed` で記録
 - **`claude-review.md` / `codex-review.md` のいずれかが `PR_DIFF_UNAVAILABLE` のみ → `state=failed` で記録し、`review.md` は生成しない**
 - 権限不足（404/403） → `state=failed` で記録し、その回は終了
@@ -583,7 +583,7 @@ $CLAUDE_PLUGIN_ROOT/skills/review/
    - `status.json` / `metadata.json` は `jq -n --arg` / `--argjson` の出力を `Bash` の `>` で書く
    - `pr.diff` は Step 3 の `gh pr diff` の標準出力を `>` でリダイレクトして作成する
    - `claude-review.md` / `codex-review.md` / `claude.log` / `codex.log` は Step 4a / 4b の標準出力・標準エラーを `>` / `2>` でリダイレクトして作成する
-7. Step 4a / 4b の timeout は必ず `600000` に固定する
+7. Step 4a / 4b の timeout は必ず `1200000` に固定する
 8. テンプレートに明示された `git fetch` / `git checkout FETCH_HEAD` / 成果物ファイル作成以外の状態変更操作は実行しない。禁止例: `git push` / `git merge` / `git reset --*` / `git clean -fd[x]` / `git stash` / `git commit` / `git tag` / `git branch -D`、`rm -rf` 系、`gh pr` / `gh issue` の write 操作、および GitHub / Backlog / DocBase の write 系 MCP ツール
 9. 1回の実行で選定・処理する PR は 1 件のみとする
 10. Step 4a / 4b のプロンプト中に含まれる `{REVIEW_CRITERIA}` プレースホルダは、Step 4 前処理で Read した `REVIEW_CRITERIA.md` の本文を **bash double-quote 内で安全になるようバッククォート (`) を `\`` にエスケープした文字列** で置換したうえで、Bash ツールに渡す完全体のコマンド文字列として使う。置換は Claude 側で行い、シェルでのコマンド置換 (`$()`) やヒアドキュメントは使わない
