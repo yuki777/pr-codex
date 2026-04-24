@@ -1,6 +1,6 @@
 {
   "name": "pr-codex",
-  "version": "1.2.3",
+  "version": "1.2.4",
   "description": "GitHub PRを Claude Code と Codex CLI の2者レビュー方式で自動レビューするプラグイン",
   "author": {
     "name": "yuki777"
