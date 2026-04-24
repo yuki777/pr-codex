@@ -287,7 +287,7 @@ date -u +%Y-%m-%dT%H:%M:%S+00:00
 - 次アクション: metadata 作成へ進む
 
 ```bash
-jq -n --arg started_at "$started_at" '{state:"running",started_at:$started_at}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json
+jq -n --arg started_at "$started_at" --arg head_sha "$head_sha" '{state:"running",started_at:$started_at,head_sha:$head_sha}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json
 ```
 
 - いつ使うか: `status.json` 作成後に実行する
@@ -437,7 +437,7 @@ MCP について:
 
 `Write` ツールは `~` やシェル変数（`$org` 等）を展開しない。`file_path` にはホームディレクトリを `$HOME` の実値（例: `/Users/adachi`）に展開済みの絶対パスを渡し、`$org` / `$repository` / `$pr_number` も実値に置換してから呼び出すこと。
 
-本文についても、プレースホルダ（`実際のPRタイトル`, `実際のPR URL`, 各セクション本文）は必ず実値に置換し、残してはならない。シェル展開やヒアドキュメントは使わず、Markdown 本文を直接 `Write` へ渡すことでクォートやプレースホルダ漏れを回避する。
+本文についても、プレースホルダ（`実際のPRタイトル`, `実際のPR URL`, `<head_sha>`, 各セクション本文）は必ず実値に置換し、残してはならない。`<head_sha>` は `metadata.json` / `status.json` と同じ値（Step 2b で取得した `$head_sha`）を実値で埋める。シェル展開やヒアドキュメントは使わず、Markdown 本文を直接 `Write` へ渡すことでクォートやプレースホルダ漏れを回避する。
 
 `review.md` のテンプレート構造:
 
@@ -445,6 +445,8 @@ MCP について:
 # PR Review: 実際のPRタイトル
 
 実際のPR URL
+
+レビュー時のcommit: `<head_sha>`
 
 ## 総評
 
@@ -500,7 +502,7 @@ date -u +%Y-%m-%dT%H:%M:%S+00:00
 - 次アクション: Step 6 の結果報告へ進む
 
 ```bash
-jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" '{state:"completed",started_at:$started_at,finished_at:$finished_at,exit_code:0}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json
+jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" --arg head_sha "$head_sha" '{state:"completed",started_at:$started_at,finished_at:$finished_at,exit_code:0,head_sha:$head_sha}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json
 ```
 
 - いつ使うか: Step 4a または 4b が timeout / 非ゼロ終了した場合、権限不足などで処理継続不可の場合、**または Step 4c のスコープ検証で `claude-review.md` / `codex-review.md` のいずれかが `PR_DIFF_UNAVAILABLE` のみだった場合**に実行する
@@ -508,7 +510,7 @@ jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" '{state:"c
 - 次アクション: Step 6 の結果報告へ進む
 
 ```bash
-jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" '{state:"failed",started_at:$started_at,finished_at:$finished_at,exit_code:1}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json
+jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" --arg head_sha "$head_sha" '{state:"failed",started_at:$started_at,finished_at:$finished_at,exit_code:1,head_sha:$head_sha}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json
 ```
 
 ### Step 6: 結果報告
