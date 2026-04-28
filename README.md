@@ -50,9 +50,13 @@ cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
 - `--permission-mode auto` — `/loop` を非対話で回すために auto mode で起動する。auto mode は分類器による安全チェックでツール実行を自動承認またはブロックするため、すべての操作が無条件に通るわけではない。本スキルはテンプレートに明示した操作だけを実行し、ローカル書き込みは `~/claude-loop-pr-codex/` 配下の成果物作成に限定する
 - `--effort max` — `low` / `medium` / `high` / `xhigh` / `max` のうち `max` を指定し、レビュー時の推論深度を最も深くする
 
-10分間隔で自動レビューを開始:
+
 
 ```
+# 手動実行でレビューする
+/pr-codex:review
+
+# 10分間隔で自動レビューする
 /loop 10m /pr-codex:review
 ```
 
