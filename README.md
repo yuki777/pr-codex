@@ -80,7 +80,7 @@ cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
 `/pr-codex:send` の挙動:
 
 1. `~/claude-loop-pr-codex/` 配下から `status.json` が `state:completed` でかつ `review.md` が存在するディレクトリを1件選定する（名前昇順の先頭1件）
-2. `review.md` をパースし、`## 総評` / `## 良い点` を body に、`## 重大な問題 (Must Fix)` / `## 改善提案 (Should Fix)` をインラインコメントに分解（`## 軽微な指摘` と `## 議論・判断` は投稿しない）
+2. `review.md` をパースし、`## 総評` / `## 良い点` を body に、`## 重大な問題 (Must Fix)`をインラインコメントに分解（`## 改善提案 (Should Fix)`と `## 軽微な指摘` と `## 議論・判断` は投稿しない）
 3. GitHub Reviews API への payload サマリをユーザーに提示し、明示的な承認を得る
 4. 承認後、`gh api --method POST .../reviews` で投稿（`event` は Must Fix ありなら `REQUEST_CHANGES`、なければ `COMMENT`。`APPROVE` は自動では出さない）
 5. 投稿成功後、対象ディレクトリを `~/claude-loop-pr-codex/sent/` に移動する
