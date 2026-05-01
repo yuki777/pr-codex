@@ -275,15 +275,23 @@ gh pr diff $pr_number --repo $org/$repository > ~/claude-loop-pr-codex/$org-$rep
 - 判定条件: `pr.diff.ranges.txt` が作成される
 - 次アクション: status/metadata 作成へ進む
 
+> 注: 下記の awk スクリプト内 `$NF` `$3` は awk の自動フィールド変数であり、シェル変数ではない。
+> 実値置換せず、テンプレートそのままを Bash ツールへ渡すこと。`$org` `$repository` `$pr_number` のみ実値置換する。
+
 ```bash
 awk '
-  /^diff --git/ { match($0, /b\/[^ ]+/); path = substr($0, RSTART+2, RLENGTH-2); next }
+  /^diff --git/ {
+    path = $NF
+    sub(/^b\//, "", path)
+    next
+  }
   /^@@/ {
-    match($0, /\+[0-9]+,?[0-9]*/);
-    spec = substr($0, RSTART+1, RLENGTH-1);
-    n = split(spec, a, ",");
-    start = a[1]; len = (n == 2 ? a[2] : 1);
-    if (len > 0) printf "%s\tL%d-L%d\n", path, start, start+len-1;
+    spec = $3
+    sub(/^\+/, "", spec)
+    n = split(spec, a, ",")
+    start = a[1] + 0
+    len = (n == 2 ? a[2] + 0 : 1)
+    if (len > 0) printf "%s\tL%d-L%d\n", path, start, start + len - 1
   }
 ' ~/claude-loop-pr-codex/$org-$repository-$pr_number/pr.diff > ~/claude-loop-pr-codex/$org-$repository-$pr_number/pr.diff.ranges.txt
 ```
