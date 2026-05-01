@@ -143,13 +143,58 @@ Should Fix:
 - `$good_points` が空文字列なら body から `## 良い点` セクションを省略する
 - `$summary` が空になることは想定しない（`/pr-codex:review` のテンプレートで必ず出力されるため）。万一空ならユーザーに通知して処理を中断する
 
+Step 3.5 で範囲外コメントをレビュー body 末尾へ退避するため、各指摘ブロックの元の見出し行と本文（GitHub API 用に整形する前の Markdown）も Claude 側のメモリ上に保持する。
+
+### Step 3.5: 行範囲検証
+
+GitHub Reviews API は PR diff の新ファイル側 hunk 範囲外の `line` を 422 `Line could not be resolved` で拒否するため、payload 構築前に `pr.diff` からコメント可能行範囲を抽出し、インラインコメント候補を検証する。
+
+- いつ使うか: Step 3 で `$must_fix` / `$should_fix` 配列を作成した直後、Step 4 の payload 構築前に必ず実行する
+- 判定条件: `pr.diff.ranges.txt` が作成される
+- 次アクション: 作成後、`pr.diff.ranges.txt` を Read ツールで取得し、Claude 側で `$must_fix` / `$should_fix` の各エントリを検証する
+
+```bash
+awk '
+  /^diff --git/ { match($0, /b\/[^ ]+/); path = substr($0, RSTART+2, RLENGTH-2); next }
+  /^@@/ {
+    match($0, /\+[0-9]+,?[0-9]*/);
+    spec = substr($0, RSTART+1, RLENGTH-1);
+    n = split(spec, a, ",");
+    start = a[1]; len = (n == 2 ? a[2] : 1);
+    if (len > 0) printf "%s\tL%d-L%d\n", path, start, start+len-1;
+  }
+' ~/claude-loop-pr-codex/$dir_name/pr.diff > ~/claude-loop-pr-codex/$dir_name/pr.diff.ranges.txt
+```
+
+続いて `pr.diff.ranges.txt` を Read ツールで取得する。`file_path` は `~` を `$HOME` の実値に展開した絶対パスで渡す。
+
+#### 範囲判定ルール
+
+- `pr.diff.ranges.txt` の各行は `<path>\tL<開始>-L<終了>` として扱う
+- 単一行コメントは `line` が同一 `path` のいずれかの範囲内に含まれる場合のみ有効
+- 複数行コメントは `[start_line, line]` の両端が同一 `path` の同じ hunk 範囲内に含まれる場合のみ有効。複数 hunk をまたぐ範囲は無効
+- `path` が `pr.diff.ranges.txt` に存在しない場合は無効
+- `pr.diff.ranges.txt` が空、または `pr.diff` が存在しない場合は、行範囲を確定できないためすべてのインラインコメント候補を無効として扱う
+
+#### 範囲外エントリの扱い
+
+範囲外と判定した `$must_fix` / `$should_fix` のエントリは、以下のように扱う。
+
+- `$must_fix` / `$should_fix` から除外し、`comments` 配列には含めない
+- 除外したエントリを `$out_of_range_comments` 配列として保持する
+- `$out_of_range_comments` には、元の見出し行、元の本文、種別 (`Must Fix` / `Should Fix`) を保持する
+- Step 4 のレビュー body 末尾に `## 行コメント不可 (diff 範囲外)` セクションを追加し、除外した各エントリの元の見出し行と本文を転記する
+- 除外後の `$must_fix` / `$should_fix` の相対順は、元の review.md の登場順を保つ
+
+既存の正常系 PR で全指摘が範囲内の場合、`$out_of_range_comments` は空配列となり、Step 4 以降の payload は従来と同じ内容になる。
+
 ### Step 4: payload の構築
 
 以下のルールで GitHub Reviews API の payload JSON を組み立てる（`POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews` の request body 仕様に従う）:
 
 - `commit_id`: `$head_sha`（レビュー時点の head に明示的に紐付ける）
 - `event`:
-  - `$must_fix` が 1 件以上あれば `"REQUEST_CHANGES"`
+  - 範囲検証後の `$must_fix` が 1 件以上、または `$out_of_range_comments` に `Must Fix` が 1 件以上あれば `"REQUEST_CHANGES"`
   - 0 件なら `"COMMENT"`
   - `"APPROVE"` は自動では発行しない
 - `body`:
@@ -165,6 +210,16 @@ Should Fix:
     ```
     <$summary>
     ```
+  - `$out_of_range_comments` が非空の場合は body 末尾に以下を追加する:
+    ```
+    ## 行コメント不可 (diff 範囲外)
+
+    ### `path/to/file.ext:L<行番号>` (元の見出し)
+
+    - 問題: <問題文>
+    - 理由: <理由文>
+    - 提案: <提案文>
+    ```
 - `comments`: `$must_fix` 配列 + `$should_fix` 配列を結合した配列（元の登場順を保つ）。各要素は以下のキーを含む:
   - `path` (必須)
   - `line` (必須)
@@ -172,7 +227,7 @@ Should Fix:
   - `body` (Step 3 の body フォーマット)
   - `start_line` / `start_side` は範囲指定の場合のみ含める
 
-`$must_fix` と `$should_fix` がいずれも空だった場合でも、`event: "COMMENT"` + body (総評 + 良い点) のみで投稿する。
+範囲検証後の `$must_fix` と `$should_fix` がいずれも空だった場合でも、`event: "COMMENT"` + body (総評 + 良い点 + 必要なら行コメント不可セクション) のみで投稿する。ただし `$out_of_range_comments` に `Must Fix` が含まれる場合の `event` は上記ルールどおり `"REQUEST_CHANGES"` とする。
 
 payload は Write ツールで `~/claude-loop-pr-codex/$dir_name/review-payload.json` に書き出す。`file_path` には `~` を実値に展開した絶対パスを渡し、`$dir_name` も実値に置換する。整形された JSON（インデント 2）で書き出して後から人間が読めるようにする。
 
@@ -187,10 +242,14 @@ review file: ~/claude-loop-pr-codex/<$dir_name>/review.md
 body プレビュー:
   <$summary の先頭 200 文字。長ければ "..." で省略>
 インラインコメント: Must Fix N 件 / Should Fix M 件
+行範囲外で除外したインラインコメント: K 件
+  - <path>:L<line> (本文末尾の「行コメント不可」セクションに移動)
 payload: ~/claude-loop-pr-codex/<$dir_name>/review-payload.json
 
 この内容で投稿してよろしいですか？ (yes/no)
 ```
+
+`$out_of_range_comments` が空の場合も、サマリ行は `行範囲外で除外したインラインコメント: 0 件` として表示する。除外したエントリの箇条書きは 1 件以上ある場合のみ表示する。
 
 ユーザーの応答が `yes` / `y` / `はい` 等の明示的な承認である場合のみ Step 6 に進む。それ以外（`no` / `n` / `いいえ` / 曖昧・無回答）の場合は処理を中断し、以下を報告して終了する:
 
@@ -248,13 +307,14 @@ mv ~/claude-loop-pr-codex/$dir_name ~/claude-loop-pr-codex/sent/$dir_name
 - 投稿した review の URL: `$review_url`
 - 選択した `event`
 - インラインコメント件数 (Must Fix / Should Fix)
+- 行範囲外で除外したインラインコメント件数
 - 移動先: `~/claude-loop-pr-codex/sent/$dir_name`
 
 失敗時（Step 6 が非ゼロ終了した場合）:
 
 - エラー内容 (`gh api` の stderr)
 - 推定原因:
-  - 422 → インラインコメントの行番号が PR の diff 範囲外、もしくは review.md の行番号が head 基準ではなく base 基準で書かれている可能性がある。`$must_fix` / `$should_fix` 配列のどのエントリが範囲外か `pr.diff` と照合し、必要なら review.md の行番号を head 基準で書き直すようユーザーに案内
+  - 422 → Step 3.5 で PR diff 範囲外のインラインコメントは除外済みのため、残ったコメントの `path` / `line` / `start_line` が GitHub 側で解決不能になっている可能性がある。`review-payload.json` の `comments` と `pr.diff.ranges.txt` / `pr.diff` を照合し、必要なら payload から該当コメントを除外するようユーザーに案内
   - 403 → 権限不足。`gh auth status` の確認と、PR リポジトリへのコメント権限を案内
   - 404 → PR が見つからない。`$org` / `$repository` / `$pr_number` の値確認を案内
 - `~/claude-loop-pr-codex/$dir_name/` は**移動しない**。payload と response を残した状態で終了するので、ユーザーは payload 修正後に再度 `/pr-codex:send` を叩くか、手動で `gh api` を実行できる
@@ -264,6 +324,7 @@ mv ~/claude-loop-pr-codex/$dir_name ~/claude-loop-pr-codex/sent/$dir_name
 - 対象ディレクトリなし → 「投稿対象の completed レビューなし」と報告して正常終了（非エラー）
 - `review.md` に Must Fix / Should Fix が一件も無い → それでも `event: COMMENT` + body (総評 + 良い点) のみで投稿する（コメントが無ければインラインコメント配列は空）
 - `review.md` の `## 総評` セクションが空 or 見つからない → ユーザーに通知して処理中断。`sent/` 移動は行わない
+- Step 3.5 で `pr.diff.ranges.txt` が空 → インラインコメント候補はすべて body 末尾の `## 行コメント不可 (diff 範囲外)` に移動し、`comments` 配列には含めない
 - `gh api` 422/403/404 → Step 8 の失敗報告で分岐し、`sent/` 移動は行わない
 - ユーザーが Step 5 で承認を拒否 → 何もせず終了。payload ファイルは残す
 
@@ -273,7 +334,7 @@ mv ~/claude-loop-pr-codex/$dir_name ~/claude-loop-pr-codex/sent/$dir_name
 
 1. 各テンプレートは 1 テンプレート = 1 シェル実行単位として扱う
 2. テンプレートの改変は変数置換のみ許可する。フラグ、引数順、引用符、リダイレクトはテンプレート記載どおりに使う
-3. シェル演算子はテンプレート中に明示された `|` `>` のみ許可する
+3. シェル演算子はテンプレート中に明示された `|` `<` `>` `2>` `&&` のみ許可する
 4. payload JSON の生成は Write ツールで行う（`jq -n` によるインラインでの複雑な配列組み立ては使わない）
 5. `$()` / `for` / `while` / `xargs` / ヒアドキュメントは使わない
 6. `mv` は `sent/` への移動以外では使わない
@@ -299,6 +360,7 @@ $CLAUDE_PLUGIN_ROOT/skills/send/
         ├── metadata.json
         ├── review.md              ← 投稿元
         ├── pr.diff
+        ├── pr.diff.ranges.txt     ← Step 3.5 で生成するコメント可能行範囲
         ├── claude-review.md
         ├── codex-review.md
         ├── claude.log
@@ -317,6 +379,7 @@ $CLAUDE_PLUGIN_ROOT/skills/send/
               ├── review-payload.json    ← 追加: 投稿した payload
               ├── review-response.json   ← 追加: gh api のレスポンス (.html_url 等を含む)
               ├── pr.diff
+              ├── pr.diff.ranges.txt
               ├── claude-review.md
               ├── codex-review.md
               ├── claude.log
