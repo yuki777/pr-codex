@@ -85,7 +85,7 @@ Claude 側で本文をメモリ上で以下のセクションに分解する。�
 - `## 総評` 直下の本文 → `$summary`（後続セクション見出しの直前まで。前後の空行はトリム）
 - `## 良い点` 直下の本文 → `$good_points`（同様にトリム）
 - `## 重大な問題 (Must Fix)` 配下の各 `### \`path:L行番号\`` ブロック → `$must_fix` 配列
-- それ以外のセクション（`## 改善提案 (Should Fix)` / `## 軽微な指摘 (Nit)` / `## 議論・判断`）はすべて**投稿対象外**。`$must_fix` 以外の配列は作らない。`review.md` にはそのまま残るのでユーザーが必要に応じて参照する。
+- それ以外のセクション（`## 改善提案 (Should Fix)` / `## 軽微な指摘 (Nit)` / `## 補足`）はすべて**投稿対象外**。`$must_fix` 以外の配列は作らない。`review.md` にはそのまま残るのでユーザーが必要に応じて参照する。
 
 #### 指摘ブロックの構造
 
@@ -231,7 +231,7 @@ Claude が生成した `review-payload.json` を Codex CLI に独立検証させ
 Codex は以下の観点で payload を確認する:
 
 1. `payload.comments[]` の各要素が `review.md` の `## 重大な問題 (Must Fix)` セクション内の `### path:L<行番号>` 見出しに対応するか
-2. `## 改善提案 (Should Fix)` / `## 軽微な指摘 (Nit)` / `## 議論・判断` セクション由来のエントリが混入していないか
+2. `## 改善提案 (Should Fix)` / `## 軽微な指摘 (Nit)` / `## 補足` セクション由来のエントリが混入していないか
 3. 各 `comments[]` の `path` が `metadata.json.files[]` に含まれるか
 4. 各 `comments[]` の `path` と `line`（および `start_line`）が `pr.diff.ranges.txt` の同一 path の hunk 範囲内に収まるか
 5. `event` が「Must Fix が1件以上→REQUEST_CHANGES / 0件→COMMENT」ルールに従っているか
@@ -265,7 +265,7 @@ codex --ask-for-approval never exec \
 - metadata.json: 対象 PR のメタデータ（files 配列を含む）
 
 ## 検証観点
-1. payload.comments[] の各要素が review.md の '## 重大な問題 (Must Fix)' セクション内の '### path:L<行番号>' 見出しに対応すること。Must Fix セクション以外（'## 改善提案 (Should Fix)' / '## 軽微な指摘 (Nit)' / '## 議論・判断'）由来のエントリが含まれていないこと
+1. payload.comments[] の各要素が review.md の '## 重大な問題 (Must Fix)' セクション内の '### path:L<行番号>' 見出しに対応すること。Must Fix セクション以外（'## 改善提案 (Should Fix)' / '## 軽微な指摘 (Nit)' / '## 補足'）由来のエントリが含まれていないこと
 2. payload.comments[] の各 path が metadata.json.files[] に含まれること
 3. payload.comments[] の各エントリで、path と line（および start_line）が pr.diff.ranges.txt の同一 path の hunk 範囲内に収まること（複数行は両端が同一 hunk）
 4. payload.event が 'Must Fix が1件以上 → REQUEST_CHANGES / 0件 → COMMENT' のルールに従うこと
