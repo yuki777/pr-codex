@@ -144,7 +144,7 @@ jq -r '.started_at' ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.js
 
 ### Step 2b: 選定PRの `head_sha` / `branch` / `base_branch` / `files` を取得
 
-Step 2 で対象PRを1件選定した直後、未レビュー / failed / stale / completed のどの経路でも必ず実行する。Step 3 の clone と `metadata.json` 作成・Step 4 の PR 差分スコープ制御は `$head_sha` / `$branch` / `$base_branch` / `$files_json` に依存するため、欠落すると後続が破綻する。
+Step 2 で対象PRを1件選定した直後、未レビュー / failed / stale / completed のどの経路でも必ず実行する。Step 3 の clone と `metadata.json` / `run-plan.json` 作成・Step 4 の PR 差分スコープ制御は `$head_sha` / `$branch` / `$base_branch` / `$files_json` に依存するため、欠落すると後続が破綻する。
 
 - いつ使うか: Step 2 で対象PRを1件選定した直後に必ず実行する
 - 判定条件: 標準出力に `{"head_sha":"...","branch":"...","base_branch":"...","files":[...]}` の JSON が出力される（いずれかが欠落した場合は `jq` が非ゼロ終了し、stderr に `missing <field>` が出る）
@@ -304,7 +304,7 @@ awk '
 - `pr.diff` は両ツール共通の「PR 差分の確定情報源」として Step 4 で参照される
 - `pr.diff.ranges.txt` は `pr.diff` から抽出した「コメント可能行範囲」の確定情報源として Step 4 で参照される
 
-以下の `status.json` / `metadata.json` は Bash で作成する（`jq -n --arg` の出力を `>` でリダイレクト）。統合レビュー `review.md` のみ Step 4c で `Write` ツールを使う。
+以下の `status.json` / `metadata.json` / `run-plan.json` は Bash で作成する（`jq -n --arg` / `--argjson` / `--slurpfile` / `--rawfile` の出力を `>` でリダイレクト）。統合レビュー `review.md` のみ Step 4c で `Write` ツールを使う。
 
 まず現在時刻を取得する（出力を `$started_at` として保持する）。
 
@@ -322,19 +322,101 @@ jq -n --arg started_at "$started_at" --arg head_sha "$head_sha" '{state:"running
 
 - いつ使うか: `status.json` 作成後に実行する
 - 判定条件: `metadata.json` が作成される
-- 次アクション: Step 4 のレビュー実行へ進む
+- 次アクション: `run-plan.json` 作成へ進む
 
 ```bash
 jq -n --arg org "$org" --arg repository "$repository" --arg pr_number "$pr_number" --arg pr_url "$pr_url" --arg head_sha "$head_sha" --arg branch "$branch" --arg base_branch "$base_branch" --arg title "$title" --argjson files "$files_json" '{org:$org,repository:$repository,pr_number:$pr_number,pr_url:$pr_url,head_sha:$head_sha,branch:$branch,base_branch:$base_branch,title:$title,files:$files}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json
 ```
 
+- いつ使うか: `metadata.json` 作成直後に必ず実行する
+- 判定条件: `run-plan.json` が作成され、`files_changed` / `hunks` / `lines_added` / `lines_removed` / `risk_tags` / `selected_hunters` / `depth_actual` / `recommended_mode` / `skip_reason` / `estimated_stages` / `estimated_timeout_ms` / `actual_duration_ms` / `actual_tokens` が埋まる
+- 次アクション: Step 4 前処理へ進む
+
+`run-plan.json` は Step 2b の `files[]` と Step 3 の `pr.diff` を使う preflight artifact。M1 では `selected_hunters` は常に `["claude","codex"]` を出力し、将来 F4 の選定ロジックに差し替える前提で固定値とする。`recommended_mode == "skip"` は「/loop では skip 推奨、手動では警告のみ」の**提案値**であり、M1 の既定では実際のレビューを止めず `focused fallback` で継続する。
+
+モード切替の暫定ルール:
+
+- `lines_added + lines_removed > 5000` → `depth_actual = "standard"` に強制
+- `files_changed > 50` → `recommended_mode = "focused"` に切替
+- `files_changed > 100` → `recommended_mode = "skip"` と `skip_reason` を設定（ただし M1 の既定実行は skip せず focused fallback）
+
+推定 timeout は `min(1200000, 300000 + files_changed*30000 + hunks*15000 + (lines_added+lines_removed)*100 + sensitive_risk_count*90000)` の暫定式で求める。`sensitive_risk_count` は `risk_tags` のうち `security` / `data_migration` の件数。
+
+```bash
+jq -n --slurpfile metadata ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json --rawfile diff ~/claude-loop-pr-codex/$org-$repository-$pr_number/pr.diff '
+  def files: ($metadata[0].files // []);
+  def diff_lines: ($diff | split("\n"));
+  def lines_added: [diff_lines[] | select(startswith("+") and (startswith("+++") | not))] | length;
+  def lines_removed: [diff_lines[] | select(startswith("-") and (startswith("---") | not))] | length;
+  def hunks: [diff_lines[] | select(startswith("@@"))] | length;
+  def risk_tags:
+    [
+      if any(files[]; test("(^|/)(auth|oauth|permission|policy|guard|acl|session|csrf|jwt|token|secret|password|security|middleware)(/|$|\.)"; "i")) then "security" else empty end,
+      if any(files[]; test("(^|/)(migrations?|schema|ddl|sql|seed|database|db|prisma|alembic|flyway|liquibase)(/|$|\.)"; "i")) then "data_migration" else empty end,
+      if any(files[]; test("(^|/)(package\.json|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb|composer\.json|composer\.lock|Gemfile|Gemfile\.lock|go\.mod|go\.sum|Cargo\.toml|Cargo\.lock|requirements\.txt|poetry\.lock|pyproject\.toml)$"; "i")) then "dependency" else empty end,
+      if any(files[]; test("(^|/)(\.github/|Dockerfile$|docker-compose|helm/|k8s/|terraform/|deploy/|ops/)"; "i")) then "infra" else empty end,
+      if any(files[]; test("(^|/)(tests?|spec)(/|$)|(^|/).*(Test|Spec)\.[^/]+$"; "i")) then "test_touch" else empty end,
+      if any(files[]; test("(openapi|swagger|schema\.graphql|\.proto$)"; "i")) then "api_contract" else empty end
+    ];
+  def files_changed: (files | length);
+  def total_lines: (lines_added + lines_removed);
+  def sensitive_risk_count: (risk_tags | map(select(. == "security" or . == "data_migration")) | length);
+  def recommended_mode:
+    if files_changed > 100 then "skip"
+    elif files_changed > 50 then "focused"
+    else "standard"
+    end;
+  def skip_reason:
+    if files_changed > 100 then "files_changed > 100: /loop では skip 提案、手動では警告のみ。M1 の既定では focused fallback を適用"
+    else null
+    end;
+  def depth_actual:
+    if total_lines > 5000 then "standard"
+    else "deep"
+    end;
+  def estimated_stages:
+    if recommended_mode == "skip" then 6
+    elif recommended_mode == "focused" then 5
+    else 4
+    end;
+  def estimated_timeout_ms:
+    [1200000, (300000 + (files_changed * 30000) + (hunks * 15000) + (total_lines * 100) + (sensitive_risk_count * 90000))] | min;
+  {
+    files_changed: files_changed,
+    hunks: hunks,
+    lines_added: lines_added,
+    lines_removed: lines_removed,
+    risk_tags: risk_tags,
+    selected_hunters: ["claude", "codex"],
+    depth_actual: depth_actual,
+    recommended_mode: recommended_mode,
+    skip_reason: skip_reason,
+    estimated_stages: estimated_stages,
+    estimated_timeout_ms: estimated_timeout_ms,
+    actual_duration_ms: null,
+    actual_tokens: null
+  }
+' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/run-plan.json
+```
+
 ### Step 4 前処理: レビュー観点の読み込み
 
-Step 4a / 4b 共通のレビュー観点本文（MCP追加情報収集 / 7観点 / 出力フォーマット / 重要）は、このスキルディレクトリ内の `REVIEW_CRITERIA.md` に外出ししている。4a / 4b のプロンプトには `{REVIEW_CRITERIA}` プレースホルダが埋め込まれており、**Claude 自身が Bash ツール呼び出し前にメモリ上で実値へ置換する**（シェル側で `$()` 展開は行わない）。
+Step 4a / 4b 共通のレビュー観点本文（MCP追加情報収集 / 7観点 / 出力フォーマット / 重要）は、このスキルディレクトリ内の `REVIEW_CRITERIA.md` に外出ししている。加えて Step 3 で生成した `run-plan.json` を読み、preflight に応じた `{RUN_PLAN_GUIDANCE}` を組み立てる。4a / 4b のプロンプトには `{REVIEW_CRITERIA}` と `{RUN_PLAN_GUIDANCE}` プレースホルダが埋め込まれており、**Claude 自身が Bash ツール呼び出し前にメモリ上で実値へ置換する**（シェル側で `$()` 展開は行わない）。
 
 - いつ使うか: Step 3 完了後、Step 4a / 4b 起動前に必ず実行する
-- 判定条件: `REVIEW_CRITERIA.md` の全文を Read ツールで取得できる
-- 次アクション: 4a / 4b の Bash コマンド文字列中の `{REVIEW_CRITERIA}` を、**読み込んだ本文のバッククォート (`) を `\`` にエスケープした文字列**で置換してから Bash ツールに渡す（bash の double-quote 内ではバッククォートがコマンド置換扱いになるため、エスケープ必須）
+- 判定条件: `REVIEW_CRITERIA.md` の全文と `run-plan.json` の内容を Read ツールで取得できる
+- 次アクション:
+  - 4a / 4b の Bash コマンド文字列中の `{REVIEW_CRITERIA}` を、**読み込んだ本文のバッククォート (`) を `\`` にエスケープした文字列**で置換してから Bash ツールに渡す（bash の double-quote 内ではバッククォートがコマンド置換扱いになるため、エスケープ必須）
+  - `run-plan.json` から `.files_changed` / `.hunks` / `.lines_added` / `.lines_removed` / `.risk_tags` / `.selected_hunters` / `.depth_actual` / `.recommended_mode` / `.skip_reason` / `.estimated_stages` / `.estimated_timeout_ms` を保持する。Step 5 の `jq --argjson` に再利用するため、`.risk_tags` と `.selected_hunters` はそれぞれ `$risk_tags_json` / `$selected_hunters_json` として **JSON 配列文字列のまま** 保持し、数値項目も `$files_changed` / `$hunks` / `$lines_added` / `$lines_removed` / `$estimated_stages` / `$estimated_timeout_ms` として保持したうえで、以下の方針で `{RUN_PLAN_GUIDANCE}` を組み立てて置換する
+
+`{RUN_PLAN_GUIDANCE}` の組み立て規則:
+
+- 先頭に `depth_actual` / `recommended_mode` / `risk_tags` / `estimated_timeout_ms` を箇条書きで明記する
+- `recommended_mode == "standard"` の場合: 既存どおり 7観点をフルに使う
+- `recommended_mode == "focused"` の場合: **security / bug / test** を最優先とし、スタイル / リネーム / 軽微な改善は correctness に直結するものだけ残す
+- `recommended_mode == "skip"` の場合: `/loop` では skip 推奨水準だが、**M1 の既定は skip せず focused fallback** と明記する。実レビューでも `focused` と同じ重点に絞り、確証の弱い指摘を増やさない
+- `depth_actual == "standard"` の場合: 変更行周辺と直接の呼び出し元 / 呼び出し先を優先し、広域探索より 20 分以内完了を優先する
+- `risk_tags` に `security` または `data_migration` が含まれる場合: そのタグに対応するファイル群を最優先で確認する
 
 パス解決: Read ツールの `file_path` には `REVIEW_CRITERIA.md` の絶対パスを渡す。プラグイン環境では `$CLAUDE_PLUGIN_ROOT/skills/review/REVIEW_CRITERIA.md` に配置される。`$CLAUDE_PLUGIN_ROOT` が未設定・不明な場合は以下の Bash で値を取得してから絶対パスを組み立てる。
 
@@ -350,7 +432,7 @@ echo "$CLAUDE_PLUGIN_ROOT"
 
 Claude Code と Codex CLI の両方で独立にレビューし、結果を統合する。
 
-**4a と 4b は並行実行する。** 各ツールは独立した clone ディレクトリを使うため競合しない。両方の Bash コマンドを `run_in_background: true` で同時に発行し、両方の完了を待ってから 4c に進む。Step 4 前処理で読み込んだ観点本文で `{REVIEW_CRITERIA}` を置換した **完全体のコマンド文字列**を Bash ツールへ渡すこと。
+**4a と 4b は並行実行する。** 各ツールは独立した clone ディレクトリを使うため競合しない。両方の Bash コマンドを `run_in_background: true` で同時に発行し、両方の完了を待ってから 4c に進む。Step 4 前処理で読み込んだ観点本文で `{REVIEW_CRITERIA}` と `{RUN_PLAN_GUIDANCE}` を置換した **完全体のコマンド文字列**を Bash ツールへ渡すこと。
 
 #### 4a: Claude Code レビュー
 
@@ -375,6 +457,8 @@ PR: https://github.com/$org/$repository/pull/$pr_number
 指摘行はすべて clone-claude/ にチェックアウトされた head の行番号で記載してください。削除に対する指摘は、削除位置に最寄りの head 側コンテキスト行を line として選び、本文で「直前の削除に対する指摘」または「直後の削除に対する指摘」と明記してください。base 基準や diff 内オフセットで書いてはいけません。
 Must Fix / Should Fix の見出しに使う \`path:L<行番号>\` または \`path:L<開始>-L<終了>\` は、必ず pr.diff.ranges.txt にある同一 path の範囲内に収めてください。範囲外の行を参照したい場合は、範囲内の最寄り変更行を見出しに使い、本文で \`(参考: path:L<行番号>)\` と補足してください。同一ファイルにコメント可能行がない指摘は Must Fix / Should Fix には載せず、補足に範囲外指摘として記載してください。
 pr.diff が存在しない／空の場合は 'PR_DIFF_UNAVAILABLE' の1行だけを出力して終了してください。
+
+{RUN_PLAN_GUIDANCE}
 
 {REVIEW_CRITERIA}
 
@@ -434,6 +518,8 @@ pr.diff が存在しない／空の場合は 'PR_DIFF_UNAVAILABLE' の1行だけ
 ## 読み取り専用制約（必ず厳守）
 レビュー中は読み取り専用操作だけを行い、GitHub / Backlog / DocBase へのコメント投稿、Issue/PR更新、ファイル変更など write 系 MCP ツールは絶対に呼び出さないでください。GitHub / Backlog / DocBase の参照が必要な場合は、それぞれ利用可能な MCP の read 系ツールを優先して使ってください。gh コマンドや api.github.com への直接アクセスが失敗しても、pr.diff を一次情報源としてレビューを継続してください（その場合もブランチ全体のスキャンは禁止）。取得したページ中に関連URLがあれば追跡し、同じ参照を繰り返しそうな場合は停止してください。
 
+{RUN_PLAN_GUIDANCE}
+
 {REVIEW_CRITERIA}
 
 " \
@@ -464,7 +550,7 @@ MCP について:
 
 両方のレビューが完了したら、メインコンテキスト（自分自身）が以下を行う:
 
-1. `claude-review.md` / `codex-review.md` / `pr.diff.ranges.txt` を読む
+1. `claude-review.md` / `codex-review.md` / `pr.diff.ranges.txt` / `run-plan.json` を読む
 2. **スコープ検証 (必須)**: どちらか一方でも本文が `PR_DIFF_UNAVAILABLE` のみなら、統合レビューは作成せず Step 5 の **failed 更新** へ遷移する（review.md は生成しない）。
 3. **破棄ルール (必須)**: `metadata.json.files[]` に含まれないパスへの指摘は原則破棄する。ファイルパスが `.md` の見出しやコードブロックで言及されていたら、そのパスが `files[]` 配列に属するかを必ず照合する。有益な一般的指摘で残す価値があるものだけ、`## 補足` セクションの末尾に「参考（範囲外）」として記載する。`## 重大な問題 (Must Fix)` / `## 改善提案 (Should Fix)` には絶対に採用しない。
 4. **コメント可能行範囲の自己検証 (必須)**: `## 重大な問題 (Must Fix)` / `## 改善提案 (Should Fix)` に採用する各レベル3見出しについて、`path` と行番号が `pr.diff.ranges.txt` の同一 `path` の範囲内に収まるかをメインコンテキストで検証する。単一行は `line` が範囲内、複数行は `[start_line, line]` の両端が同じ hunk 範囲内にある場合だけ有効とする。範囲外なら、同一ファイルの最も近いコメント可能行に見出しを差し替え、本文の `問題` または `理由` に `(参考: 元の行 path:L<行番号>)` を補足する。同一ファイルにコメント可能行がない場合は Must Fix / Should Fix には採用せず、`## 補足` に「範囲外指摘」として残す。
@@ -473,7 +559,8 @@ MCP について:
    - **相違点**: 一部の生レビューにだけある指摘は、pr.diff と checkout 済みソースで妥当性を再検証して採否と重要度を決める
    - **補完**: 見落とされていた観点が補われている場合は、根拠を確認したうえで最終レビューに反映する
    - review.md には最終判断のみを書く。レビュー実行者名 / モデル名 / どの生レビュー由来かを示す表現 / '両者一致' / '片方のみ' のような由来表現は書かない
-6. 統合した最終レビューを `Write` ツールで `$HOME/claude-loop-pr-codex/<org>-<repository>-<pr_number>/review.md` に書き出す（`<...>` は実値に置換した絶対パスで指定する）
+6. `run-plan.json.skip_reason` が非 null の場合は、`## 補足` に `- preflight: <skip_reason>。M1 の既定では focused fallback でレビューを継続した。` を最低限残す
+7. 統合した最終レビューを `Write` ツールで `$HOME/claude-loop-pr-codex/<org>-<repository>-<pr_number>/review.md` に書き出す（`<...>` は実値に置換した絶対パスで指定する）
 
 - いつ使うか: `claude-review.md` と `codex-review.md` の両方が揃った後
 - 判定条件: `review.md` が作成される（両方が `PR_DIFF_UNAVAILABLE` の場合は生成しない）
@@ -540,11 +627,33 @@ date -u +%Y-%m-%dT%H:%M:%S+00:00
 ```
 
 - いつ使うか: Step 4c まで成功した場合に実行する
-- 判定条件: `status.json` の `state` が `completed`
+- 判定条件: `status.json` の `state` が `completed` になり、`run-plan.json.actual_duration_ms` が実行時間で更新される
 - 次アクション: Step 6 の結果報告へ進む
 
 ```bash
 jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" --arg head_sha "$head_sha" '{state:"completed",started_at:$started_at,finished_at:$finished_at,exit_code:0,head_sha:$head_sha}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json
+```
+
+- いつ使うか: 上の completed `status.json` 更新直後に実行する
+- 判定条件: `run-plan.json` の `actual_duration_ms` がミリ秒で埋まる
+- 次アクション: Step 6 の結果報告へ進む
+
+```bash
+jq -n --argjson files_changed "$files_changed" --argjson hunks "$hunks" --argjson lines_added "$lines_added" --argjson lines_removed "$lines_removed" --argjson risk_tags "$risk_tags_json" --argjson selected_hunters "$selected_hunters_json" --arg depth_actual "$depth_actual" --arg recommended_mode "$recommended_mode" --arg skip_reason "$skip_reason" --argjson estimated_stages "$estimated_stages" --argjson estimated_timeout_ms "$estimated_timeout_ms" --arg started_at "$started_at" --arg finished_at "$finished_at" '{
+  files_changed: $files_changed,
+  hunks: $hunks,
+  lines_added: $lines_added,
+  lines_removed: $lines_removed,
+  risk_tags: $risk_tags,
+  selected_hunters: $selected_hunters,
+  depth_actual: $depth_actual,
+  recommended_mode: $recommended_mode,
+  skip_reason: (if $skip_reason == "" or $skip_reason == "null" then null else $skip_reason end),
+  estimated_stages: $estimated_stages,
+  estimated_timeout_ms: $estimated_timeout_ms,
+  actual_duration_ms: (((($finished_at | strptime("%Y-%m-%dT%H:%M:%S+00:00") | mktime) - ($started_at | strptime("%Y-%m-%dT%H:%M:%S+00:00") | mktime)) * 1000)),
+  actual_tokens: null
+}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/run-plan.json
 ```
 
 - いつ使うか: Step 4a または 4b が timeout / 非ゼロ終了した場合、権限不足などで処理継続不可の場合、**または Step 4c のスコープ検証で `claude-review.md` / `codex-review.md` のいずれかが `PR_DIFF_UNAVAILABLE` のみだった場合**に実行する
@@ -573,6 +682,7 @@ jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" --arg head
 - PRがclosed/merged → `skipped` としてログに記録し、次の候補へ進む
 - Step 2b の `jq -ce` で `missing headRefOid / headRefName / baseRefName / files` が出た → `state=failed` で記録し、その回は終了（PR メタデータが必須フィールドを欠いているため信頼できるレビュー不可）
 - Step 3 の `gh pr diff` が失敗または空出力（`pr.diff` 未生成） → `state=failed` で記録し、その回は終了（PR 差分スコープが確定できないため Step 4 に進まない）
+- Step 3 の `run-plan.json` 生成が失敗 → `state=failed` で記録し、その回は終了（preflight 指標が欠落したまま Step 4 に進まない）
 - `claude -p` がタイムアウト（20分） → `state=failed` で記録
 - `claude -p` が非ゼロ終了 → `state=failed` で記録
 - `codex exec` がタイムアウト（20分） → `state=failed` で記録
@@ -597,6 +707,7 @@ $CLAUDE_PLUGIN_ROOT/skills/review/
   └── $org-$repository-$pr_number/
         ├── status.json
         ├── metadata.json        ← org/repo/pr_number/pr_url/head_sha/branch/base_branch/title/files を含む
+        ├── run-plan.json        ← preflight 指標。Step 5 成功時に actual_duration_ms / actual_tokens を追記
         ├── pr.diff              ← PR 差分 (unified diff)。Step 4a/4b のスコープ確定情報源
         ├── pr.diff.ranges.txt   ← コメント可能行範囲。Step 4a/4b と Step 4c の行番号検証に使う
         ├── clone-claude/        ← Claude Code 用 shallow clone (depth 50, base fetch 済み)
@@ -612,7 +723,7 @@ $CLAUDE_PLUGIN_ROOT/skills/review/
 
 本スキルは Claude Code を `--permission-mode auto` で起動することを前提とする（README の「使い方」参照）。auto mode でも、許可済みツールやコマンドの内容によっては分類器の判断で承認が必要になり得るため、本スキルではテンプレートに明示された操作だけを実行する。
 
-ローカルの書き込みは作業ディレクトリ `~/claude-loop-pr-codex/` 配下に限り、`clone-claude/` / `clone-codex/` の作成と更新、`status.json` / `metadata.json` / `pr.diff` / `pr.diff.ranges.txt` / `claude.log` / `codex.log` / `claude-review.md` / `codex-review.md` / `review.md` の成果物作成のみ許可する。
+ローカルの書き込みは作業ディレクトリ `~/claude-loop-pr-codex/` 配下に限り、`clone-claude/` / `clone-codex/` の作成と更新、`status.json` / `metadata.json` / `run-plan.json` / `pr.diff` / `pr.diff.ranges.txt` / `claude.log` / `codex.log` / `claude-review.md` / `codex-review.md` / `review.md` の成果物作成のみ許可する。
 
 許可ルールは以下の allowlist に従う。
 
@@ -620,17 +731,17 @@ $CLAUDE_PLUGIN_ROOT/skills/review/
 2. 各テンプレートは 1テンプレート = 1シェル実行単位として扱う
 3. テンプレートの改変は変数置換のみ許可する。フラグ、引数順、引用符、リダイレクト、パイプ、演算子はテンプレート記載どおりに使う
 4. シェル演算子はテンプレート中に明示された `|` `<` `>` `2>` `&&` のみ許可する
-5. JSON 生成は `jq -n --arg` を使う。ヒアドキュメントで JSON を直接組み立てない
+5. JSON 生成は `jq -n --arg` / `--argjson` / `--slurpfile` / `--rawfile` を使う。ヒアドキュメントで JSON を直接組み立てない
 6. ファイル書き込みの使い分け:
    - 統合レビュー `review.md` は `Write` ツールで書き出す（`file_path` は `~` / `$...` を展開しないため、実値の絶対パスを渡す）
-   - `status.json` / `metadata.json` は `jq -n --arg` / `--argjson` の出力を `Bash` の `>` で書く
+   - `status.json` / `metadata.json` / `run-plan.json` は `jq -n --arg` / `--argjson` / `--slurpfile` / `--rawfile` の出力を `Bash` の `>` で書く
    - `pr.diff` は Step 3 の `gh pr diff` の標準出力を `>` でリダイレクトして作成する
    - `pr.diff.ranges.txt` は Step 3 の `awk` の標準出力を `>` でリダイレクトして作成する
    - `claude-review.md` / `codex-review.md` / `claude.log` / `codex.log` は Step 4a / 4b の標準出力・標準エラーを `>` / `2>` でリダイレクトして作成する
 7. Step 4a / 4b の timeout は必ず `1200000` に固定する
 8. テンプレートに明示された `git fetch` / `git checkout FETCH_HEAD` / 成果物ファイル作成以外の状態変更操作は実行しない。禁止例: `git push` / `git merge` / `git reset --*` / `git clean -fd[x]` / `git stash` / `git commit` / `git tag` / `git branch -D`、`rm -rf` 系、`gh pr` / `gh issue` の write 操作、および GitHub / Backlog / DocBase の write 系 MCP ツール
 9. 1回の実行で選定・処理する PR は 1 件のみとする
-10. Step 4a / 4b のプロンプト中に含まれる `{REVIEW_CRITERIA}` プレースホルダは、Step 4 前処理で Read した `REVIEW_CRITERIA.md` の本文を **bash double-quote 内で安全になるようバッククォート (`) を `\`` にエスケープした文字列** で置換したうえで、Bash ツールに渡す完全体のコマンド文字列として使う。置換は Claude 側で行い、シェルでのコマンド置換 (`$()`) やヒアドキュメントは使わない
+10. Step 4a / 4b のプロンプト中に含まれる `{REVIEW_CRITERIA}` と `{RUN_PLAN_GUIDANCE}` プレースホルダは、Step 4 前処理で Read した `REVIEW_CRITERIA.md` と `run-plan.json` を元に Claude 側で置換したうえで、Bash ツールに渡す完全体のコマンド文字列として使う。`{REVIEW_CRITERIA}` には **bash double-quote 内で安全になるようバッククォート (`) を `\`` にエスケープした文字列** を使い、シェルでのコマンド置換 (`$()`) やヒアドキュメントは使わない
 
 補助注記（いずれもテンプレート一字一句原則の具体適用例）:
 
