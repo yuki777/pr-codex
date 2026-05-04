@@ -13,7 +13,7 @@ GitHub PRを **Claude Code** と **Codex CLI** の2者レビュー方式で自�
 ## 必要なもの
 
 - Claude Code
-- Codex CLI (`codex-cli 0.121.0` 前提)
+- Codex CLI (`codex-cli 0.121.0` 以上、`codex exec -m gpt-5.5` が使えること)
 - GitHub CLI (`gh`)
 - `jq`（SKILL.md 内の全テンプレートで利用する。macOS 標準では未インストール）
 
@@ -49,6 +49,7 @@ cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
 
 - `--permission-mode auto` — `/loop` を非対話で回すために auto mode で起動する。auto mode は分類器による安全チェックでツール実行を自動承認またはブロックするため、すべての操作が無条件に通るわけではない。本スキルはテンプレートに明示した操作だけを実行し、ローカル書き込みは `~/claude-loop-pr-codex/` 配下の成果物作成に限定する
 - `--effort max` — `low` / `medium` / `high` / `xhigh` / `max` のうち `max` を指定し、レビュー時の推論深度を最も深くする
+- Codex CLI 側のレビューと投稿前検証は、スキル内で `-m gpt-5.5` を指定して実行する。`model_reasoning_effort` はスキル側では上書きしないため、未設定時は GPT-5.5 の既定値が使われる
 
 
 

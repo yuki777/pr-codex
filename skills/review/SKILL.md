@@ -18,6 +18,8 @@ GitHubのレビュー依頼PRを自動レビューするコマンド。Claude Co
 cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
 ```
 
+Codex CLI 側のレビュー実行は、本スキル内で `-m gpt-5.5` を指定して実行する。
+
 起動後:
 
 ```
@@ -404,6 +406,7 @@ Codex CLI を使い、同じPRをレビューさせる。Bash ツールで以下
 
 ```bash
 codex --ask-for-approval never exec \
+  -m gpt-5.5 \
   --sandbox read-only \
   --color never \
   --ephemeral \
@@ -414,6 +417,10 @@ GitHub PR をコードレビューしてください。
 PR: https://github.com/$org/$repository/pull/$pr_number
 ソース: clone-codex/ 配下に対象ブランチが checkout 済みです。
 確認や質問は不要です。
+
+## 目的と完了条件
+目的は、PR の変更が本番投入可能かを判断し、マージ前に修正すべき具体的な問題だけを、根拠となるファイルパスと head 基準の行番号付きで返すことです。
+完了条件は、pr.diff と pr.diff.ranges.txt を照合し、指摘の行番号・重要度・修正提案が出力フォーマットに従っていることです。
 
 ## レビュー対象スコープ
 レビュー対象は本ディレクトリ直下の pr.diff に含まれるファイルと変更行の範囲です。
@@ -439,6 +446,7 @@ pr.diff が存在しない／空の場合は 'PR_DIFF_UNAVAILABLE' の1行だけ
 
 - `--ask-for-approval never` — 承認プロンプトを無効化し非対話で実行する（**必ず `exec` の前に置く**。`exec` の後に置くと受け付けられない）
 - `exec` — 非対話サブコマンド。プロンプトは位置引数として渡す（Codex の `-p` は `--profile` のため使わない）
+- `-m gpt-5.5` — Codex CLI の実行モデルを GPT-5.5 に固定する。`model_reasoning_effort` はこのスキルでは上書きせず、未設定時は GPT-5.5 側の既定に任せる
 - `--sandbox read-only` — シェル実行を read-only サンドボックスに固定し、ローカルファイル書き込みを禁止する（レビュー専用）
 - `--color never` — ANSI カラーエスケープを出力せず、Markdown をそのまま保存できるようにする
 - `--ephemeral` — セッションファイルをディスクに残さず、ワーキングディレクトリを汚さない

@@ -246,6 +246,7 @@ Codex は以下の観点で payload を確認する:
 
 ```bash
 codex --ask-for-approval never exec \
+  -m gpt-5.5 \
   --sandbox read-only \
   --color never \
   --ephemeral \
@@ -253,6 +254,9 @@ codex --ask-for-approval never exec \
   --cd ~/claude-loop-pr-codex/$dir_name \
   "
 あなたは GitHub PR レビュー投稿前の独立検証エージェントです。Claude が生成した review-payload.json を読み、以下の観点で検証してください。判定が完了したら PASS / FAIL のいずれかを最終行に明記してください。
+
+目的は、GitHub Reviews API に投稿する直前の payload から、Must Fix 以外の混入・範囲外コメント・event 判定ミスを検出して誤投稿を防ぐことです。
+完了条件は、検証対象ファイルをすべて読み、各観点の PASS / FAIL 理由を示し、最終行に `VERDICT: PASS` または `VERDICT: FAIL` を単独で出力することです。
 
 ## 検証対象ファイル
 - review-payload.json: 投稿予定の GitHub Reviews API payload
