@@ -142,30 +142,33 @@ jq -r '.started_at' ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.js
 
 全候補がスキップなら何もせず終了。
 
-### Step 2b: 選定PRの `head_sha` / `branch` / `base_branch` / `files` を取得
+### Step 2b: 選定PRの `repository_full_name` / `head_sha` / `base_sha` / `branch` / `base_branch` / `merge_commit_sha` / `files` を取得
 
-Step 2 で対象PRを1件選定した直後、未レビュー / failed / stale / completed のどの経路でも必ず実行する。Step 3 の clone と `metadata.json` 作成・Step 4 の PR 差分スコープ制御は `$head_sha` / `$branch` / `$base_branch` / `$files_json` に依存するため、欠落すると後続が破綻する。
+Step 2 で対象PRを1件選定した直後、未レビュー / failed / stale / completed のどの経路でも必ず実行する。Step 3 の clone と `metadata.json` 作成・Step 4 の PR 差分スコープ制御は `$repository_full_name` / `$head_sha` / `$base_sha` / `$branch` / `$base_branch` / `$merge_commit_sha` / `$files_json` に依存するため、欠落すると後続が破綻する。
 
 - いつ使うか: Step 2 で対象PRを1件選定した直後に必ず実行する
-- 判定条件: 標準出力に `{"head_sha":"...","branch":"...","base_branch":"...","files":[...]}` の JSON が出力される（いずれかが欠落した場合は `jq` が非ゼロ終了し、stderr に `missing <field>` が出る）
-- 次アクション: 出力 JSON の `.head_sha` を `$head_sha`、`.branch` を `$branch`、`.base_branch` を `$base_branch`、`.files` を **JSON 配列文字列**として `$files_json` に保持する（Bash 変数には JSON 配列そのままの文字列を入れる。`jq --argjson` に渡す想定）。`state == "completed"` の場合は保存済み `head_sha` と比較、それ以外は Step 3 へ進む
+- 判定条件: 標準出力に `{"repository_full_name":"...","head_sha":"...","base_sha":"...","branch":"...","base_branch":"...","merge_commit_sha":"...","files":[...]}` の JSON が出力される（required field のいずれかが欠落した場合は `jq` が非ゼロ終了し、stderr に `missing <field>` が出る。`merge_commit_sha` は open PR では空文字列でよい）
+- 次アクション: 出力 JSON の `.repository_full_name` を `$repository_full_name`、`.head_sha` を `$head_sha`、`.base_sha` を `$base_sha`、`.branch` を `$branch`、`.base_branch` を `$base_branch`、`.merge_commit_sha` を `$merge_commit_sha`、`.files` を **JSON 配列文字列**として `$files_json` に保持する（Bash 変数には JSON 配列そのままの文字列を入れる。`jq --argjson` に渡す想定）。`state == "completed"` の場合は保存済み `head_sha` と比較、それ以外は Step 3 へ進む
 
 ```bash
-gh pr view $pr_number --repo $org/$repository --json headRefOid,headRefName,baseRefName,files | jq -ce 'if ((.headRefOid // "") == "") then error("missing headRefOid") elif ((.headRefName // "") == "") then error("missing headRefName") elif ((.baseRefName // "") == "") then error("missing baseRefName") elif ((.files // []) | length) == 0 then error("missing files") else {head_sha:.headRefOid,branch:.headRefName,base_branch:.baseRefName,files:[.files[].path]} end'
+gh pr view $pr_number --repo $org/$repository --json headRefOid,headRefName,baseRefName,baseRefOid,mergeCommit,files | jq -ce --arg repository_full_name "$org/$repository" 'if (($repository_full_name // "") == "") then error("missing repository_full_name") elif ((.headRefOid // "") == "") then error("missing headRefOid") elif ((.baseRefOid // "") == "") then error("missing baseRefOid") elif ((.headRefName // "") == "") then error("missing headRefName") elif ((.baseRefName // "") == "") then error("missing baseRefName") elif ((.files // []) | length) == 0 then error("missing files") else {repository_full_name:$repository_full_name,head_sha:.headRefOid,base_sha:.baseRefOid,branch:.headRefName,base_branch:.baseRefName,merge_commit_sha:(.mergeCommit.oid // ""),files:[.files[].path]} end'
 ```
 
 `$files_json` の担保理由: Step 4a / 4b で「PR 差分範囲外のファイルをレビュー対象にしない」制約を効かせるため、PR 変更ファイルの一覧を確定情報として skill 下流に伝達する必要がある。`gh pr view` がここで成功して `files` が空でない場合のみ、Step 3 以降に進む（empty files の PR は Step 2b で `missing files` エラーで fail-fast）。
 
 #### 変数の保持例
 
-上の `jq -ce` の出力が `{"head_sha":"deadbeef01","branch":"feat/dark-mode","base_branch":"main","files":["src/theme.ts","src/App.tsx"]}` の場合、以下のように Bash 変数へ保持する:
+上の `jq -ce` の出力が `{"repository_full_name":"octo/example","head_sha":"deadbeef01","base_sha":"cafebabe02","branch":"feat/dark-mode","base_branch":"main","merge_commit_sha":"","files":["src/theme.ts","src/App.tsx"]}` の場合、以下のように Bash 変数へ保持する:
 
+- `$repository_full_name = octo/example`（owner/repo 形式の文字列）
 - `$head_sha = deadbeef01`（文字列そのまま）
+- `$base_sha = cafebabe02`（文字列そのまま）
 - `$branch = feat/dark-mode`（文字列そのまま）
 - `$base_branch = main`（文字列そのまま）
+- `$merge_commit_sha = ""`（open PR では空文字列。merge commit が取得できる場合はその SHA）
 - `$files_json = ["src/theme.ts","src/App.tsx"]`（**JSON 配列そのままの文字列**。Step 3 の metadata.json 生成で `jq --argjson files "$files_json"` に渡す）
 
-`$files_json` はオブジェクトの `.files` フィールドそのままを JSON 配列文字列として取り出したもの。抽出は Claude 側で `jq -ce` の出力を読み取って 4 変数に分解する（シェル側で追加の `jq` パイプは挟まない。1 テンプレート = 1 シェル実行単位の原則に従う）。
+`$files_json` はオブジェクトの `.files` フィールドそのままを JSON 配列文字列として取り出したもの。`$repository_full_name` は canonical findings の `pr.repository` にそのまま使い、`$base_sha` は `pr.base_sha` と `metadata.json.base_sha` の両方に使う。`$merge_commit_sha` は empty string の場合に限り metadata では `null` に正規化してよい。抽出は Claude 側で `jq -ce` の出力を読み取って 7 変数に分解する（シェル側で追加の `jq` パイプは挟まない。1 テンプレート = 1 シェル実行単位の原則に従う）。
 
 #### `state == "completed"` の場合の保存済み `head_sha` 比較
 
@@ -325,7 +328,7 @@ jq -n --arg started_at "$started_at" --arg head_sha "$head_sha" '{state:"running
 - 次アクション: Step 4 のレビュー実行へ進む
 
 ```bash
-jq -n --arg org "$org" --arg repository "$repository" --arg pr_number "$pr_number" --arg pr_url "$pr_url" --arg head_sha "$head_sha" --arg branch "$branch" --arg base_branch "$base_branch" --arg title "$title" --argjson files "$files_json" '{org:$org,repository:$repository,pr_number:$pr_number,pr_url:$pr_url,head_sha:$head_sha,branch:$branch,base_branch:$base_branch,title:$title,files:$files}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json
+jq -n --arg org "$org" --arg repository "$repository" --arg repository_full_name "$repository_full_name" --arg pr_number "$pr_number" --arg pr_url "$pr_url" --arg head_sha "$head_sha" --arg base_sha "$base_sha" --arg branch "$branch" --arg base_branch "$base_branch" --arg merge_commit_sha "$merge_commit_sha" --arg title "$title" --argjson files "$files_json" '{org:$org,repository:$repository,repository_full_name:$repository_full_name,pr_number:$pr_number,pr_url:$pr_url,head_sha:$head_sha,base_sha:$base_sha,branch:$branch,base_branch:$base_branch,merge_commit_sha:(if $merge_commit_sha == "" then null else $merge_commit_sha end),title:$title,files:$files}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json
 ```
 
 ### Step 4 前処理: レビュー観点の読み込み
@@ -335,6 +338,8 @@ Step 4a / 4b 共通のレビュー観点本文（MCP追加情報収集 / 7観点
 - いつ使うか: Step 3 完了後、Step 4a / 4b 起動前に必ず実行する
 - 判定条件: `REVIEW_CRITERIA.md` の全文を Read ツールで取得できる
 - 次アクション: 4a / 4b の Bash コマンド文字列中の `{REVIEW_CRITERIA}` を、**読み込んだ本文のバッククォート (`) を `\`` にエスケープした文字列**で置換してから Bash ツールに渡す（bash の double-quote 内ではバッククォートがコマンド置換扱いになるため、エスケープ必須）
+
+さらに canonical findings の `producer.version` を埋めるため、同じ `$CLAUDE_PLUGIN_ROOT` を基準に `$CLAUDE_PLUGIN_ROOT/.claude-plugin/plugin.json` を Read ツールで取得し、`.version` を `$plugin_version` として保持する。`findings.verified.json` の `producer.version` は空文字列不可のため、取得に失敗した場合は Step 5 の **failed 更新** へ遷移する。
 
 パス解決: Read ツールの `file_path` には `REVIEW_CRITERIA.md` の絶対パスを渡す。プラグイン環境では `$CLAUDE_PLUGIN_ROOT/skills/review/REVIEW_CRITERIA.md` に配置される。`$CLAUDE_PLUGIN_ROOT` が未設定・不明な場合は以下の Bash で値を取得してから絶対パスを組み立てる。
 
@@ -468,8 +473,8 @@ MCP について:
 2. **スコープ検証 (必須)**: どちらか一方でも本文が `PR_DIFF_UNAVAILABLE` のみなら、統合成果物は作成せず Step 5 の **failed 更新** へ遷移する（`findings.verified.json` / `review.md` は生成しない）
 3. まず 2 つの生レビューから finding 候補を正規化し、**`findings.verified.json` を先に作る**。`review.md` はこの canonical artifact から派生生成する。`findings.verified.json` は `schemas/findings.v1.json` に従い、最低限以下を満たす:
    - top-level: `schema_version = "findings.v1"`, `producer`, `pr`, `generated_at`, `findings[]`
-   - `producer.name` は `pr-codex`、`producer.version` はプラグイン version、`producer.run_id` は `<org>-<repository>-<pr_number>-<head_sha>` のような再生成可能な値にする
-   - `pr.repository` / `pr.number` / `pr.base_sha` / `pr.head_sha` は `metadata.json` から埋め、`merge_commit_sha` は利用可能な場合のみ入れる
+   - `producer.name` は `pr-codex`、`producer.version` は Step 4 前処理で `$CLAUDE_PLUGIN_ROOT/.claude-plugin/plugin.json` から読んだ `$plugin_version`、`producer.run_id` は `<org>-<repository>-<pr_number>-<head_sha>` のような再生成可能な値にする
+   - `pr.repository` は `metadata.json.repository_full_name`（owner/repo 形式）を使い、`pr.number` / `pr.base_sha` / `pr.head_sha` も `metadata.json` から埋める。`merge_commit_sha` は `metadata.json.merge_commit_sha` が `null` でない場合のみ入れる
    - canonical finding では **`source_agent` 単数形は使わず**、`source_agents[]` と `merged_from[]` を使う。`merged_from[]` には生レビュー中の見出しや内部IDなど、由来追跡できる文字列を入れる
    - `location` は `{path, start_line, end_line?, side, diff_hunk_ref?}`。本 workflow では head 基準のため `side` は通常 `RIGHT` を使う
    - `category` は短い安定文字列を使う。`bug` / `security` / `performance` / `tests` / `design` / `code_quality` / `consistency` を優先しつつ、必要なら `runtime_error` のようなドメイン別ラベルを使ってよい
@@ -586,7 +591,7 @@ jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" --arg head
 ## エラーハンドリング
 
 - PRがclosed/merged → `skipped` としてログに記録し、次の候補へ進む
-- Step 2b の `jq -ce` で `missing headRefOid / headRefName / baseRefName / files` が出た → `state=failed` で記録し、その回は終了（PR メタデータが必須フィールドを欠いているため信頼できるレビュー不可）
+- Step 2b の `jq -ce` で `missing repository_full_name / headRefOid / baseRefOid / headRefName / baseRefName / files` が出た → `state=failed` で記録し、その回は終了（PR メタデータが必須フィールドを欠いているため信頼できるレビュー不可）
 - Step 3 の `gh pr diff` が失敗または空出力（`pr.diff` 未生成） → `state=failed` で記録し、その回は終了（PR 差分スコープが確定できないため Step 4 に進まない）
 - `claude -p` がタイムアウト（20分） → `state=failed` で記録
 - `claude -p` が非ゼロ終了 → `state=failed` で記録
@@ -612,7 +617,7 @@ $CLAUDE_PLUGIN_ROOT/skills/review/
 ~/claude-loop-pr-codex/
   └── $org-$repository-$pr_number/
         ├── status.json
-        ├── metadata.json        ← org/repo/pr_number/pr_url/head_sha/branch/base_branch/title/files を含む
+        ├── metadata.json        ← org/repository/repository_full_name/pr_number/pr_url/head_sha/base_sha/branch/base_branch/merge_commit_sha/title/files を含む
         ├── pr.diff              ← PR 差分 (unified diff)。Step 4a/4b のスコープ確定情報源
         ├── pr.diff.ranges.txt   ← コメント可能行範囲。Step 4a/4b と Step 4c の行番号検証に使う
         ├── clone-claude/        ← Claude Code 用 shallow clone (depth 50, base fetch 済み)
