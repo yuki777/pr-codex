@@ -67,7 +67,7 @@ cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
 2. **候補の選定** — 未レビュー・失敗・追加コミットありの最初の1件を選定
 3. **作業ディレクトリの準備** — PRブランチを各ツール用に個別に shallow clone
 4. **2者レビュー実行** — Claude Code と Codex CLI が並行してレビュー
-5. **結果の統合** — 両者の指摘を比較・議論し、統合レビューを作成
+5. **結果の統合** — 両者の指摘を比較・議論し、`findings.verified.json` と `review.md` を生成
 6. **結果報告** — レビュー結果の要約をユーザーに報告
 
 ## レビューの投稿
@@ -81,7 +81,7 @@ cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
 `/pr-codex:send` の挙動:
 
 1. `~/claude-loop-pr-codex/` 配下から `status.json` が `state:completed` でかつ `review.md` が存在するディレクトリを1件選定する（名前昇順の先頭1件）
-2. `review.md` をパースし、`## 総評` / `## 良い点` を body に、`## 重大な問題 (Must Fix)`をインラインコメントに分解（`## 改善提案 (Should Fix)`と `## 軽微な指摘` と `## 議論・判断` は投稿しない）
+2. `findings.verified.json` を一次入力として `Must Fix` を抽出し、`review.md` から `## 総評` / `## 良い点` を body に使う（移行期間は Markdown parser を fallback として残すが、`findings.verified.json` が存在するのに Must Fix 件数が `review.md` と一致しない場合は中断する）
 3. GitHub Reviews API への payload サマリをユーザーに提示し、明示的な承認を得る
 4. 承認後、`gh api --method POST .../reviews` で投稿（`event` は Must Fix ありなら `REQUEST_CHANGES`、なければ `COMMENT`。`APPROVE` は自動では出さない）
 5. 投稿成功後、対象ディレクトリを `~/claude-loop-pr-codex/sent/` に移動する
@@ -95,20 +95,31 @@ cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
   ├── $org-$repo-$pr/             # 進行中 / 未投稿のレビュー
   │     ├── status.json           # 実行状態（running / completed / failed）
   │     ├── metadata.json         # PR情報（org, repo, pr_number, head_sha 等）
+  │     ├── pr.diff               # PR 差分 (unified diff)
+  │     ├── pr.diff.ranges.txt    # GitHub inline comment 可能範囲
   │     ├── clone-claude/         # Claude Code 用 shallow clone
   │     ├── clone-codex/          # Codex CLI 用 shallow clone
   │     ├── claude-review.md      # Claude Code の生レビュー
   │     ├── codex-review.md       # Codex CLI の生レビュー
+  │     ├── findings.verified.json # canonical findings (`schemas/findings.v1.json`)
+  │     ├── validation-report.json # validation の副成果物（canonical findings とは分離）
   │     ├── review.md             # 統合レビュー（最終成果物）
   │     ├── claude.log
   │     └── codex.log
   └── sent/                       # /pr-codex:send で投稿済み
         └── $org-$repo-$pr/       # 投稿後にここへ移動される
+              ├── findings.verified.json
               ├── review.md
               ├── review-payload.json   # 投稿した GitHub Reviews API の payload
               ├── review-response.json  # gh api のレスポンス（.html_url 等）
               └── ... (他ファイルも一緒に保管される)
 ```
+
+## Schema
+
+- canonical runtime artifact は `schemas/findings.v1.json` (JSON Schema Draft 2020-12) で定義する
+- `findings.verified.json` は top-level `generated_at` を持ち、per-finding `created_at` は持たない
+- `fingerprint` の入力は `path` / `category` / `normalized_title` / `primary_symbol` に固定し、`line` は含めない
 
 ## バージョンアップ（作者向け）
 

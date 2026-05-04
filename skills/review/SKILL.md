@@ -304,7 +304,7 @@ awk '
 - `pr.diff` は両ツール共通の「PR 差分の確定情報源」として Step 4 で参照される
 - `pr.diff.ranges.txt` は `pr.diff` から抽出した「コメント可能行範囲」の確定情報源として Step 4 で参照される
 
-以下の `status.json` / `metadata.json` は Bash で作成する（`jq -n --arg` の出力を `>` でリダイレクト）。統合レビュー `review.md` のみ Step 4c で `Write` ツールを使う。
+以下の `status.json` / `metadata.json` は Bash で作成する（`jq -n --arg` の出力を `>` でリダイレクト）。`findings.verified.json` / `validation-report.json` / `review.md` は Step 4c で `Write` ツールを使う。
 
 まず現在時刻を取得する（出力を `$started_at` として保持する）。
 
@@ -464,24 +464,39 @@ MCP について:
 
 両方のレビューが完了したら、メインコンテキスト（自分自身）が以下を行う:
 
-1. `claude-review.md` / `codex-review.md` / `pr.diff.ranges.txt` を読む
-2. **スコープ検証 (必須)**: どちらか一方でも本文が `PR_DIFF_UNAVAILABLE` のみなら、統合レビューは作成せず Step 5 の **failed 更新** へ遷移する（review.md は生成しない）。
-3. **破棄ルール (必須)**: `metadata.json.files[]` に含まれないパスへの指摘は原則破棄する。ファイルパスが `.md` の見出しやコードブロックで言及されていたら、そのパスが `files[]` 配列に属するかを必ず照合する。有益な一般的指摘で残す価値があるものだけ、`## 補足` セクションの末尾に「参考（範囲外）」として記載する。`## 重大な問題 (Must Fix)` / `## 改善提案 (Should Fix)` には絶対に採用しない。
-4. **コメント可能行範囲の自己検証 (必須)**: `## 重大な問題 (Must Fix)` / `## 改善提案 (Should Fix)` に採用する各レベル3見出しについて、`path` と行番号が `pr.diff.ranges.txt` の同一 `path` の範囲内に収まるかをメインコンテキストで検証する。単一行は `line` が範囲内、複数行は `[start_line, line]` の両端が同じ hunk 範囲内にある場合だけ有効とする。範囲外なら、同一ファイルの最も近いコメント可能行に見出しを差し替え、本文の `問題` または `理由` に `(参考: 元の行 path:L<行番号>)` を補足する。同一ファイルにコメント可能行がない場合は Must Fix / Should Fix には採用せず、`## 補足` に「範囲外指摘」として残す。
-5. 生レビューを内部的に比較し、最終レビューへ統合する。この比較過程は review.md に書かない:
+1. `claude-review.md` / `codex-review.md` / `pr.diff.ranges.txt` / `metadata.json` を読み、さらに canonical schema として `$CLAUDE_PLUGIN_ROOT/schemas/findings.v1.json` を Read する（パス解決は Step 4 前処理の `REVIEW_CRITERIA.md` と同じく `$CLAUDE_PLUGIN_ROOT` 基準で行う）
+2. **スコープ検証 (必須)**: どちらか一方でも本文が `PR_DIFF_UNAVAILABLE` のみなら、統合成果物は作成せず Step 5 の **failed 更新** へ遷移する（`findings.verified.json` / `review.md` は生成しない）
+3. まず 2 つの生レビューから finding 候補を正規化し、**`findings.verified.json` を先に作る**。`review.md` はこの canonical artifact から派生生成する。`findings.verified.json` は `schemas/findings.v1.json` に従い、最低限以下を満たす:
+   - top-level: `schema_version = "findings.v1"`, `producer`, `pr`, `generated_at`, `findings[]`
+   - `producer.name` は `pr-codex`、`producer.version` はプラグイン version、`producer.run_id` は `<org>-<repository>-<pr_number>-<head_sha>` のような再生成可能な値にする
+   - `pr.repository` / `pr.number` / `pr.base_sha` / `pr.head_sha` は `metadata.json` から埋め、`merge_commit_sha` は利用可能な場合のみ入れる
+   - canonical finding では **`source_agent` 単数形は使わず**、`source_agents[]` と `merged_from[]` を使う。`merged_from[]` には生レビュー中の見出しや内部IDなど、由来追跡できる文字列を入れる
+   - `location` は `{path, start_line, end_line?, side, diff_hunk_ref?}`。本 workflow では head 基準のため `side` は通常 `RIGHT` を使う
+   - `category` は短い安定文字列を使う。`bug` / `security` / `performance` / `tests` / `design` / `code_quality` / `consistency` を優先しつつ、必要なら `runtime_error` のようなドメイン別ラベルを使ってよい
+   - `title` は短い見出し、`problem` / `reason` / `suggestion` は review.md の 3 点組にそのまま再利用できる粒度で書く
+   - `posting` は `{post_policy, explanation_postable, not_postable_reason?, audience?}`。M1 では GitHub へ投稿する Must Fix は原則 `post_policy=inline` かつ `explanation_postable=true` に揃え、投稿不可の懸念は `note` または `## 補足` 側へ逃がす
+   - `fingerprint` の入力は README 記載どおり `path` / `category` / `normalized_title` / `primary_symbol` に固定し、`line` は含めない
+   - **`created_at` は finding 個別には書かない**。Issue #16 の最新 comment と参照 gist を優先し、canonical runtime artifact では top-level `generated_at` に集約する
+4. **破棄ルール (必須)**: `metadata.json.files[]` に含まれないパスへの指摘は canonical findings に採用しない。ファイルパスが `.md` の見出しやコードブロックで言及されていたら、そのパスが `files[]` 配列に属するかを必ず照合する。有益な一般的指摘で残す価値があるものだけ、`severity=note` + `posting.post_policy=local_only` もしくは `review.md` の `## 補足` 末尾に「参考（範囲外）」として残す。`must_fix` / `should_fix` には絶対に採用しない
+5. **コメント可能行範囲の自己検証 (必須)**: `must_fix` / `should_fix` として採用する各 finding について、`location.path` と `location.start_line` / `location.end_line` が `pr.diff.ranges.txt` の同一 `path` の範囲内に収まるかをメインコンテキストで検証する。単一行は `start_line`、複数行は `[start_line, end_line]` の両端が同じ hunk 範囲内にある場合だけ有効とする。範囲外なら、同一ファイルの最も近いコメント可能行へ `location` を差し替え、`problem` または `reason` に `(参考: 元の行 path:L<行番号>)` を補足する。同一ファイルにコメント可能行がない場合は `must_fix` / `should_fix` には採用せず、`note` / `local_only` または `## 補足` に退避する
+6. severity が衝突した場合は **conservative min** を採用し、`severity_disputed=true`, `severity_by_source`, `merger_rule_applied="conservative_min_until_verifier_available"`, `verifier_required=true` を記録する。validation status (`metadata_files_member`, `diff_range_valid`) は canonical findings には入れず、必要なら副成果物 `validation-report.json` に分離する
+7. 生レビューを内部的に比較し、最終 findings へ統合する。この比較過程は `review.md` に書かない:
    - **一致点**: 同一原因・同一影響・同一箇所の重複指摘をまとめ、採用判断の信頼度評価に使う
-   - **相違点**: 一部の生レビューにだけある指摘は、pr.diff と checkout 済みソースで妥当性を再検証して採否と重要度を決める
-   - **補完**: 見落とされていた観点が補われている場合は、根拠を確認したうえで最終レビューに反映する
-   - review.md には最終判断のみを書く。レビュー実行者名 / モデル名 / どの生レビュー由来かを示す表現 / '両者一致' / '片方のみ' のような由来表現は書かない
-6. 統合した最終レビューを `Write` ツールで `$HOME/claude-loop-pr-codex/<org>-<repository>-<pr_number>/review.md` に書き出す（`<...>` は実値に置換した絶対パスで指定する）
+   - **相違点**: 一部の生レビューにだけある指摘は、`pr.diff` と checkout 済みソースで妥当性を再検証して採否と重要度を決める
+   - **補完**: 見落とされていた観点が補われている場合は、根拠を確認したうえで最終 findings に反映する
+   - `review.md` には最終判断のみを書く。レビュー実行者名 / モデル名 / どの生レビュー由来かを示す表現 / `両者一致` / `片方のみ` のような由来表現は書かない
+8. 完成した canonical artifact を `Write` ツールで `$HOME/claude-loop-pr-codex/<org>-<repository>-<pr_number>/findings.verified.json` に書き出す。必要なら副成果物 `validation-report.json` も同ディレクトリへ書き出す
+9. `review.md` は **`findings.verified.json` から派生生成** する。`must_fix` → `## 重大な問題 (Must Fix)`, `should_fix` → `## 改善提案 (Should Fix)`, `nit` → `## 軽微な指摘 (Nit)`, `note` や `post_policy=local_only/suppress` の項目 → `## 補足` に対応させる。`## 総評` と `## 良い点` は人間向け要約として記述してよいが、Must Fix / Should Fix の件数や内容が canonical findings と矛盾してはならない
+10. **件数一致 gate (必須)**: `findings.verified.json` の `severity=must_fix` 件数と、派生生成した `review.md` の `## 重大な問題 (Must Fix)` 見出し件数は **100% 一致** させる。1 件でもずれたら Step 5 の **failed 更新** へ遷移し、completed にしてはならない
+11. 統合した最終レビューを `Write` ツールで `$HOME/claude-loop-pr-codex/<org>-<repository>-<pr_number>/review.md` に書き出す（`<...>` は実値に置換した絶対パスで指定する）
 
 - いつ使うか: `claude-review.md` と `codex-review.md` の両方が揃った後
-- 判定条件: `review.md` が作成される（両方が `PR_DIFF_UNAVAILABLE` の場合は生成しない）
-- 次アクション: 書き出し後 Step 5 へ進む（`PR_DIFF_UNAVAILABLE` があった場合は Step 5 failed 分岐へ）
+- 判定条件: `findings.verified.json` と `review.md` が作成され、Must Fix 件数が一致する（`PR_DIFF_UNAVAILABLE` の場合は生成しない）
+- 次アクション: 書き出し後 Step 5 へ進む（`PR_DIFF_UNAVAILABLE` または件数不一致があった場合は Step 5 failed 分岐へ）
 
-`Write` ツールは `~` やシェル変数（`$org` 等）を展開しない。`file_path` にはホームディレクトリを `$HOME` の実値（例: `/Users/adachi`）に展開済みの絶対パスを渡し、`$org` / `$repository` / `$pr_number` も実値に置換してから呼び出すこと。
+`Write` ツールは `~` やシェル変数（`$org` 等）を展開しない。`file_path` にはホームディレクトリを `$HOME` の実値（例: `/Users/adachi`）に展開済みの絶対パスを渡し、`$org` / `$repository` / `$pr_number` も実値に置換してから呼び出すこと。`findings.verified.json` の JSON 本文も、プレースホルダを残さず実値で埋める。
 
-本文についても、プレースホルダ（`実際のPRタイトル`, `実際のPR URL`, `<head_sha>`, 各セクション本文）は必ず実値に置換し、残してはならない。`<head_sha>` は `metadata.json` / `status.json` と同じ値（Step 2b で取得した `$head_sha`）を実値で埋める。シェル展開やヒアドキュメントは使わず、Markdown 本文を直接 `Write` へ渡すことでクォートやプレースホルダ漏れを回避する。
+`review.md` 本文についても、プレースホルダ（`実際のPRタイトル`, `実際のPR URL`, `<head_sha>`, 各セクション本文）は必ず実値に置換し、残してはならない。`<head_sha>` は `metadata.json` / `status.json` と同じ値（Step 2b で取得した `$head_sha`）を実値で埋める。シェル展開やヒアドキュメントは使わず、Markdown 本文を直接 `Write` へ渡すことでクォートやプレースホルダ漏れを回避する。
 
 `review.md` のテンプレート構造:
 
@@ -498,7 +513,7 @@ MCP について:
 
 ## 重大な問題 (Must Fix)
 
-マージ前に必ず修正すべき問題。根拠確認済みの指摘のみを残す。`metadata.json.files[]` 範囲外の指摘は掲載しない。見出し行番号は必ず `pr.diff.ranges.txt` の同一 path の範囲内に収める。
+マージ前に必ず修正すべき問題。`findings.verified.json` の `severity=must_fix` から機械的に導出される内容だけを残す。`metadata.json.files[]` 範囲外の指摘は掲載しない。見出し行番号は必ず `pr.diff.ranges.txt` の同一 path の範囲内に収める。
 
 ### `path/to/file.ext:L<行番号>` (もしくは `path/to/file.ext:L<開始>-L<終了>`)
 
@@ -508,7 +523,7 @@ MCP について:
 
 ## 改善提案 (Should Fix)
 
-修正が強く推奨される問題。同じフォーマットで記載。見出し行番号は必ず `pr.diff.ranges.txt` の同一 path の範囲内に収める。
+修正が強く推奨される問題。`findings.verified.json` の `severity=should_fix` から導出し、同じフォーマットで記載する。見出し行番号は必ず `pr.diff.ranges.txt` の同一 path の範囲内に収める。
 
 ### `path/to/file.ext:L<行番号>` (もしくは `path/to/file.ext:L<開始>-L<終了>`)
 
@@ -518,7 +533,7 @@ MCP について:
 
 ## 軽微な指摘 (Nit)
 
-スタイルや好みに関する軽微な指摘。箇条書きで簡潔に。各項目に必ず `path/to/file.ext:L<行番号>` 表記を付ける。
+スタイルや好みに関する軽微な指摘。`findings.verified.json` の `severity=nit` から箇条書きで簡潔に導出する。各項目に必ず `path/to/file.ext:L<行番号>` 表記を付ける。
 
 ## 良い点
 
@@ -526,7 +541,7 @@ MCP について:
 
 ## 補足
 
-投稿対象外の補足事項があれば記載する。例: コメント可能行がない範囲外の参考指摘、レビュー上の前提、確認できなかった事項。なければ 'なし'。
+投稿対象外の補足事項があれば記載する。`severity=note` や `posting.post_policy=local_only/suppress` の finding、コメント可能行がない範囲外の参考指摘、レビュー上の前提、確認できなかった事項を置く。なければ `なし`。
 ```
 
 ### Step 5: 結果保存
@@ -566,7 +581,7 @@ jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" --arg head
 - 次アクション: `review.md` を Read ツールで読み、以下の内容をユーザーにテキストで報告して終了する
   - 対象PR（`$pr_url` のリンク付き）
   - レビュー結果の要約（総評 + 重大な問題の件数と代表例、改善提案の件数を含める）
-  - 結果ファイルのパス（`~/claude-loop-pr-codex/$org-$repository-$pr_number/review.md`）
+  - 結果ファイルのパス（`~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.verified.json` と `~/claude-loop-pr-codex/$org-$repository-$pr_number/review.md`）
 
 ## エラーハンドリング
 
@@ -578,6 +593,7 @@ jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" --arg head
 - `codex exec` がタイムアウト（20分） → `state=failed` で記録
 - `codex exec` が非ゼロ終了 → `state=failed` で記録
 - **`claude-review.md` / `codex-review.md` のいずれかが `PR_DIFF_UNAVAILABLE` のみ → `state=failed` で記録し、`review.md` は生成しない**
+- **`findings.verified.json` の Must Fix 件数と `review.md` の Must Fix 見出し件数が不一致 → `state=failed` で記録し、send へ進めない**
 - 権限不足（404/403） → `state=failed` で記録し、その回は終了
 
 ## ファイル構成
@@ -603,6 +619,8 @@ $CLAUDE_PLUGIN_ROOT/skills/review/
         ├── clone-codex/         ← Codex CLI 用 shallow clone (depth 50, base fetch 済み)
         ├── claude-review.md     ← Claude Code の生レビュー
         ├── codex-review.md      ← Codex CLI の生レビュー
+        ├── findings.verified.json ← canonical findings (`schemas/findings.v1.json`)
+        ├── validation-report.json ← validation の副成果物（optional）
         ├── review.md            ← 統合レビュー（最終成果物）
         ├── claude.log
         └── codex.log
@@ -612,7 +630,7 @@ $CLAUDE_PLUGIN_ROOT/skills/review/
 
 本スキルは Claude Code を `--permission-mode auto` で起動することを前提とする（README の「使い方」参照）。auto mode でも、許可済みツールやコマンドの内容によっては分類器の判断で承認が必要になり得るため、本スキルではテンプレートに明示された操作だけを実行する。
 
-ローカルの書き込みは作業ディレクトリ `~/claude-loop-pr-codex/` 配下に限り、`clone-claude/` / `clone-codex/` の作成と更新、`status.json` / `metadata.json` / `pr.diff` / `pr.diff.ranges.txt` / `claude.log` / `codex.log` / `claude-review.md` / `codex-review.md` / `review.md` の成果物作成のみ許可する。
+ローカルの書き込みは作業ディレクトリ `~/claude-loop-pr-codex/` 配下に限り、`clone-claude/` / `clone-codex/` の作成と更新、`status.json` / `metadata.json` / `pr.diff` / `pr.diff.ranges.txt` / `claude.log` / `codex.log` / `claude-review.md` / `codex-review.md` / `findings.verified.json` / `validation-report.json` / `review.md` の成果物作成のみ許可する。
 
 許可ルールは以下の allowlist に従う。
 
@@ -622,7 +640,7 @@ $CLAUDE_PLUGIN_ROOT/skills/review/
 4. シェル演算子はテンプレート中に明示された `|` `<` `>` `2>` `&&` のみ許可する
 5. JSON 生成は `jq -n --arg` を使う。ヒアドキュメントで JSON を直接組み立てない
 6. ファイル書き込みの使い分け:
-   - 統合レビュー `review.md` は `Write` ツールで書き出す（`file_path` は `~` / `$...` を展開しないため、実値の絶対パスを渡す）
+   - `findings.verified.json` / `validation-report.json` / 統合レビュー `review.md` は `Write` ツールで書き出す（`file_path` は `~` / `$...` を展開しないため、実値の絶対パスを渡す）
    - `status.json` / `metadata.json` は `jq -n --arg` / `--argjson` の出力を `Bash` の `>` で書く
    - `pr.diff` は Step 3 の `gh pr diff` の標準出力を `>` でリダイレクトして作成する
    - `pr.diff.ranges.txt` は Step 3 の `awk` の標準出力を `>` でリダイレクトして作成する

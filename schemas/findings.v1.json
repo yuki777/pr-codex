@@ -1,0 +1,498 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/yuki777/pr-codex/main/schemas/findings.v1.json",
+  "title": "pr-codex canonical findings v1",
+  "type": "object",
+  "additionalProperties": false,
+  "$comment": "Issue #16 latest comment and the associated gist finalized top-level generated_at for canonical findings. The older per-finding created_at field is intentionally omitted here.",
+  "required": [
+    "schema_version",
+    "producer",
+    "pr",
+    "generated_at",
+    "findings"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "findings.v1"
+    },
+    "producer": {
+      "$ref": "#/$defs/producer"
+    },
+    "pr": {
+      "$ref": "#/$defs/pr"
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/finding"
+      }
+    }
+  },
+  "$defs": {
+    "sha": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{7,64}$"
+    },
+    "non_empty_string": {
+      "type": "string",
+      "minLength": 1
+    },
+    "severity": {
+      "enum": [
+        "must_fix",
+        "should_fix",
+        "nit",
+        "note"
+      ]
+    },
+    "axis_value": {
+      "enum": [
+        "yes",
+        "no",
+        "unknown"
+      ]
+    },
+    "evidence_level": {
+      "enum": [
+        "suspicion",
+        "corroborated",
+        "trigger_path_identified",
+        "impact_explained",
+        "verified"
+      ]
+    },
+    "post_policy": {
+      "enum": [
+        "inline",
+        "body_summary",
+        "local_only",
+        "suppress"
+      ]
+    },
+    "not_postable_reason": {
+      "enum": [
+        "depends_on_pr_external_context",
+        "security_detail",
+        "too_long",
+        "low_evidence_suspicion",
+        "private_dependency",
+        "other_explained"
+      ]
+    },
+    "audience": {
+      "enum": [
+        "human_reviewer",
+        "eval_harness",
+        "future_memory"
+      ]
+    },
+    "merger_rule_applied": {
+      "enum": [
+        "none",
+        "conservative_min_until_verifier_available",
+        "verifier_decided"
+      ]
+    },
+    "evidence_type": {
+      "enum": [
+        "manual_review",
+        "static_analysis",
+        "test",
+        "ci_log",
+        "reference"
+      ]
+    },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version",
+        "run_id"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "version": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "run_id": {
+          "$ref": "#/$defs/non_empty_string"
+        }
+      }
+    },
+    "pr": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "number",
+        "base_sha",
+        "head_sha"
+      ],
+      "properties": {
+        "repository": {
+          "type": "string",
+          "pattern": "^[^/\\s]+/[^/\\s]+$"
+        },
+        "number": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "base_sha": {
+          "$ref": "#/$defs/sha"
+        },
+        "head_sha": {
+          "$ref": "#/$defs/sha"
+        },
+        "merge_commit_sha": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "location": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "start_line",
+        "side"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "start_line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "end_line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "side": {
+          "enum": [
+            "LEFT",
+            "RIGHT"
+          ]
+        },
+        "diff_hunk_ref": {
+          "$ref": "#/$defs/non_empty_string"
+        }
+      }
+    },
+    "axes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "real",
+        "triggerable",
+        "impactful",
+        "general"
+      ],
+      "properties": {
+        "real": {
+          "$ref": "#/$defs/axis_value"
+        },
+        "triggerable": {
+          "$ref": "#/$defs/axis_value"
+        },
+        "impactful": {
+          "$ref": "#/$defs/axis_value"
+        },
+        "general": {
+          "$ref": "#/$defs/axis_value"
+        }
+      }
+    },
+    "posting": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "post_policy",
+        "explanation_postable"
+      ],
+      "properties": {
+        "post_policy": {
+          "$ref": "#/$defs/post_policy"
+        },
+        "explanation_postable": {
+          "type": "boolean"
+        },
+        "not_postable_reason": {
+          "$ref": "#/$defs/not_postable_reason"
+        },
+        "audience": {
+          "$ref": "#/$defs/audience"
+        }
+      }
+    },
+    "severity_by_source": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "$ref": "#/$defs/severity"
+      }
+    },
+    "evidence_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/evidence_type"
+        },
+        "tool": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "command": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "diagnostic_code": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "path": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "note": {
+          "$ref": "#/$defs/non_empty_string"
+        }
+      }
+    },
+    "php": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "symbol": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "composer_package": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "language_version": {
+          "$ref": "#/$defs/non_empty_string"
+        }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "fingerprint",
+        "source_agents",
+        "merged_from",
+        "location",
+        "severity",
+        "category",
+        "title",
+        "problem",
+        "reason",
+        "suggestion",
+        "evidence_level",
+        "axes",
+        "posting"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "fingerprint": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "source_agents": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/non_empty_string"
+          }
+        },
+        "merged_from": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/non_empty_string"
+          }
+        },
+        "location": {
+          "$ref": "#/$defs/location"
+        },
+        "severity": {
+          "$ref": "#/$defs/severity"
+        },
+        "category": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "title": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "problem": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "reason": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "suggestion": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "evidence_level": {
+          "$ref": "#/$defs/evidence_level"
+        },
+        "axes": {
+          "$ref": "#/$defs/axes"
+        },
+        "posting": {
+          "$ref": "#/$defs/posting"
+        },
+        "severity_disputed": {
+          "type": "boolean"
+        },
+        "severity_by_source": {
+          "$ref": "#/$defs/severity_by_source"
+        },
+        "merger_rule_applied": {
+          "$ref": "#/$defs/merger_rule_applied"
+        },
+        "verifier_required": {
+          "type": "boolean"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidence_item"
+          }
+        },
+        "php": {
+          "$ref": "#/$defs/php"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "posting": {
+                "properties": {
+                  "explanation_postable": {
+                    "const": false
+                  }
+                },
+                "required": [
+                  "explanation_postable"
+                ]
+              }
+            },
+            "required": [
+              "posting"
+            ]
+          },
+          "then": {
+            "properties": {
+              "posting": {
+                "required": [
+                  "not_postable_reason"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "evidence_level": {
+                "const": "suspicion"
+              }
+            },
+            "required": [
+              "evidence_level"
+            ]
+          },
+          "then": {
+            "properties": {
+              "posting": {
+                "properties": {
+                  "explanation_postable": {
+                    "const": false
+                  }
+                },
+                "required": [
+                  "explanation_postable"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "posting": {
+                "properties": {
+                  "post_policy": {
+                    "const": "local_only"
+                  }
+                },
+                "required": [
+                  "post_policy"
+                ]
+              }
+            },
+            "required": [
+              "posting"
+            ]
+          },
+          "then": {
+            "properties": {
+              "posting": {
+                "required": [
+                  "audience"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "severity_disputed": {
+                "const": true
+              }
+            },
+            "required": [
+              "severity_disputed"
+            ]
+          },
+          "then": {
+            "required": [
+              "severity_by_source",
+              "merger_rule_applied",
+              "verifier_required"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}
