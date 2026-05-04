@@ -1,0 +1,21 @@
+{
+  "fixture_id": "bear-sunday-pr171-large",
+  "size": "large",
+  "source": {
+    "repository": "bearsunday/BEAR.Sunday",
+    "pr_number": 171,
+    "pr_title": "Drop PHP 7.4 support and optimized for PHP8",
+    "base_sha": "839b7d96f0b0afc048f487d7491e1139dd246f81",
+    "head_sha": "e2d7bf9d7010c4519f069b4a5a6d67113abe84a1",
+    "merge_commit_sha": "0e2595448ba34e3de77571b35b3faeb4ddba7eec",
+    "source_url": "https://github.com/bearsunday/BEAR.Sunday/pull/171",
+    "merged_at": "2022-11-21T13:56:53Z",
+    "additions": 119,
+    "deletions": 157,
+    "changed_files": 20,
+    "license": "MIT",
+    "license_notice_path": "../LICENSES/BEAR.Sunday.MIT.txt",
+    "frozen_patch_path": "diff.patch",
+    "retrieved_at": "2026-05-04T05:30:00Z"
+  }
+}

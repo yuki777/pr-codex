@@ -1,0 +1,84 @@
+{
+  "schema_version": "expected-findings.v1",
+  "fixture_id": "bear-sunday-pr164-small",
+  "source": {
+    "repository": "bearsunday/BEAR.Sunday",
+    "pr_number": 164,
+    "pr_title": "Deprecate AbstractApp class",
+    "base_sha": "190ba62385bdf76e70f9e174289230ca979e9c70",
+    "head_sha": "68924ee3530f0fe170abed50f9ac19e204aadc0b",
+    "merge_commit_sha": "736947a5c67507c1bb6ac95da0429694e874ad7e",
+    "source_url": "https://github.com/bearsunday/BEAR.Sunday/pull/164",
+    "license": "MIT",
+    "license_notice_path": "../LICENSES/BEAR.Sunday.MIT.txt",
+    "frozen_patch_path": "diff.patch",
+    "retrieved_at": "2026-05-04T05:30:00Z"
+  },
+  "pr_intent": "deprecation_only",
+  "scoring_gate": {
+    "acceptable_pass_rate_min": 0.8,
+    "false_positive_rate_max": 0.1
+  },
+  "expected_findings": [
+    {
+      "id": "abstract-app-local-migration-note",
+      "expected_outcome": "known_bug",
+      "title": "Deprecated AbstractApp should point to an in-repo migration path",
+      "category": "consistency",
+      "severity": "should_fix",
+      "acceptable_severities": ["should_fix", "nit", "note"],
+      "strictness_profile": "should_fix_lax",
+      "expected_axes": {
+        "real": "yes",
+        "triggerable": "yes",
+        "impactful": "unknown",
+        "general": "no"
+      },
+      "acceptable_overrides": {
+        "impactful": ["yes", "unknown"],
+        "general": ["no", "unknown"]
+      },
+      "minimum_evidence_level": "corroborated",
+      "location_match": {
+        "path": "src/Extension/Application/AbstractApp.php"
+      },
+      "should_be_caught_by": ["four_axes_gate", "evidence_ladder"],
+      "oracle_notes": "Useful migration guidance; not a merge blocker. IMPACTFUL must remain unknown so it does not auto-promote to Must Fix."
+    },
+    {
+      "id": "deprecated-class-not-removed-trap",
+      "expected_outcome": "known_false_positive_trap",
+      "title": "Reviewer claims the deprecated class should already be removed",
+      "category": "consistency",
+      "out_of_scope_reason": "Deprecation is a staged process; removal happens in a later major version.",
+      "acceptable_severities": ["nit", "note"],
+      "should_be_caught_by": ["four_axes_gate"],
+      "expected_axes": {
+        "real": "no",
+        "triggerable": "no",
+        "impactful": "no",
+        "general": "yes"
+      },
+      "strictness_profile": "noise_filter",
+      "minimum_evidence_level": "suspicion",
+      "oracle_notes": "If a reviewer raises this as Must Fix, scoring counts it as false positive."
+    },
+    {
+      "id": "missing-since-removed-in-tag-trap",
+      "expected_outcome": "acceptable_risk",
+      "title": "Reviewer suggests adding @since / @removed-in tags",
+      "category": "code_quality",
+      "acceptable_severities": ["nit", "note"],
+      "should_be_caught_by": ["four_axes_gate"],
+      "expected_axes": {
+        "real": "yes",
+        "triggerable": "no",
+        "impactful": "no",
+        "general": "yes"
+      },
+      "strictness_profile": "should_fix_lax",
+      "minimum_evidence_level": "suspicion",
+      "oracle_notes": "Acceptable as a nit; must NOT be promoted to should_fix or above."
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "fixture_id": "bear-sunday-pr164-small",
+  "size": "small",
+  "source": {
+    "repository": "bearsunday/BEAR.Sunday",
+    "pr_number": 164,
+    "pr_title": "Deprecate AbstractApp class",
+    "base_sha": "190ba62385bdf76e70f9e174289230ca979e9c70",
+    "head_sha": "68924ee3530f0fe170abed50f9ac19e204aadc0b",
+    "merge_commit_sha": "736947a5c67507c1bb6ac95da0429694e874ad7e",
+    "source_url": "https://github.com/bearsunday/BEAR.Sunday/pull/164",
+    "merged_at": "2022-01-08T11:27:55Z",
+    "additions": 7,
+    "deletions": 2,
+    "changed_files": 2,
+    "license": "MIT",
+    "license_notice_path": "../LICENSES/BEAR.Sunday.MIT.txt",
+    "frozen_patch_path": "diff.patch",
+    "retrieved_at": "2026-05-04T05:30:00Z"
+  }
+}

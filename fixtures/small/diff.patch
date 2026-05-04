@@ -1,0 +1,37 @@
+diff --git a/composer.json b/composer.json
+index b73386b2..c316715b 100644
+--- a/composer.json
++++ b/composer.json
+@@ -23,11 +23,11 @@
+   "require": {
+     "php": "^7.4 || ^8.0",
+     "ext-json": "*",
+-    "bear/resource": "^1.15.4",
++    "bear/resource": "^1.16",
+     "doctrine/annotations": "^1.12",
+     "psr/log": "^1.1",
+     "ray/aop": "^2.10.1",
+-    "ray/di": "^2.11"
++    "ray/di": "^2.13"
+   },
+   "require-dev": {
+     "phpunit/phpunit": "^9.5.10",
+diff --git a/src/Extension/Application/AbstractApp.php b/src-deprecated/Extension/Application/AbstractApp.php
+similarity index 91%
+rename from src/Extension/Application/AbstractApp.php
+rename to src-deprecated/Extension/Application/AbstractApp.php
+index 4df63777..9176c418 100644
+--- a/src/Extension/Application/AbstractApp.php
++++ b/src-deprecated/Extension/Application/AbstractApp.php
+@@ -10,6 +10,11 @@
+ use BEAR\Sunday\Extension\Transfer\HttpCacheInterface;
+ use BEAR\Sunday\Extension\Transfer\TransferInterface;
+ 
++/**
++ * @deprecated Use AppInterface instead
++ *
++ * @see https://github.com/bearsunday/BEAR.Skeleton/blob/1.x/src/Module/App.php
++ */
+ class AbstractApp implements AppInterface
+ {
+     /** @var HttpCacheInterface */
