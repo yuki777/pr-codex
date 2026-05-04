@@ -102,6 +102,7 @@ Claude 側でメモリ上に以下を抽出する:
   - top-level `schema_version` が **`findings.v1`** であること
   - top-level `findings` フィールドが存在し、array であること
   - `schemas/findings.v1.json` に対する validation を通ること
+  - すべての finding で `id == fingerprint` が成り立つこと
   - `findings[]` のうち `severity == "must_fix"` の要素を `$must_fix` 配列として抽出する
 
 #### `findings.verified.json` から抽出するフィールド
@@ -121,7 +122,7 @@ Claude 側でメモリ上に以下を抽出する:
 
 #### primary path の必須ガード
 
-- `findings.verified.json` が空 / JSON parse 失敗 / top-level object でない / `findings[]` 不在または非配列 / `schemas/findings.v1.json` validation 失敗のいずれかなら、ユーザーに通知して **中断** する（fallback へは切り替えない）
+- `findings.verified.json` が空 / JSON parse 失敗 / top-level object でない / `findings[]` 不在または非配列 / `schemas/findings.v1.json` validation 失敗 / `id != fingerprint` のいずれかなら、ユーザーに通知して **中断** する（fallback へは切り替えない）
 - `severity == "must_fix"` の finding は、M1 では **`posting.post_policy == "inline"` かつ `posting.explanation_postable == true`** のものだけを自動投稿対象として扱う
 - `severity == "must_fix"` の finding で `location.side != "RIGHT"` が 1 件でもあれば、現 workflow の `pr.diff.ranges.txt` が head/new 側前提のため **中断** する（fallback へは切り替えない）
 - `must_fix` なのに `posting.post_policy` が `body_summary` / `local_only` / `suppress` のもの、または `posting.explanation_postable == false` のものが 1 件でもあれば、GitHub payload へ安全に変換できないため **中断** する（fallback へは切り替えない）
@@ -282,6 +283,7 @@ Codex は以下の観点で payload を確認する:
 7. `body` 中に `## 良い点` セクションがあれば、`review.md` の `## 良い点` 本文と一致するか
 8. `findings.verified.json` が存在する場合、そこにある Must Fix 件数と `review.md` の Must Fix 見出し件数が一致するか
 9. `findings.verified.json` が存在する場合、schema validation を通っており、Must Fix に `location.side != RIGHT` が混入していないか
+10. `findings.verified.json` が存在する場合、全 finding で `id == fingerprint` が成り立つか
 
 #### コマンド
 
@@ -320,6 +322,7 @@ codex --ask-for-approval never exec \
 6. payload.body 中の '## 良い点' セクションがある場合、review.md の '## 良い点' 本文と一致すること
 7. findings.verified.json が存在する場合、そこにある Must Fix 件数と review.md の Must Fix 見出し件数が一致すること
 8. findings.verified.json が存在する場合、schemas/findings.v1.json に適合していること、かつ Must Fix finding の `location.side` がすべて `RIGHT` であること
+9. findings.verified.json が存在する場合、全 finding で `id == fingerprint` が成り立つこと
 
 ## 出力フォーマット
 最初に各観点の検証結果を箇条書きで列挙し、最終行に必ず以下のいずれかを単独で出力してください:

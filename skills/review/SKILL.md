@@ -482,6 +482,7 @@ MCP について:
    - `title` は短い見出し、`problem` / `reason` / `suggestion` は review.md の 3 点組にそのまま再利用できる粒度で書く
    - `posting` は `{post_policy, explanation_postable, not_postable_reason?, audience?}`。M1 では GitHub へ投稿する Must Fix は原則 `post_policy=inline` かつ `explanation_postable=true` に揃え、投稿不可の懸念は `note` または `## 補足` 側へ逃がす
    - `fingerprint` の入力は README 記載どおり `path` / `category` / `normalized_title` / `primary_symbol` に固定し、`line` は含めない
+   - JSON Schema Draft 2020-12 だけでは `id == fingerprint` の sibling equality を標準機能で強制しづらいため、Step 4c の runtime gate として **全 finding で `id == fingerprint` を確認**する。1 件でもずれたら failed とし、completed にしてはならない
    - **`created_at` は finding 個別には書かない**。Issue #16 の最新 comment と参照 gist を優先し、canonical runtime artifact では top-level `generated_at` に集約する
 4. **破棄ルール (必須)**: `metadata.json.files[]` に含まれないパスへの指摘は canonical findings に採用しない。ファイルパスが `.md` の見出しやコードブロックで言及されていたら、そのパスが `files[]` 配列に属するかを必ず照合する。有益な一般的指摘で残す価値があるものだけ、`severity=note` + `posting.post_policy=local_only` もしくは `review.md` の `## 補足` 末尾に「参考（範囲外）」として残す。`must_fix` / `should_fix` には絶対に採用しない
 5. **コメント可能行範囲の自己検証 (必須)**: `must_fix` / `should_fix` として採用する各 finding について、`location.path` と `location.start_line` / `location.end_line` が `pr.diff.ranges.txt` の同一 `path` の範囲内に収まるかをメインコンテキストで検証する。単一行は `start_line`、複数行は `[start_line, end_line]` の両端が同じ hunk 範囲内にある場合だけ有効とする。範囲外なら、同一ファイルの最も近いコメント可能行へ `location` を差し替え、`problem` または `reason` に `(参考: 元の行 path:L<行番号>)` を補足する。同一ファイルにコメント可能行がない場合は `must_fix` / `should_fix` には採用せず、`note` / `local_only` または `## 補足` に退避する
@@ -493,12 +494,13 @@ MCP について:
    - `review.md` には最終判断のみを書く。レビュー実行者名 / モデル名 / どの生レビュー由来かを示す表現 / `両者一致` / `片方のみ` のような由来表現は書かない
 8. `review.md` は **`findings.verified.json` から派生生成** する。`must_fix` → `## 重大な問題 (Must Fix)`, `should_fix` → `## 改善提案 (Should Fix)`, `nit` → `## 軽微な指摘 (Nit)`, `note` や `post_policy=local_only/suppress` の項目 → `## 補足` に対応させる。`## 総評` と `## 良い点` は人間向け要約として記述してよいが、Must Fix / Should Fix の件数や内容が canonical findings と矛盾してはならない
 9. **schema validation gate (必須)**: メモリ上で構築した `findings.verified.json` を `schemas/findings.v1.json` に照らして検証する。必須フィールド欠落、型不一致、enum 不一致、`posting` / `evidence_level` 条件違反、`pr.number` 非整数など 1 件でも schema に反したら Step 5 の **failed 更新** へ遷移し、final artifact を書き出してはならない
-10. **件数一致 gate (必須)**: `findings.verified.json` の `severity=must_fix` 件数と、派生生成した `review.md` の `## 重大な問題 (Must Fix)` 見出し件数は **100% 一致** させる。1 件でもずれたら Step 5 の **failed 更新** へ遷移し、completed にしてはならない
-11. 上記 2 つの gate を通過した場合のみ、`findings.verified.json` / `review.md`（必要なら `validation-report.json` も）をまず `*.tmp` へ `Write` ツールで書き出す。その後 Bash の `mv` で final path へ反映する。途中で temp write または `mv` のいずれかが失敗した場合は Step 5 の **failed 更新** へ遷移し、completed にしてはならない
+10. **ID 整合 gate (必須)**: 全 finding で `id == fingerprint` を確認する。1 件でもずれたら Step 5 の **failed 更新** へ遷移し、final artifact を書き出してはならない
+11. **件数一致 gate (必須)**: `findings.verified.json` の `severity=must_fix` 件数と、派生生成した `review.md` の `## 重大な問題 (Must Fix)` 見出し件数は **100% 一致** させる。1 件でもずれたら Step 5 の **failed 更新** へ遷移し、completed にしてはならない
+12. 上記 3 つの gate を通過した場合のみ、`findings.verified.json` / `review.md`（必要なら `validation-report.json` も）をまず `*.tmp` へ `Write` ツールで書き出す。その後 Bash の `mv` で final path へ反映する。途中で temp write または `mv` のいずれかが失敗した場合は Step 5 の **failed 更新** へ遷移し、completed にしてはならない
 
 - いつ使うか: `claude-review.md` と `codex-review.md` の両方が揃った後
-- 判定条件: `findings.verified.json` が schema validation を通過し、`review.md` と Must Fix 件数が一致したうえで temp file → final path の反映まで完了する（`PR_DIFF_UNAVAILABLE` の場合は生成しない）
-- 次アクション: 書き出し後 Step 5 へ進む（`PR_DIFF_UNAVAILABLE` / schema validation failure / 件数不一致 / temp write failure / `mv` failure があった場合は Step 5 failed 分岐へ）
+- 判定条件: `findings.verified.json` が schema validation を通過し、全 finding で `id == fingerprint` が成り立ち、`review.md` と Must Fix 件数が一致したうえで temp file → final path の反映まで完了する（`PR_DIFF_UNAVAILABLE` の場合は生成しない）
+- 次アクション: 書き出し後 Step 5 へ進む（`PR_DIFF_UNAVAILABLE` / schema validation failure / `id != fingerprint` / 件数不一致 / temp write failure / `mv` failure があった場合は Step 5 failed 分岐へ）
 
 `Write` ツールは `~` やシェル変数（`$org` 等）を展開しない。`file_path` にはホームディレクトリを `$HOME` の実値（例: `/Users/adachi`）に展開済みの絶対パスを渡し、`$org` / `$repository` / `$pr_number` も実値に置換してから呼び出すこと。`findings.verified.json` の JSON 本文も、プレースホルダを残さず実値で埋める。temp file を使う場合も同様に絶対パスで指定する。
 
@@ -616,6 +618,7 @@ jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" --arg head
 - `codex exec` が非ゼロ終了 → `state=failed` で記録
 - **`claude-review.md` / `codex-review.md` のいずれかが `PR_DIFF_UNAVAILABLE` のみ → `state=failed` で記録し、`review.md` は生成しない**
 - **`findings.verified.json` が `schemas/findings.v1.json` validation に失敗 → `state=failed` で記録し、final artifact は反映しない**
+- **`findings.verified.json` のいずれかの finding で `id != fingerprint` → `state=failed` で記録し、final artifact は反映しない**
 - **`findings.verified.json` の Must Fix 件数と `review.md` の Must Fix 見出し件数が不一致 → `state=failed` で記録し、send へ進めない**
 - **`*.tmp` の Write または temp → final の `mv` が失敗 → `state=failed` で記録し、completed にしない**
 - 権限不足（404/403） → `state=failed` で記録し、その回は終了
