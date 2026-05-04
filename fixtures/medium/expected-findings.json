@@ -1,0 +1,83 @@
+{
+  "schema_version": "expected-findings.v1",
+  "fixture_id": "bear-sunday-pr143-medium",
+  "source": {
+    "repository": "bearsunday/BEAR.Sunday",
+    "pr_number": 143,
+    "pr_title": "Add RouterInterface type Globals and Server",
+    "base_sha": "4fc13c203f0884baaf5be32bba9b354fbd132613",
+    "head_sha": "d257c04dc9e70b92068995aa10020c135605f9b3",
+    "merge_commit_sha": "55c39de638bd80826619a679c758417ea4d0511e",
+    "source_url": "https://github.com/bearsunday/BEAR.Sunday/pull/143",
+    "license": "MIT",
+    "license_notice_path": "../LICENSES/BEAR.Sunday.MIT.txt",
+    "frozen_patch_path": "diff.patch",
+    "retrieved_at": "2026-05-04T05:30:00Z"
+  },
+  "pr_intent": "type_safety_refactor",
+  "scoring_gate": {
+    "acceptable_pass_rate_min": 0.8,
+    "exact_pass_rate_min": 0.5,
+    "false_positive_rate_max": 0.1
+  },
+  "expected_findings": [
+    {
+      "id": "removed-assert-undefined-index-risk",
+      "expected_outcome": "known_bug",
+      "title": "Removed assert() may allow undefined REQUEST_METHOD / REQUEST_URI to surface at runtime",
+      "category": "bug",
+      "severity": "should_fix",
+      "acceptable_severities": ["should_fix", "must_fix"],
+      "strictness_profile": "should_fix_lax",
+      "expected_axes": {
+        "real": "yes",
+        "triggerable": "unknown",
+        "impactful": "yes",
+        "general": "no"
+      },
+      "acceptable_overrides": {
+        "triggerable": ["yes", "unknown"],
+        "general": ["no", "unknown"]
+      },
+      "minimum_evidence_level": "trigger_path_identified",
+      "location_match": {
+        "path": "src/Provide/Router/WebRouter.php"
+      },
+      "should_be_caught_by": ["four_axes_gate", "evidence_ladder"],
+      "oracle_notes": "REAL/IMPACTFUL are yes; TRIGGERABLE depends on call-site audit (acceptable as unknown)."
+    },
+    {
+      "id": "psalm-type-alias-no-runtime-validation",
+      "expected_outcome": "acceptable_risk",
+      "title": "Psalm type alias for Server has no corresponding runtime validation",
+      "category": "design",
+      "acceptable_severities": ["nit", "note"],
+      "should_be_caught_by": ["four_axes_gate"],
+      "expected_axes": {
+        "real": "yes",
+        "triggerable": "no",
+        "impactful": "unknown",
+        "general": "no"
+      },
+      "strictness_profile": "should_fix_lax",
+      "minimum_evidence_level": "suspicion",
+      "oracle_notes": "Acceptable as a note-level observation; must NOT be promoted to should_fix or above."
+    },
+    {
+      "id": "php74-compat-break-trap",
+      "expected_outcome": "known_false_positive_trap",
+      "title": "Reviewer claims PHP 7.4 compatibility is broken",
+      "category": "consistency",
+      "out_of_scope_reason": "This PR keeps PHP 7.4 support; only adds Psalm type aliases.",
+      "should_be_caught_by": ["four_axes_gate"],
+      "expected_axes": {
+        "real": "no",
+        "triggerable": "no",
+        "impactful": "no",
+        "general": "yes"
+      },
+      "strictness_profile": "noise_filter",
+      "minimum_evidence_level": "suspicion"
+    }
+  ]
+}

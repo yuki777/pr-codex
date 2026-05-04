@@ -1,0 +1,117 @@
+{
+  "schema_version": "expected-findings.v1",
+  "fixture_id": "bear-sunday-pr171-large",
+  "source": {
+    "repository": "bearsunday/BEAR.Sunday",
+    "pr_number": 171,
+    "pr_title": "Drop PHP 7.4 support and optimized for PHP8",
+    "base_sha": "839b7d96f0b0afc048f487d7491e1139dd246f81",
+    "head_sha": "e2d7bf9d7010c4519f069b4a5a6d67113abe84a1",
+    "merge_commit_sha": "0e2595448ba34e3de77571b35b3faeb4ddba7eec",
+    "source_url": "https://github.com/bearsunday/BEAR.Sunday/pull/171",
+    "license": "MIT",
+    "license_notice_path": "../LICENSES/BEAR.Sunday.MIT.txt",
+    "frozen_patch_path": "diff.patch",
+    "retrieved_at": "2026-05-04T05:30:00Z"
+  },
+  "pr_intent": "php8_migration",
+  "scoring_gate": {
+    "acceptable_pass_rate_min": 0.7,
+    "false_positive_rate_max": 0.15
+  },
+  "expected_findings": [
+    {
+      "id": "psalm-xml-phpversion-mismatch",
+      "expected_outcome": "known_bug",
+      "title": "psalm.xml phpVersion still 7.4 while composer.json requires PHP ^8.0",
+      "category": "consistency",
+      "severity": "should_fix",
+      "acceptable_severities": ["should_fix", "must_fix"],
+      "strictness_profile": "should_fix_lax",
+      "expected_axes": {
+        "real": "yes",
+        "triggerable": "yes",
+        "impactful": "yes",
+        "general": "no"
+      },
+      "acceptable_overrides": {
+        "general": ["no", "unknown"]
+      },
+      "minimum_evidence_level": "corroborated",
+      "location_match": {
+        "path": "psalm.xml"
+      },
+      "should_be_caught_by": ["four_axes_gate", "evidence_ladder", "phpstan", "psalm"],
+      "oracle_notes": "Configuration drift: composer requires PHP 8 but Psalm targets 7.4. Must be caught."
+    },
+    {
+      "id": "rector-duplicate-binding-rector",
+      "expected_outcome": "known_bug",
+      "title": "rector.php registers AnnotationBindingRector::class twice",
+      "category": "code_quality",
+      "severity": "nit",
+      "acceptable_severities": ["nit", "note", "should_fix"],
+      "strictness_profile": "should_fix_lax",
+      "expected_axes": {
+        "real": "yes",
+        "triggerable": "no",
+        "impactful": "no",
+        "general": "no"
+      },
+      "minimum_evidence_level": "suspicion",
+      "location_match": {
+        "path": "rector.php"
+      },
+      "should_be_caught_by": ["four_axes_gate"],
+      "oracle_notes": "Easy nit-level catch; should not be promoted to must_fix."
+    },
+    {
+      "id": "php74-compat-break-trap",
+      "expected_outcome": "known_false_positive_trap",
+      "title": "Reviewer claims PHP 7.4 compatibility is broken",
+      "category": "consistency",
+      "out_of_scope_reason": "PR intentionally drops PHP 7.4 support",
+      "should_be_caught_by": ["four_axes_gate"],
+      "expected_axes": {
+        "real": "no",
+        "triggerable": "no",
+        "impactful": "no",
+        "general": "yes"
+      },
+      "strictness_profile": "noise_filter",
+      "minimum_evidence_level": "suspicion"
+    },
+    {
+      "id": "constructor-property-promotion-trap",
+      "expected_outcome": "known_false_positive_trap",
+      "title": "Reviewer flags constructor property promotion as PHP 8.0+ only",
+      "category": "consistency",
+      "out_of_scope_reason": "PR target is PHP 8.0+",
+      "should_be_caught_by": ["four_axes_gate"],
+      "expected_axes": {
+        "real": "no",
+        "triggerable": "no",
+        "impactful": "no",
+        "general": "yes"
+      },
+      "strictness_profile": "noise_filter",
+      "minimum_evidence_level": "suspicion"
+    },
+    {
+      "id": "str-contains-polyfill-trap",
+      "expected_outcome": "known_false_positive_trap",
+      "title": "Reviewer claims str_contains() needs a polyfill",
+      "category": "consistency",
+      "out_of_scope_reason": "PR target is PHP 8.0+ which has str_contains() built-in",
+      "should_be_caught_by": ["four_axes_gate"],
+      "expected_axes": {
+        "real": "no",
+        "triggerable": "no",
+        "impactful": "no",
+        "general": "yes"
+      },
+      "strictness_profile": "noise_filter",
+      "minimum_evidence_level": "suspicion"
+    }
+  ]
+}

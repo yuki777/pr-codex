@@ -1,0 +1,608 @@
+diff --git a/.github/workflows/continuous-integration.yml b/.github/workflows/continuous-integration.yml
+index 7340766d..0a2a79b3 100644
+--- a/.github/workflows/continuous-integration.yml
++++ b/.github/workflows/continuous-integration.yml
+@@ -9,6 +9,6 @@ jobs:
+   ci:
+     uses: ray-di/.github/.github/workflows/continuous-integration.yml@next_stable
+     with:
+-      old_stable: '["7.4", "8.0"]'
++      old_stable: '["8.0"]'
+       current_stable: 8.1
+       next_stable: 8.2
+diff --git a/composer-require-checker.json b/composer-require-checker.json
+index bdfdb709..5dcd9b75 100644
+--- a/composer-require-checker.json
++++ b/composer-require-checker.json
+@@ -3,7 +3,8 @@
+     "null", "true", "false",
+     "static", "self", "parent",
+     "array", "string", "int", "float", "bool", "iterable", "callable", "void", "object", "mixed",
+-    "Doctrine\\Common\\Cache\\ArrayCache", "Doctrine\\Common\\Cache\\Cache"
++    "Doctrine\\Common\\Cache\\ArrayCache", "Doctrine\\Common\\Cache\\Cache",
++    "json_decode", "JSON_ERROR_NONE", "json_last_error", "json_last_error_msg"
+   ],
+   "php-core-extensions" : [
+     "Core",
+diff --git a/composer.json b/composer.json
+index 956fadfa..7b52f7b7 100644
+--- a/composer.json
++++ b/composer.json
+@@ -21,8 +21,7 @@
+         }
+     ],
+     "require": {
+-        "php": "^7.4 || ^8.0",
+-        "ext-json": "*",
++        "php": "^8.0",
+         "bear/resource": "^1.16",
+         "doctrine/annotations": "^1.12",
+         "psr/log": "^1.1 || ^2.0 || ^3.0",
+@@ -30,12 +29,14 @@
+         "ray/di": "^2.13"
+     },
+     "require-dev": {
+-        "phpunit/phpunit": "^9.5.10",
+-        "doctrine/coding-standard": "^9.0",
++        "doctrine/coding-standard": "^10.0",
+         "phpmd/phpmd": "^2.9",
+         "phpmetrics/phpmetrics": "^2.7",
+         "phpstan/phpstan": "^1.3",
++        "phpunit/phpunit": "^9.5.10",
+         "psalm/plugin-phpunit": "^0.13",
++        "ray/rector-ray": "^1.0",
++        "rector/rector": "^0.14.8",
+         "squizlabs/php_codesniffer": "^3.5",
+         "vimeo/psalm": "^4.2"
+     },
+@@ -85,7 +86,7 @@
+             "rm -rf tests/tmp/*.php"
+         ],
+         "sa": [
+-            "./vendor/binpsalm --monochrome --show-info=true",
++            "./vendor/bin/psalm --monochrome --show-info=true",
+             "./vendor/bin/phpstan analyse --no-ansi --no-progress -c phpstan.neon"
+         ],
+         "metrics": "./vendor/bin/phpmetrics --report-html=build/metrics --exclude=Exception --junit=build/junit.xml src",
+diff --git a/phpcs.xml b/phpcs.xml
+index 8a5e466e..1d625999 100755
+--- a/phpcs.xml
++++ b/phpcs.xml
+@@ -1,15 +1,15 @@
+ <?xml version="1.0"?>
+ <ruleset
+-    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" name="bearcs"
+-    xsi:noNamespaceSchemaLocation="https://raw.githubusercontent.com/squizlabs/PHP_CodeSniffer/master/phpcs.xsd">
++        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
++        xsi:noNamespaceSchemaLocation="vendor/squizlabs/php_codesniffer/phpcs.xsd">
+ 
+     <arg name="basepath" value="."/>
+     <arg name="extensions" value="php"/>
+     <arg name="parallel" value="80"/>
+     <arg name="cache" value=".phpcs-cache"/>
+ 
+-    <!-- Compatibility with PHP 7.4.0 -->
+-    <config name="php_version" value="70400"/>
++    <!-- Compatibility with PHP 8.0 -->
++    <config name="php_version" value="80000"/>
+ 
+     <!-- Ignore warnings, show progress of the run and show sniff names -->
+     <arg value="nps"/>
+@@ -18,15 +18,24 @@
+     <file>src</file>
+     <file>tests</file>
+     <exclude-pattern>*/tests/tmp/*</exclude-pattern>
+-    <exclude-pattern>*/src/Annotation/*</exclude-pattern>
+-    <exclude-pattern>*/src/Inject/*</exclude-pattern>
+ 
+     <!-- PSR12 Coding Standard -->
+     <rule ref="PSR12"/>
+ 
++    <!-- Exclude NativeTypeHintrule from interface and abstract class -->
++    <rule ref="SlevomatCodingStandard.TypeHints.ParameterTypeHint.MissingNativeTypeHint">
++        <exclude-pattern>*/src/*Interface.php</exclude-pattern>
++        <exclude-pattern>*/src/Abstract*.php</exclude-pattern>
++        <exclude-pattern>*/src/ResourceObject.php</exclude-pattern>
++    </rule>
++    <rule ref="SlevomatCodingStandard.TypeHints.ReturnTypeHint.MissingNativeTypeHint">
++        <exclude-pattern>*/src/*Interface.php</exclude-pattern>
++        <exclude-pattern>*/src/Abstract*.php</exclude-pattern>
++        <exclude-pattern>*/src/ResourceObject.php</exclude-pattern>
++    </rule>
+     <!-- Doctrine Coding Standard -->
+     <rule ref="Doctrine">
+-    <!-- Inapplicable for this project -->
++        <!-- Inapplicable for this project -->
+         <!-- Base -->
+         <exclude name="Generic.Formatting.MultipleStatementAlignment.NotSame"/>
+         <exclude name="Squiz.Strings.DoubleQuoteUsage.ContainsVar"/>
+@@ -35,20 +44,22 @@
+         <exclude name="SlevomatCodingStandard.Classes.SuperfluousInterfaceNaming.SuperfluousSuffix"/>
+         <exclude name="SlevomatCodingStandard.Commenting.InlineDocCommentDeclaration.MissingVariable"/>
+         <exclude name="SlevomatCodingStandard.Commenting.UselessInheritDocComment.UselessInheritDocComment"/>
+-        <exclude name="SlevomatCodingStandard.TypeHints.ParameterTypeHint.MissingNativeTypeHint"/>
+-        <exclude name="SlevomatCodingStandard.TypeHints.ReturnTypeHint.MissingNativeTypeHint"/>
+-        <exclude name="SlevomatCodingStandard.TypeHints.ParameterTypeHint.MissingTraversableTypeHintSpecification"/>
++        <exclude name="Squiz.Commenting.FunctionComment.InvalidNoReturn"/>
+         <!-- /Base -->
+         <!-- Option -->
+-        <exclude name="SlevomatCodingStandard.ControlStructures.EarlyExit.EarlyExitNotUsed"/>
+-        <!-- PHP8 attribute -->
+-        <exclude name="Squiz.WhiteSpace.FunctionSpacing.Before"/>
++        <!--        <exclude name="SlevomatCodingStandard.ControlStructures.EarlyExit.EarlyExitNotUsed"/>-->
++        <exclude name="SlevomatCodingStandard.PHP.RequireExplicitAssertion.RequiredExplicitAssertion"/>
+         <!-- /Option -->
+         <!-- Exclude Fake files form Doctrine CS -->
+         <exclude-pattern>*/tests/Fake/*</exclude-pattern>
+     </rule>
+ 
+     <!-- Additional Rules -->
++    <rule ref="SlevomatCodingStandard.Namespaces.UnusedUses">
++        <properties>
++            <property name="searchAnnotations" value="true"/>
++        </properties>
++    </rule>
+     <rule ref="SlevomatCodingStandard.Commenting.DocCommentSpacing">
+         <properties>
+             <property name="annotationsGroups" type="array">
+@@ -68,11 +79,15 @@
+             <property name="maxLinesCountBeforeWithoutComment" value="0"/>
+         </properties>
+     </rule>
++    <rule ref="SlevomatCodingStandard.TypeHints.DeclareStrictTypes.DeclareStrictTypesMissing">
++        <exclude-pattern>src/ClassParam.php</exclude-pattern>
++    </rule>
+     <rule ref="SlevomatCodingStandard.Namespaces.UnusedUses">
+         <properties>
+             <property name="searchAnnotations" value="true"/>
+         </properties>
+     </rule>
++
+     <exclude-pattern>*/Fake/*</exclude-pattern>
+     <exclude-pattern>*/tmp/*</exclude-pattern>
+ </ruleset>
+diff --git a/psalm.xml b/psalm.xml
+index daa2b9bb..ed07bd7a 100644
+--- a/psalm.xml
++++ b/psalm.xml
+@@ -4,7 +4,7 @@
+     phpVersion="7.4"
+     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+     xmlns="https://getpsalm.org/schema/config"
+-    xsi:schemaLocation="https://getpsalm.org/schema/config vendor-bin/tools/vendor/vimeo/psalm/config.xsd"
++    xsi:schemaLocation="https://getpsalm.org/schema/config vendor/vimeo/psalm/config.xsd"
+     autoloader="demo/autoload.php"
+     findUnusedPsalmSuppress="true"
+ >
+diff --git a/rector.php b/rector.php
+new file mode 100644
+index 00000000..2489200c
+--- /dev/null
++++ b/rector.php
+@@ -0,0 +1,29 @@
++<?php
++
++declare(strict_types=1);
++
++use Rector\CodeQuality\Rector\Class_\InlineConstructorDefaultToPropertyRector;
++use Rector\Config\RectorConfig;
++use Rector\Ray\AnnotationBinding\Rector\ClassMethod\AnnotationBindingRector;
++use Rector\Set\ValueObject\LevelSetList;
++
++return static function (RectorConfig $rectorConfig): void {
++    $rectorConfig->paths([
++        __DIR__ . '/src',
++        __DIR__ . '/src-deprecated',
++        __DIR__ . '/tests',
++    ]);
++    $rectorConfig->skip([
++        __DIR__ . '/src/*Interface.php',
++        __DIR__ . '/tests/Provide/Error/ThrowableHandlerTest.php'
++    ]);
++
++    // register a single rule
++    $rectorConfig->rule(AnnotationBindingRector::class);
++    $rectorConfig->rule(AnnotationBindingRector::class);
++
++    // define sets of rules
++        $rectorConfig->sets([
++            LevelSetList::UP_TO_PHP_80
++        ]);
++};
+diff --git a/src-deprecated/Extension/Application/AbstractApp.php b/src-deprecated/Extension/Application/AbstractApp.php
+index 9176c418..8abdc055 100644
+--- a/src-deprecated/Extension/Application/AbstractApp.php
++++ b/src-deprecated/Extension/Application/AbstractApp.php
+@@ -17,21 +17,6 @@
+  */
+ class AbstractApp implements AppInterface
+ {
+-    /** @var HttpCacheInterface */
+-    public $httpCache;
+-
+-    /** @var RouterInterface */
+-    public $router;
+-
+-    /** @var TransferInterface */
+-    public $responder;
+-
+-    /** @var ResourceInterface */
+-    public $resource;
+-
+-    /** @var ErrorInterface */
+-    public $error;
+-
+     /**
+      * @param HttpCacheInterface $httpCache HTTP Cache 304 responder
+      * @param RouterInterface    $router    Resource router
+@@ -40,16 +25,11 @@ class AbstractApp implements AppInterface
+      * @param ErrorInterface     $error     Error handler
+      */
+     public function __construct(
+-        HttpCacheInterface $httpCache,
+-        RouterInterface $router,
+-        TransferInterface $responder,
+-        ResourceInterface $resource,
+-        ErrorInterface $error
+-    ) {
+-        $this->httpCache = $httpCache;
+-        $this->router = $router;
+-        $this->responder = $responder;
+-        $this->resource = $resource;
+-        $this->error = $error;
++        public HttpCacheInterface $httpCache,
++        public RouterInterface $router,
++        public TransferInterface $responder,
++        public ResourceInterface $resource,
++        public ErrorInterface $error
++    ){
+     }
+ }
+diff --git a/src/Annotation/DefaultSchemeHost.php b/src/Annotation/DefaultSchemeHost.php
+index 90963e82..8cb12fa5 100644
+--- a/src/Annotation/DefaultSchemeHost.php
++++ b/src/Annotation/DefaultSchemeHost.php
+@@ -17,11 +17,8 @@
+ #[Attribute(Attribute::TARGET_METHOD | Attribute::TARGET_PARAMETER | Attribute::TARGET_PROPERTY), Qualifier]
+ final class DefaultSchemeHost
+ {
+-    /** @var ?string */
+-    public $value;
+-
+-    public function __construct(?string $value = null)
+-    {
+-        $this->value = $value;
++    public function __construct(
++        public string|null $value = null,
++    ) {
+     }
+ }
+diff --git a/src/Extension/Router/RouterMatch.php b/src/Extension/Router/RouterMatch.php
+index 382c8db7..dd2e6ac6 100644
+--- a/src/Extension/Router/RouterMatch.php
++++ b/src/Extension/Router/RouterMatch.php
+@@ -4,39 +4,18 @@
+ 
+ namespace BEAR\Sunday\Extension\Router;
+ 
++use Stringable;
++
+ use function http_build_query;
+ 
+-class RouterMatch
++class RouterMatch implements Stringable
+ {
+-    /**
+-     * Request method
+-     *
+-     * @var string
+-     */
+-    public $method;
+-
+-    /**
+-     * Request path
+-     *
+-     * @var string
+-     */
+-    public $path;
+-
+-    /**
+-     * Request query
+-     *
+-     * @var array<string, mixed>
+-     */
+-    public $query = [];
+-
+-    /**
+-     * @param array<string, mixed> $query
+-     */
+-    public function __construct(string $method = '', string $path = '', array $query = [])
+-    {
+-        $this->method = $method;
+-        $this->path = $path;
+-        $this->query = $query;
++    /** @param array<string, mixed> $query */
++    public function __construct(
++        public string $method = '',
++        public string $path = '',
++        public array $query = [],
++    ) {
+     }
+ 
+     public function __toString(): string
+diff --git a/src/Module/Constant/NamedModule.php b/src/Module/Constant/NamedModule.php
+index ac3b99f9..a41bd80b 100644
+--- a/src/Module/Constant/NamedModule.php
++++ b/src/Module/Constant/NamedModule.php
+@@ -8,15 +8,10 @@
+ 
+ class NamedModule extends AbstractModule
+ {
+-    /** @var array<string, string> */
+-    private array $names;
+-
+-    /**
+-     * @param array<string, string> $names
+-     */
+-    public function __construct(array $names)
+-    {
+-        $this->names = $names;
++    /** @param array<string, string> $names */
++    public function __construct(
++        private array $names,
++    ) {
+         parent::__construct();
+     }
+ 
+diff --git a/src/Provide/Error/ThrowableHandler.php b/src/Provide/Error/ThrowableHandler.php
+index f0a3f13f..41d7b8ec 100644
+--- a/src/Provide/Error/ThrowableHandler.php
++++ b/src/Provide/Error/ThrowableHandler.php
+@@ -18,11 +18,9 @@
+ 
+ final class ThrowableHandler implements ThrowableHandlerInterface
+ {
+-    private ErrorInterface $error;
+-
+-    public function __construct(ErrorInterface $error)
+-    {
+-        $this->error = $error;
++    public function __construct(
++        private ErrorInterface $error,
++    ) {
+     }
+ 
+     public function handle(Throwable $e, Request $request): ThrowableHandlerInterface
+diff --git a/src/Provide/Error/VndError.php b/src/Provide/Error/VndError.php
+index ffdc5403..d8d3a433 100644
+--- a/src/Provide/Error/VndError.php
++++ b/src/Provide/Error/VndError.php
+@@ -30,12 +30,11 @@ final class VndError implements ErrorInterface
+ 
+     /** @var array{message: string} */
+     public $body = ['message' => ''];
+-    private TransferInterface $transfer;
+     private ErrorPage $errorPage;
+ 
+-    public function __construct(TransferInterface $transfer)
+-    {
+-        $this->transfer = $transfer;
++    public function __construct(
++        private TransferInterface $transfer,
++    ) {
+         $this->errorPage = new ErrorPage();
+     }
+ 
+diff --git a/src/Provide/Router/WebRouter.php b/src/Provide/Router/WebRouter.php
+index be39df09..aabc45eb 100644
+--- a/src/Provide/Router/WebRouter.php
++++ b/src/Provide/Router/WebRouter.php
+@@ -16,7 +16,7 @@
+ use function parse_str;
+ use function parse_url;
+ use function rtrim;
+-use function strpos;
++use function str_contains;
+ use function strtolower;
+ 
+ use const JSON_ERROR_NONE;
+@@ -28,16 +28,9 @@
+  */
+ final class WebRouter implements RouterInterface
+ {
+-    /** @readonly */
+-    private string $schemeHost;
+-
+-    /**
+-     * @DefaultSchemeHost
+-     */
+-    #[DefaultSchemeHost]
+-    public function __construct(string $schemeHost)
+-    {
+-        $this->schemeHost = $schemeHost;
++    public function __construct(
++        #[DefaultSchemeHost] private string $schemeHost,
++    ) {
+     }
+ 
+     /**
+@@ -53,7 +46,7 @@ public function match(array $globals, array $server)
+         return new RouterMatch(
+             $method,
+             $this->schemeHost . parse_url($server['REQUEST_URI'], PHP_URL_PATH),
+-            $this->getQuery($method, $globals, $server)
++            $this->getQuery($method, $globals, $server),
+         );
+     }
+ 
+@@ -84,7 +77,7 @@ private function getQuery(string $method, array $globals, array $server): array
+         }
+ 
+         $contentType = $server['CONTENT_TYPE'] ?? $server['HTTP_CONTENT_TYPE'] ?? '';
+-        $isFormUrlEncoded = strpos($contentType, 'application/x-www-form-urlencoded') !== false;
++        $isFormUrlEncoded = str_contains($contentType, 'application/x-www-form-urlencoded');
+         $rawBody = $server['HTTP_RAW_POST_DATA'] ?? rtrim((string) file_get_contents('php://input'));
+         if ($isFormUrlEncoded) {
+             parse_str(rtrim($rawBody), $put);
+@@ -93,7 +86,7 @@ private function getQuery(string $method, array $globals, array $server): array
+             return $put;
+         }
+ 
+-        $isApplicationJson = strpos($contentType, 'application/json') !== false;
++        $isApplicationJson = str_contains($contentType, 'application/json');
+         if (! $isApplicationJson) {
+             return [];
+         }
+diff --git a/src/Provide/Transfer/ConditionalResponse.php b/src/Provide/Transfer/ConditionalResponse.php
+index f3b27c90..27f2c94f 100644
+--- a/src/Provide/Transfer/ConditionalResponse.php
++++ b/src/Provide/Transfer/ConditionalResponse.php
+@@ -10,9 +10,7 @@
+ 
+ final class ConditionalResponse implements ConditionalResponseInterface
+ {
+-    /**
+-     * @see https://tools.ietf.org/html/rfc7232#section-4.1
+-     */
++    /** @see https://tools.ietf.org/html/rfc7232#section-4.1 */
+     private const HEADER_IN_304 = [
+         'Cache-Control',
+         'Content-Location',
+diff --git a/src/Provide/Transfer/HttpResponder.php b/src/Provide/Transfer/HttpResponder.php
+index 7fbd3899..d61edf8b 100644
+--- a/src/Provide/Transfer/HttpResponder.php
++++ b/src/Provide/Transfer/HttpResponder.php
+@@ -9,13 +9,10 @@
+ 
+ class HttpResponder implements TransferInterface
+ {
+-    private HeaderInterface $header;
+-    private ConditionalResponseInterface $condResponse;
+-
+-    public function __construct(HeaderInterface $header, ConditionalResponseInterface $condResponse)
+-    {
+-        $this->header = $header;
+-        $this->condResponse = $condResponse;
++    public function __construct(
++        private HeaderInterface $header,
++        private ConditionalResponseInterface $condResponse,
++    ) {
+     }
+ 
+     /**
+@@ -38,9 +35,7 @@ public function __invoke(ResourceObject $ro, array $server): void
+         echo $output->view;
+     }
+ 
+-    /**
+-     * @param array<string, string> $server
+-     */
++    /** @param array<string, string> $server */
+     private function getOutput(ResourceObject $ro, array $server): Output
+     {
+         $ro->toString(); // render and set headers
+diff --git a/src/Provide/Transfer/Output.php b/src/Provide/Transfer/Output.php
+index e37b03a9..4492d06b 100644
+--- a/src/Provide/Transfer/Output.php
++++ b/src/Provide/Transfer/Output.php
+@@ -8,9 +8,7 @@
+ 
+ final class Output extends ResourceObject
+ {
+-    /**
+-     * @param array<string, string> $headers
+-     */
++    /** @param array<string, string> $headers */
+     public function __construct(int $code, array $headers, string $view)
+     {
+         $this->code = $code;
+diff --git a/tests/Fake/Apps/FakeVendor/HelloWorldX/Module/SchemeCollectionProvider.php b/tests/Fake/Apps/FakeVendor/HelloWorldX/Module/SchemeCollectionProvider.php
+index 27c46889..5e045476 100644
+--- a/tests/Fake/Apps/FakeVendor/HelloWorldX/Module/SchemeCollectionProvider.php
++++ b/tests/Fake/Apps/FakeVendor/HelloWorldX/Module/SchemeCollectionProvider.php
+@@ -13,22 +13,12 @@
+ class SchemeCollectionProvider implements ProviderInterface
+ {
+     /**
+-     * @var string
++     * @param string $appName
+      */
+-    protected $appName;
+-
+-    /**
+-     * @var InjectorInterface
+-     */
+-    protected $injector;
+-
+-    /**
+-     * @Named("appName=app_name")
+-     */
+-    public function __construct(InjectorInterface $injector, $appName)
+-    {
+-        $this->injector = $injector;
+-        $this->appName = $appName;
++    public function __construct(
++        protected InjectorInterface $injector,
++        #[Named('app_name')] protected $appName
++    ){
+     }
+ 
+     /**
+@@ -46,10 +36,8 @@ public function get()
+     }
+ 
+     /**
+-     * @param SchemeCollection  $schemeCollection
+      * @param string            $host
+      * @param string            $appName
+-     * @param InjectorInterface $injector
+      */
+     private function addScheme(SchemeCollection $schemeCollection, $host, $appName, InjectorInterface $injector): void
+     {
+diff --git a/tests/Fake/Apps/FakeVendor/HelloWorldX/Resource/App/Greeting.php b/tests/Fake/Apps/FakeVendor/HelloWorldX/Resource/App/Greeting.php
+index 55a504ab..5d543805 100644
+--- a/tests/Fake/Apps/FakeVendor/HelloWorldX/Resource/App/Greeting.php
++++ b/tests/Fake/Apps/FakeVendor/HelloWorldX/Resource/App/Greeting.php
+@@ -8,11 +8,9 @@
+ 
+ class Greeting extends ResourceObject
+ {
+-    private $resource;
+-
+-    public function __construct(ResourceInterface $resource)
+-    {
+-        $this->resource = $resource;
++    public function __construct(
++        private ResourceInterface $resource
++    ){
+     }
+ 
+     /**
+diff --git a/tests/Module/SundayModuleTest.php b/tests/Module/SundayModuleTest.php
+index 74e2ccf9..0321ddaf 100644
+--- a/tests/Module/SundayModuleTest.php
++++ b/tests/Module/SundayModuleTest.php
+@@ -24,7 +24,7 @@ class SundayModuleTest extends TestCase
+     protected function setUp(): void
+     {
+         $this->injector = new Injector(new SundayModule(new class extends AbstractModule {
+-            protected function configure()
++            protected function configure(): void
+             {
+                 $this->bind()->annotatedWith(AppName::class)->toInstance('BEAR\Sunday');
+                 $this->bind(AppInterface::class)->to(App::class);
+diff --git a/tests/Provide/Transfer/NullTransferTest.php b/tests/Provide/Transfer/NullTransferTest.php
+index 6b0177fa..01dd1e80 100644
+--- a/tests/Provide/Transfer/NullTransferTest.php
++++ b/tests/Provide/Transfer/NullTransferTest.php
+@@ -10,9 +10,7 @@
+ 
+ class NullTransferTest extends TestCase
+ {
+-    /**
+-     * @doesNotPerformAssertions
+-     */
++    /** @doesNotPerformAssertions */
+     public function testNullError(): void
+     {
+         (new NullTransfer())(new NullResourceObject(), []);
