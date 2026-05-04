@@ -351,12 +351,12 @@ jq -n --slurpfile metadata ~/claude-loop-pr-codex/$org-$repository-$pr_number/me
   def hunks: [diff_lines[] | select(startswith("@@"))] | length;
   def risk_tags:
     [
-      if any(files[]; test("(^|/)(auth|oauth|permission|policy|guard|acl|session|csrf|jwt|token|secret|password|security|middleware)(/|$|\.)"; "i")) then "security" else empty end,
-      if any(files[]; test("(^|/)(migrations?|schema|ddl|sql|seed|database|db|prisma|alembic|flyway|liquibase)(/|$|\.)"; "i")) then "data_migration" else empty end,
-      if any(files[]; test("(^|/)(package\.json|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb|composer\.json|composer\.lock|Gemfile|Gemfile\.lock|go\.mod|go\.sum|Cargo\.toml|Cargo\.lock|requirements\.txt|poetry\.lock|pyproject\.toml)$"; "i")) then "dependency" else empty end,
-      if any(files[]; test("(^|/)(\.github/|Dockerfile$|docker-compose|helm/|k8s/|terraform/|deploy/|ops/)"; "i")) then "infra" else empty end,
-      if any(files[]; test("(^|/)(tests?|spec)(/|$)|(^|/).*(Test|Spec)\.[^/]+$"; "i")) then "test_touch" else empty end,
-      if any(files[]; test("(openapi|swagger|schema\.graphql|\.proto$)"; "i")) then "api_contract" else empty end
+      if any(files[]; test("(^|/)(auth|oauth|permission|policy|guard|acl|session|csrf|jwt|token|secret|password|security|middleware)(/|$|[.])"; "i")) then "security" else empty end,
+      if any(files[]; test("(^|/)(migrations?|schema|ddl|sql|seed|database|db|prisma|alembic|flyway|liquibase)(/|$|[.])"; "i")) then "data_migration" else empty end,
+      if any(files[]; test("(^|/)(package[.]json|package-lock[.]json|pnpm-lock[.]yaml|yarn[.]lock|bun[.]lockb|composer[.]json|composer[.]lock|Gemfile|Gemfile[.]lock|go[.]mod|go[.]sum|Cargo[.]toml|Cargo[.]lock|requirements[.]txt|poetry[.]lock|pyproject[.]toml)$"; "i")) then "dependency" else empty end,
+      if any(files[]; test("(^|/)([.]github/|Dockerfile$|docker-compose|helm/|k8s/|terraform/|deploy/|ops/)"; "i")) then "infra" else empty end,
+      if any(files[]; test("(^|/)(tests?|spec)(/|$)|(^|/).*(Test|Spec)[.][^/]+$"; "i")) then "test_touch" else empty end,
+      if any(files[]; test("(openapi|swagger|schema[.]graphql|[.]proto$)"; "i")) then "api_contract" else empty end
     ];
   def files_changed: (files | length);
   def total_lines: (lines_added + lines_removed);
@@ -396,7 +396,7 @@ jq -n --slurpfile metadata ~/claude-loop-pr-codex/$org-$repository-$pr_number/me
     actual_duration_ms: null,
     actual_tokens: null
   }
-' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/run-plan.json
+' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/run-plan.json && test -s ~/claude-loop-pr-codex/$org-$repository-$pr_number/run-plan.json
 ```
 
 ### Step 4 前処理: レビュー観点の読み込み
@@ -412,11 +412,13 @@ Step 4a / 4b 共通のレビュー観点本文（MCP追加情報収集 / 7観点
 `{RUN_PLAN_GUIDANCE}` の組み立て規則:
 
 - 先頭に `depth_actual` / `recommended_mode` / `risk_tags` / `estimated_timeout_ms` を箇条書きで明記する
+- `risk_tags` / `selected_hunters` は **生の JSON を埋め込まず**、`, ` 区切りの平文（空なら `none`）へ整形してから使う
 - `recommended_mode == "standard"` の場合: 既存どおり 7観点をフルに使う
 - `recommended_mode == "focused"` の場合: **security / bug / test** を最優先とし、スタイル / リネーム / 軽微な改善は correctness に直結するものだけ残す
 - `recommended_mode == "skip"` の場合: `/loop` では skip 推奨水準だが、**M1 の既定は skip せず focused fallback** と明記する。実レビューでも `focused` と同じ重点に絞り、確証の弱い指摘を増やさない
 - `depth_actual == "standard"` の場合: 変更行周辺と直接の呼び出し元 / 呼び出し先を優先し、広域探索より 20 分以内完了を優先する
 - `risk_tags` に `security` または `data_migration` が含まれる場合: そのタグに対応するファイル群を最優先で確認する
+- `{REVIEW_CRITERIA}` / `{RUN_PLAN_GUIDANCE}` を bash double-quote 内へ差し込む前に、両方とも `\` → `\\`、`"` → `\"`、`$` → `\$`、`` ` `` → `\`` の順でエスケープする
 
 パス解決: Read ツールの `file_path` には `REVIEW_CRITERIA.md` の絶対パスを渡す。プラグイン環境では `$CLAUDE_PLUGIN_ROOT/skills/review/REVIEW_CRITERIA.md` に配置される。`$CLAUDE_PLUGIN_ROOT` が未設定・不明な場合は以下の Bash で値を取得してから絶対パスを組み立てる。
 
@@ -653,7 +655,7 @@ jq -n --argjson files_changed "$files_changed" --argjson hunks "$hunks" --argjso
   estimated_timeout_ms: $estimated_timeout_ms,
   actual_duration_ms: (((($finished_at | strptime("%Y-%m-%dT%H:%M:%S+00:00") | mktime) - ($started_at | strptime("%Y-%m-%dT%H:%M:%S+00:00") | mktime)) * 1000)),
   actual_tokens: null
-}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/run-plan.json
+}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/run-plan.json && test -s ~/claude-loop-pr-codex/$org-$repository-$pr_number/run-plan.json
 ```
 
 - いつ使うか: Step 4a または 4b が timeout / 非ゼロ終了した場合、権限不足などで処理継続不可の場合、**または Step 4c のスコープ検証で `claude-review.md` / `codex-review.md` のいずれかが `PR_DIFF_UNAVAILABLE` のみだった場合**に実行する
@@ -741,7 +743,7 @@ $CLAUDE_PLUGIN_ROOT/skills/review/
 7. Step 4a / 4b の timeout は必ず `1200000` に固定する
 8. テンプレートに明示された `git fetch` / `git checkout FETCH_HEAD` / 成果物ファイル作成以外の状態変更操作は実行しない。禁止例: `git push` / `git merge` / `git reset --*` / `git clean -fd[x]` / `git stash` / `git commit` / `git tag` / `git branch -D`、`rm -rf` 系、`gh pr` / `gh issue` の write 操作、および GitHub / Backlog / DocBase の write 系 MCP ツール
 9. 1回の実行で選定・処理する PR は 1 件のみとする
-10. Step 4a / 4b のプロンプト中に含まれる `{REVIEW_CRITERIA}` と `{RUN_PLAN_GUIDANCE}` プレースホルダは、Step 4 前処理で Read した `REVIEW_CRITERIA.md` と `run-plan.json` を元に Claude 側で置換したうえで、Bash ツールに渡す完全体のコマンド文字列として使う。`{REVIEW_CRITERIA}` には **bash double-quote 内で安全になるようバッククォート (`) を `\`` にエスケープした文字列** を使い、シェルでのコマンド置換 (`$()`) やヒアドキュメントは使わない
+10. Step 4a / 4b のプロンプト中に含まれる `{REVIEW_CRITERIA}` と `{RUN_PLAN_GUIDANCE}` プレースホルダは、Step 4 前処理で Read した `REVIEW_CRITERIA.md` と `run-plan.json` を元に Claude 側で置換したうえで、Bash ツールに渡す完全体のコマンド文字列として使う。`{REVIEW_CRITERIA}` と `{RUN_PLAN_GUIDANCE}` のどちらも bash double-quote 内で安全になるよう、差し込み前に **`\` → `\\`、`"` → `\"`、`$` → `\$`、`` ` `` → `\``** の順でエスケープする。シェルでのコマンド置換 (`$()`) やヒアドキュメントは使わない
 
 補助注記（いずれもテンプレート一字一句原則の具体適用例）:
 

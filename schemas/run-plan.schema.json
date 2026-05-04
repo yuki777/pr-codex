@@ -41,7 +41,14 @@
       "type": "array",
       "items": {
         "type": "string",
-        "minLength": 1
+        "enum": [
+          "security",
+          "data_migration",
+          "dependency",
+          "infra",
+          "test_touch",
+          "api_contract"
+        ]
       },
       "uniqueItems": true
     },
@@ -51,19 +58,32 @@
       "uniqueItems": true,
       "items": {
         "type": "string",
-        "enum": ["claude", "codex"]
+        "enum": [
+          "claude",
+          "codex"
+        ]
       }
     },
     "depth_actual": {
       "type": "string",
-      "enum": ["deep", "standard"]
+      "enum": [
+        "deep",
+        "standard"
+      ]
     },
     "recommended_mode": {
       "type": "string",
-      "enum": ["standard", "focused", "skip"]
+      "enum": [
+        "standard",
+        "focused",
+        "skip"
+      ]
     },
     "skip_reason": {
-      "type": ["string", "null"]
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "estimated_stages": {
       "type": "integer",
@@ -74,11 +94,17 @@
       "minimum": 0
     },
     "actual_duration_ms": {
-      "type": ["integer", "null"],
+      "type": [
+        "integer",
+        "null"
+      ],
       "minimum": 0
     },
     "actual_tokens": {
-      "type": ["integer", "null"],
+      "type": [
+        "integer",
+        "null"
+      ],
       "minimum": 0
     }
   }
