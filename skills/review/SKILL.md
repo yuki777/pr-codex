@@ -146,26 +146,38 @@ jq -r '.started_at' ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.js
 
 Step 2 で対象PRを1件選定した直後、未レビュー / failed / stale / completed のどの経路でも必ず実行する。Step 3 の clone と `metadata.json` / `run-plan.json` 作成・Step 4 の PR 差分スコープ制御は `$head_sha` / `$branch` / `$base_branch` / `$files_json` に依存するため、欠落すると後続が破綻する。
 
+まず `head_sha` / `branch` / `base_branch` を取得する。
+
 - いつ使うか: Step 2 で対象PRを1件選定した直後に必ず実行する
-- 判定条件: 標準出力に `{"head_sha":"...","branch":"...","base_branch":"...","files":[...]}` の JSON が出力される（いずれかが欠落した場合は `jq` が非ゼロ終了し、stderr に `missing <field>` が出る）
-- 次アクション: 出力 JSON の `.head_sha` を `$head_sha`、`.branch` を `$branch`、`.base_branch` を `$base_branch`、`.files` を **JSON 配列文字列**として `$files_json` に保持する（Bash 変数には JSON 配列そのままの文字列を入れる。`jq --argjson` に渡す想定）。`state == "completed"` の場合は保存済み `head_sha` と比較、それ以外は Step 3 へ進む
+- 判定条件: 標準出力に `{"head_sha":"...","branch":"...","base_branch":"..."}` の JSON が出力される（いずれかが欠落した場合は `jq` が非ゼロ終了し、stderr に `missing <field>` が出る）
+- 次アクション: 出力 JSON の `.head_sha` を `$head_sha`、`.branch` を `$branch`、`.base_branch` を `$base_branch` に保持する。続いて **別テンプレートで完全な `files[]` を取得**し、`state == "completed"` の場合は保存済み `head_sha` と比較、それ以外は Step 3 へ進む
 
 ```bash
-gh pr view $pr_number --repo $org/$repository --json headRefOid,headRefName,baseRefName,files | jq -ce 'if ((.headRefOid // "") == "") then error("missing headRefOid") elif ((.headRefName // "") == "") then error("missing headRefName") elif ((.baseRefName // "") == "") then error("missing baseRefName") elif ((.files // []) | length) == 0 then error("missing files") else {head_sha:.headRefOid,branch:.headRefName,base_branch:.baseRefName,files:[.files[].path]} end'
+gh pr view $pr_number --repo $org/$repository --json headRefOid,headRefName,baseRefName | jq -ce 'if ((.headRefOid // "") == "") then error("missing headRefOid") elif ((.headRefName // "") == "") then error("missing headRefName") elif ((.baseRefName // "") == "") then error("missing baseRefName") else {head_sha:.headRefOid,branch:.headRefName,base_branch:.baseRefName} end'
 ```
 
-`$files_json` の担保理由: Step 4a / 4b で「PR 差分範囲外のファイルをレビュー対象にしない」制約を効かせるため、PR 変更ファイルの一覧を確定情報として skill 下流に伝達する必要がある。`gh pr view` がここで成功して `files` が空でない場合のみ、Step 3 以降に進む（empty files の PR は Step 2b で `missing files` エラーで fail-fast）。
+続いて PR 変更ファイル一覧を **REST API の paginate** で全件取得する。`gh pr view --json files` は 100 件で truncate され得るため、`files_changed > 100` 判定と `metadata.json.files[]` の完全性を守るにはこのテンプレートを使う必要がある。
+
+- いつ使うか: 上の `head_sha` / `branch` / `base_branch` 取得直後に必ず実行する
+- 判定条件: 標準出力に `[` で始まる非空の JSON 配列が出力される
+- 次アクション: 出力された JSON 配列そのものを `$files_json` として保持する（Bash 変数には JSON 配列文字列をそのまま入れる）。empty files の PR は `missing files` エラーで fail-fast する
+
+```bash
+gh api repos/$org/$repository/pulls/$pr_number/files --paginate | jq -sce '[.[][] | .filename] | if length == 0 then error("missing files") else . end'
+```
+
+`$files_json` の担保理由: Step 4a / 4b で「PR 差分範囲外のファイルをレビュー対象にしない」制約を効かせるため、PR 変更ファイルの一覧を確定情報として skill 下流に伝達する必要がある。Step 2b では REST paginate を使って 101 ファイル以上の PR でも完全な一覧を保持する。
 
 #### 変数の保持例
 
-上の `jq -ce` の出力が `{"head_sha":"deadbeef01","branch":"feat/dark-mode","base_branch":"main","files":["src/theme.ts","src/App.tsx"]}` の場合、以下のように Bash 変数へ保持する:
+1つ目の `jq -ce` の出力が `{"head_sha":"deadbeef01","branch":"feat/dark-mode","base_branch":"main"}`、2つ目の `jq -sce` の出力が `["src/theme.ts","src/App.tsx"]` の場合、以下のように Bash 変数へ保持する:
 
 - `$head_sha = deadbeef01`（文字列そのまま）
 - `$branch = feat/dark-mode`（文字列そのまま）
 - `$base_branch = main`（文字列そのまま）
 - `$files_json = ["src/theme.ts","src/App.tsx"]`（**JSON 配列そのままの文字列**。Step 3 の metadata.json 生成で `jq --argjson files "$files_json"` に渡す）
 
-`$files_json` はオブジェクトの `.files` フィールドそのままを JSON 配列文字列として取り出したもの。抽出は Claude 側で `jq -ce` の出力を読み取って 4 変数に分解する（シェル側で追加の `jq` パイプは挟まない。1 テンプレート = 1 シェル実行単位の原則に従う）。
+`$files_json` は 2つ目のテンプレートの標準出力そのままを JSON 配列文字列として保持したもの。抽出は Claude 側で 2 回の出力を読み取って変数へ分解する（シェル側で追加の `jq` パイプは挟まない。1 テンプレート = 1 シェル実行単位の原則に従う）。
 
 #### `state == "completed"` の場合の保存済み `head_sha` 比較
 
@@ -620,7 +632,7 @@ MCP について:
 
 ### Step 5: 結果保存
 
-レビュー完了後、Bash で `jq -n --arg` を使って `status.json` を更新する。
+レビュー完了後、Bash で `jq -n --arg` を使って `run-plan.json` と `status.json` を更新する。`run-plan.json` は同一ディレクトリ内の一時ファイルへ先に書き出し、`mv` で原子的に差し替えてから `status.json` を `completed` にする。
 
 まず現在時刻を取得する（出力を `$finished_at` として保持する）。
 
@@ -628,19 +640,12 @@ MCP について:
 date -u +%Y-%m-%dT%H:%M:%S+00:00
 ```
 
-- いつ使うか: Step 4c まで成功した場合に実行する
-- 判定条件: `status.json` の `state` が `completed` になり、`run-plan.json.actual_duration_ms` が実行時間で更新される
-- 次アクション: Step 6 の結果報告へ進む
-
-```bash
-jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" --arg head_sha "$head_sha" '{state:"completed",started_at:$started_at,finished_at:$finished_at,exit_code:0,head_sha:$head_sha}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json
-```
-
-- いつ使うか: 上の completed `status.json` 更新直後に実行する
+- いつ使うか: Step 4c まで成功した場合に最初に実行する
 - 判定条件: `run-plan.json` の `actual_duration_ms` がミリ秒で埋まる
-- 次アクション: Step 6 の結果報告へ進む
+- 次アクション: 成功したら completed `status.json` 更新へ進む。失敗したらこの回は completed にせず、failed 分岐へ遷移する
 
 ```bash
+tmp_run_plan=~/claude-loop-pr-codex/$org-$repository-$pr_number/run-plan.json.tmp
 jq -n --argjson files_changed "$files_changed" --argjson hunks "$hunks" --argjson lines_added "$lines_added" --argjson lines_removed "$lines_removed" --argjson risk_tags "$risk_tags_json" --argjson selected_hunters "$selected_hunters_json" --arg depth_actual "$depth_actual" --arg recommended_mode "$recommended_mode" --arg skip_reason "$skip_reason" --argjson estimated_stages "$estimated_stages" --argjson estimated_timeout_ms "$estimated_timeout_ms" --arg started_at "$started_at" --arg finished_at "$finished_at" '{
   files_changed: $files_changed,
   hunks: $hunks,
@@ -655,7 +660,15 @@ jq -n --argjson files_changed "$files_changed" --argjson hunks "$hunks" --argjso
   estimated_timeout_ms: $estimated_timeout_ms,
   actual_duration_ms: (((($finished_at | strptime("%Y-%m-%dT%H:%M:%S+00:00") | mktime) - ($started_at | strptime("%Y-%m-%dT%H:%M:%S+00:00") | mktime)) * 1000)),
   actual_tokens: null
-}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/run-plan.json && test -s ~/claude-loop-pr-codex/$org-$repository-$pr_number/run-plan.json
+}' > "$tmp_run_plan" && test -s "$tmp_run_plan" && mv "$tmp_run_plan" ~/claude-loop-pr-codex/$org-$repository-$pr_number/run-plan.json
+```
+
+- いつ使うか: 上の `run-plan.json` 更新成功直後に実行する
+- 判定条件: `status.json` の `state` が `completed` になる
+- 次アクション: Step 6 の結果報告へ進む
+
+```bash
+jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" --arg head_sha "$head_sha" '{state:"completed",started_at:$started_at,finished_at:$finished_at,exit_code:0,head_sha:$head_sha}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json
 ```
 
 - いつ使うか: Step 4a または 4b が timeout / 非ゼロ終了した場合、権限不足などで処理継続不可の場合、**または Step 4c のスコープ検証で `claude-review.md` / `codex-review.md` のいずれかが `PR_DIFF_UNAVAILABLE` のみだった場合**に実行する
@@ -682,9 +695,10 @@ jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" --arg head
 ## エラーハンドリング
 
 - PRがclosed/merged → `skipped` としてログに記録し、次の候補へ進む
-- Step 2b の `jq -ce` で `missing headRefOid / headRefName / baseRefName / files` が出た → `state=failed` で記録し、その回は終了（PR メタデータが必須フィールドを欠いているため信頼できるレビュー不可）
+- Step 2b の `jq -ce` / `jq -sce` で `missing headRefOid / headRefName / baseRefName / files` が出た → `state=failed` で記録し、その回は終了（PR メタデータが必須フィールドを欠いているため信頼できるレビュー不可）
 - Step 3 の `gh pr diff` が失敗または空出力（`pr.diff` 未生成） → `state=failed` で記録し、その回は終了（PR 差分スコープが確定できないため Step 4 に進まない）
 - Step 3 の `run-plan.json` 生成が失敗 → `state=failed` で記録し、その回は終了（preflight 指標が欠落したまま Step 4 に進まない）
+- Step 5 の `run-plan.json` 追記更新が失敗 → `state=completed` を先に確定せず `state=failed` で記録し、その回は終了（壊れた `run-plan.json` を completed 扱いで残さない）
 - `claude -p` がタイムアウト（20分） → `state=failed` で記録
 - `claude -p` が非ゼロ終了 → `state=failed` で記録
 - `codex exec` がタイムアウト（20分） → `state=failed` で記録

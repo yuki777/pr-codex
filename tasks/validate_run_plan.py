@@ -56,14 +56,15 @@ def extract_bash_block(containing: str) -> str:
 
 def extract_jq_filter(block: str) -> str:
     start = block.index("'") + 1
-    end = block.rindex("' >")
+    end = block.rindex("'")
     return block[start:end]
 
 
-def run_jq(args: list[str], jq_filter: str) -> object:
+def run_jq(args: list[str], jq_filter: str, input_text: str | None = None) -> object:
     completed = subprocess.run(
         ["jq", *args, jq_filter],
         capture_output=True,
+        input=input_text,
         text=True,
         check=False,
     )
@@ -89,6 +90,13 @@ def duration_block() -> str:
     return extract_bash_block("jq -n --argjson files_changed")
 
 
+def files_list_block() -> str:
+    block = extract_bash_block("gh api repos/$org/$repository/pulls/$pr_number/files --paginate")
+    if "--json headRefOid,headRefName,baseRefName,files" in block:
+        raise AssertionError("Step 2b must not depend on gh pr view --json files")
+    return block
+
+
 def run_preflight_template(metadata_path: Path, diff_path: Path) -> object:
     return run_jq(
         [
@@ -102,6 +110,11 @@ def run_preflight_template(metadata_path: Path, diff_path: Path) -> object:
         ],
         extract_jq_filter(preflight_block()),
     )
+
+
+def run_files_list_template(pages: list[list[dict[str, str]]]) -> object:
+    input_text = "".join(json.dumps(page, ensure_ascii=False) + "\n" for page in pages)
+    return run_jq(["-s", "-c", "-e"], extract_jq_filter(files_list_block()), input_text=input_text)
 
 
 def run_duration_template(plan: dict[str, object], started_at: str, finished_at: str) -> object:
@@ -280,6 +293,31 @@ def validate_threshold_behavior(schema: dict[str, object]) -> None:
     validate_schema(schema, duration_case)
 
 
+def validate_paginated_files_template() -> None:
+    page_one = [{"filename": f"src/file_{index}.ts"} for index in range(100)]
+    page_two = [{"filename": "src/file_100.ts"}]
+    actual = run_files_list_template([page_one, page_two])
+    expected = [item["filename"] for item in page_one + page_two]
+    assert actual == expected, f"paginated files mismatch\nexpected={expected}\nactual={actual}"
+
+
+def validate_step5_write_order() -> None:
+    text = SKILL_PATH.read_text()
+    duration_index = text.index('tmp_run_plan=~/claude-loop-pr-codex/$org-$repository-$pr_number/run-plan.json.tmp')
+    completed_index = text.index('{state:"completed",started_at:$started_at,finished_at:$finished_at,exit_code:0,head_sha:$head_sha}')
+    if duration_index > completed_index:
+        raise AssertionError("run-plan update must be documented before completed status update")
+
+    block = duration_block()
+    required_snippets = [
+        'tmp_run_plan=~/claude-loop-pr-codex/$org-$repository-$pr_number/run-plan.json.tmp',
+        '> "$tmp_run_plan" && test -s "$tmp_run_plan" && mv "$tmp_run_plan" ~/claude-loop-pr-codex/$org-$repository-$pr_number/run-plan.json',
+    ]
+    for snippet in required_snippets:
+        if snippet not in block:
+            raise AssertionError(f"duration block missing required snippet: {snippet}")
+
+
 def validate_schema_contract(schema: dict[str, object]) -> None:
     items = schema["properties"]["risk_tags"]["items"]
     assert items["enum"] == RISK_TAG_ENUM, f"risk_tags enum mismatch: {items['enum']}"
@@ -288,9 +326,11 @@ def validate_schema_contract(schema: dict[str, object]) -> None:
 def main() -> None:
     schema = load_json(SCHEMA_PATH)
     validate_schema_contract(schema)
+    validate_paginated_files_template()
     for fixture in ("small", "medium", "large"):
         validate_fixture(fixture, schema)
     validate_threshold_behavior(schema)
+    validate_step5_write_order()
     print("run-plan validation passed")
 
 
