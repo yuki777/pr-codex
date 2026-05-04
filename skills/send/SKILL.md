@@ -89,7 +89,7 @@ test -f ~/claude-loop-pr-codex/$dir_name/findings.verified.json
 
 ### Step 3: `findings.verified.json` の解析 (primary)
 
-`findings.verified.json` が存在する場合、**これを一次情報源**として payload を組み立てる。`review.md` は `## 総評` / `## 良い点` の本文取得と、Must Fix 件数 gate の確認にだけ使う。
+`findings.verified.json` が存在する場合、**これを一次情報源**として payload を組み立てる。`review.md` は `## 総評` / `## 良い点` の本文取得と、Must Fix 件数 gate の確認にだけ使う。まず `$CLAUDE_PLUGIN_ROOT/schemas/findings.v1.json` を Read ツールで取得し、`findings.verified.json` がその schema に適合するかを **メモリ上で検証** してから抽出へ進む。`$CLAUDE_PLUGIN_ROOT` の絶対パス解決は review skill の `REVIEW_CRITERIA.md` 読み込み時と同じ手順に従う。
 
 Claude 側でメモリ上に以下を抽出する:
 
@@ -98,7 +98,10 @@ Claude 側でメモリ上に以下を抽出する:
   - `## 良い点` 直下の本文 → `$good_points`（同様にトリム）
   - `## 重大な問題 (Must Fix)` 配下の `### ...` 見出し数 → `$must_fix_markdown_count`
 - `findings.verified.json` から:
+  - ファイルが空でないこと、JSON parse に成功すること、top-level が object であること
   - top-level `schema_version` が **`findings.v1`** であること
+  - top-level `findings` フィールドが存在し、array であること
+  - `schemas/findings.v1.json` に対する validation を通ること
   - `findings[]` のうち `severity == "must_fix"` の要素を `$must_fix` 配列として抽出する
 
 #### `findings.verified.json` から抽出するフィールド
@@ -110,15 +113,17 @@ Claude 側でメモリ上に以下を抽出する:
 | `path`          | `location.path` |
 | `line`          | `location.end_line` があればその値、なければ `location.start_line` |
 | `start_line`    | `location.end_line` がある場合のみ `location.start_line` |
-| `side`          | `location.side` |
-| `start_side`    | `location.end_line` がある場合のみ `location.side` |
+| `side`          | `location.side` が `"RIGHT"` であることを確認したうえで `"RIGHT"` |
+| `start_side`    | `location.end_line` がある場合のみ `"RIGHT"` |
 | `body`          | 下の Must Fix body フォーマット |
 | `heading_markdown` | ``### `path:L<行番号>` `` または ``### `path:L<開始>-L<終了>` `` |
 | `source_finding_id` | finding の `id` |
 
 #### primary path の必須ガード
 
+- `findings.verified.json` が空 / JSON parse 失敗 / top-level object でない / `findings[]` 不在または非配列 / `schemas/findings.v1.json` validation 失敗のいずれかなら、ユーザーに通知して **中断** する（fallback へは切り替えない）
 - `severity == "must_fix"` の finding は、M1 では **`posting.post_policy == "inline"` かつ `posting.explanation_postable == true`** のものだけを自動投稿対象として扱う
+- `severity == "must_fix"` の finding で `location.side != "RIGHT"` が 1 件でもあれば、現 workflow の `pr.diff.ranges.txt` が head/new 側前提のため **中断** する（fallback へは切り替えない）
 - `must_fix` なのに `posting.post_policy` が `body_summary` / `local_only` / `suppress` のもの、または `posting.explanation_postable == false` のものが 1 件でもあれば、GitHub payload へ安全に変換できないため **中断** する（fallback へは切り替えない）
 - `findings.verified.json` が存在する場合、`$must_fix` の件数と `$must_fix_markdown_count` が **完全一致** しなければ中断する。人手で `review.md` が編集された、または review 側の派生生成が壊れている可能性があるため、fallback へは切り替えない
 
@@ -262,7 +267,7 @@ payload は Write ツールで `~/claude-loop-pr-codex/$dir_name/review-payload.
 
 ### Step 4.5: 投稿前 Codex セルフレビュー
 
-Claude が生成した `review-payload.json` を Codex CLI に独立検証させ、`findings.verified.json`（存在する場合）または `review.md` fallback との不整合、Must Fix 以外の混入、行範囲外コメントを検出する。Step 5（承認プロンプト）の直前で必ず実行する。
+Claude が生成した `review-payload.json` を Codex CLI に独立検証させ、`findings.verified.json`（存在する場合）または `review.md` fallback との不整合、Must Fix 以外の混入、schema/side 違反、行範囲外コメントを検出する。Step 5（承認プロンプト）の直前で必ず実行する。
 
 #### 検証観点
 
@@ -276,6 +281,7 @@ Codex は以下の観点で payload を確認する:
 6. `body` の冒頭が `review.md` の `## 総評` セクション本文と一致するか
 7. `body` 中に `## 良い点` セクションがあれば、`review.md` の `## 良い点` 本文と一致するか
 8. `findings.verified.json` が存在する場合、そこにある Must Fix 件数と `review.md` の Must Fix 見出し件数が一致するか
+9. `findings.verified.json` が存在する場合、schema validation を通っており、Must Fix に `location.side != RIGHT` が混入していないか
 
 #### コマンド
 
@@ -300,6 +306,7 @@ codex --ask-for-approval never exec \
 ## 検証対象ファイル
 - review-payload.json: 投稿予定の GitHub Reviews API payload
 - findings.verified.json: canonical findings（存在する場合のみ source of truth）
+- schemas/findings.v1.json: canonical findings schema（存在する場合のみ findings validation に使う）
 - review.md: 統合レビューの全文
 - pr.diff.ranges.txt: コメント可能な hunk 範囲一覧
 - metadata.json: 対象 PR のメタデータ（files 配列を含む）
@@ -312,6 +319,7 @@ codex --ask-for-approval never exec \
 5. payload.body の冒頭が review.md の '## 総評' セクション本文と一致すること（先頭・末尾の空白を除く）
 6. payload.body 中の '## 良い点' セクションがある場合、review.md の '## 良い点' 本文と一致すること
 7. findings.verified.json が存在する場合、そこにある Must Fix 件数と review.md の Must Fix 見出し件数が一致すること
+8. findings.verified.json が存在する場合、schemas/findings.v1.json に適合していること、かつ Must Fix finding の `location.side` がすべて `RIGHT` であること
 
 ## 出力フォーマット
 最初に各観点の検証結果を箇条書きで列挙し、最終行に必ず以下のいずれかを単独で出力してください:
@@ -431,8 +439,11 @@ mv ~/claude-loop-pr-codex/$dir_name ~/claude-loop-pr-codex/sent/$dir_name
 ## エラーハンドリング
 
 - 対象ディレクトリなし → 「投稿対象の completed レビューなし」と報告して正常終了（非エラー）
+- `findings.verified.json` が空 / JSON parse 失敗 / top-level object でない / `findings[]` 不在または非配列 → ユーザーに通知して処理中断（fallback へは切り替えない、`sent/` 移動もしない）
 - `findings.verified.json` が存在するのに `schema_version != findings.v1` → ユーザーに通知して処理中断
+- `findings.verified.json` の schema validation が `schemas/findings.v1.json` で失敗 → ユーザーに通知して処理中断（fallback へは切り替えない）
 - `findings.verified.json` の Must Fix 件数と `review.md` の Must Fix 見出し件数が不一致 → ユーザーに通知して処理中断（fallback へは切り替えない）
+- `findings.verified.json` の Must Fix に `location.side != RIGHT` が含まれる → ユーザーに通知して処理中断（M1 では old-side 投稿を扱わない）
 - `findings.verified.json` の Must Fix に `posting.post_policy != inline` または `explanation_postable != true` が含まれる → ユーザーに通知して処理中断（M1 では安全に自動投稿しない）
 - `review.md` に Must Fix が一件も無い → それでも `event: COMMENT` + body (総評 + 良い点) のみで投稿する（インラインコメント配列は空）
 - `review.md` の `## 総評` セクションが空 or 見つからない → ユーザーに通知して処理中断。`sent/` 移動は行わない
@@ -447,7 +458,7 @@ mv ~/claude-loop-pr-codex/$dir_name ~/claude-loop-pr-codex/sent/$dir_name
 1. 各テンプレートは 1 テンプレート = 1 シェル実行単位として扱う
 2. テンプレートの改変は変数置換のみ許可する。フラグ、引数順、引用符、リダイレクトはテンプレート記載どおりに使う
 3. シェル演算子はテンプレート中に明示された `|` `<` `>` `2>` `&&` のみ許可する
-4. `findings.verified.json` が存在する場合はそれを payload の一次入力とし、`review.md` parser は fallback に限定する。件数不一致や posting policy 不整合時に fallback へ自動切替してはならない
+4. `findings.verified.json` が存在する場合はそれを payload の一次入力とし、`review.md` parser は fallback に限定する。parse failure / shape failure / schema validation failure / `location.side != RIGHT` / 件数不一致 / posting policy 不整合時に fallback へ自動切替してはならない
 5. payload JSON の生成は Write ツールで行う（`jq -n` によるインラインでの複雑な配列組み立ては使わない）
 6. `$()` / `for` / `while` / `xargs` / ヒアドキュメントは使わない
 7. `mv` は `sent/` への移動以外では使わない

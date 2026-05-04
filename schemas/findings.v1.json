@@ -4,7 +4,7 @@
   "title": "pr-codex canonical findings v1",
   "type": "object",
   "additionalProperties": false,
-  "$comment": "Issue #16 latest comment and the associated gist finalized top-level generated_at for canonical findings. The older per-finding created_at field is intentionally omitted here.",
+  "$comment": "Issue #16 latest comment and the associated gist finalized top-level generated_at for canonical findings. The older per-finding created_at field is intentionally omitted here. M1 also fixes finding.id to the same deterministic value as fingerprint so retries and send.source_finding_id can track a finding stably.",
   "required": [
     "schema_version",
     "producer",
@@ -184,6 +184,7 @@
           "minimum": 1
         },
         "side": {
+          "description": "Schema keeps LEFT/RIGHT for forward compatibility, but the M1 review/send workflow only emits and accepts RIGHT. LEFT must be rejected by the current send primary path until old-side range validation exists.",
           "enum": [
             "LEFT",
             "RIGHT"
@@ -318,10 +319,12 @@
       ],
       "properties": {
         "id": {
-          "$ref": "#/$defs/non_empty_string"
+          "$ref": "#/$defs/non_empty_string",
+          "description": "M1 deterministic identifier. Use exactly the same string as fingerprint so reruns, retry send flows, and eval harness comparisons can trace the same finding without a separate allocator."
         },
         "fingerprint": {
-          "$ref": "#/$defs/non_empty_string"
+          "$ref": "#/$defs/non_empty_string",
+          "description": "Stable hash over README-defined inputs: path, category, normalized_title, and primary_symbol. In M1, id must equal fingerprint."
         },
         "source_agents": {
           "type": "array",

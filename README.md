@@ -119,7 +119,10 @@ cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
 
 - canonical runtime artifact は `schemas/findings.v1.json` (JSON Schema Draft 2020-12) で定義する
 - `findings.verified.json` は top-level `generated_at` を持ち、per-finding `created_at` は持たない
+- M1 の `finding.id` は **`fingerprint` と同値**に固定する（retry / send の `source_finding_id` / eval harness 比較で決定論的に追跡するため）
 - `fingerprint` の入力は `path` / `category` / `normalized_title` / `primary_symbol` に固定し、`line` は含めない
+- review 側は `findings.verified.json` を completed 前に `schemas/findings.v1.json` で検証し、send 側 primary path も同じ schema validation に失敗したら fallback せず中断する
+- schema 自体は `location.side` に `LEFT` も残すが、M1 の send workflow は `RIGHT` のみ受け付ける
 
 ## バージョンアップ（作者向け）
 
