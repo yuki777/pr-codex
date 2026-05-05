@@ -396,7 +396,16 @@ def validate_step5_write_order() -> None:
 
 def validate_completed_head_check_before_files() -> None:
     text = SKILL_PATH.read_text()
-    head_index = text.index('gh pr view $pr_number --repo $org/$repository --json headRefOid,headRefName,baseRefName')
+    head_index = text.index('gh api repos/$org/$repository/pulls/$pr_number --jq')
+    head_block = extract_bash_block("gh api repos/$org/$repository/pulls/$pr_number --jq")
+    forbidden_snippets = ["gh pr view", "headRefOid", "baseRefOid"]
+    for snippet in forbidden_snippets:
+        if snippet in head_block:
+            raise AssertionError(f"Step 2b metadata template must not depend on unsupported gh pr view field: {snippet}")
+    required_snippets = [".head.repo.full_name", ".head.sha", ".base.sha", ".head.ref", ".base.ref", ".merge_commit_sha"]
+    for snippet in required_snippets:
+        if snippet not in head_block:
+            raise AssertionError(f"Step 2b metadata template missing required gh api field: {snippet}")
     saved_head_section_index = text.index('#### `state == "completed"` の場合の保存済み `head_sha` 比較')
     saved_head_index = text.index("jq -r '.head_sha' ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json")
     files_index = text.index("gh api repos/$org/$repository/pulls/$pr_number/files --paginate")

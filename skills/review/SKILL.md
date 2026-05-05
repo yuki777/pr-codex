@@ -149,16 +149,31 @@ Step 2 で対象PRを1件選定した直後、未レビュー / failed / stale /
 まず `repository_full_name` / `head_sha` / `base_sha` / `branch` / `base_branch` / `merge_commit_sha` を取得する。
 
 - いつ使うか: Step 2 で対象PRを1件選定した直後に必ず実行する
-- 判定条件: 標準出力に `{"repository_full_name":"...","head_sha":"...","base_sha":"...","branch":"...","base_branch":"...","merge_commit_sha":"..."}` の JSON が出力される（required field のいずれかが欠落した場合は `jq` が非ゼロ終了し、stderr に `missing <field>` が出る。`merge_commit_sha` は open PR では空文字列でよい）
+- 判定条件: 標準出力に `{"repository_full_name":"...","head_sha":"...","base_sha":"...","branch":"...","base_branch":"...","merge_commit_sha":"..."}` の JSON が出力される（required field のいずれかが欠落した場合は `gh api --jq` が非ゼロ終了し、stderr に `missing <field>` が出る。`merge_commit_sha` は open PR では空文字列でよい）
 - 次アクション: 出力 JSON の `.repository_full_name` を `$repository_full_name`、`.head_sha` を `$head_sha`、`.base_sha` を `$base_sha`、`.branch` を `$branch`、`.base_branch` を `$base_branch`、`.merge_commit_sha` を `$merge_commit_sha` に保持する。`state == "completed"` の場合は、続く保存済み `head_sha` 比較テンプレートを先に実行する。一致したらこの候補をスキップし、異なる場合だけ **別テンプレートで完全な `files[]` を取得**して Step 3 へ進む。`state != "completed"` の場合はそのまま完全な `files[]` を取得する
 
 ```bash
-gh pr view $pr_number --repo $org/$repository --json headRefOid,headRefName,baseRefName,baseRefOid,mergeCommit | jq -ce --arg repository_full_name "$org/$repository" 'if (($repository_full_name // "") == "") then error("missing repository_full_name") elif ((.headRefOid // "") == "") then error("missing headRefOid") elif ((.baseRefOid // "") == "") then error("missing baseRefOid") elif ((.headRefName // "") == "") then error("missing headRefName") elif ((.baseRefName // "") == "") then error("missing baseRefName") else {repository_full_name:$repository_full_name,head_sha:.headRefOid,base_sha:.baseRefOid,branch:.headRefName,base_branch:.baseRefName,merge_commit_sha:(.mergeCommit.oid // "")} end'
+gh api repos/$org/$repository/pulls/$pr_number --jq '
+  {
+    repository_full_name: .head.repo.full_name,
+    head_sha: .head.sha,
+    base_sha: .base.sha,
+    branch: .head.ref,
+    base_branch: .base.ref,
+    merge_commit_sha: (.merge_commit_sha // "")
+  }
+  | if ((.repository_full_name // "") == "") then error("missing repository_full_name")
+    elif ((.head_sha // "") == "") then error("missing head_sha")
+    elif ((.base_sha // "") == "") then error("missing base_sha")
+    elif ((.branch // "") == "") then error("missing branch")
+    elif ((.base_branch // "") == "") then error("missing base_branch")
+    else . end
+'
 ```
 
 #### `state == "completed"` の場合の保存済み `head_sha` 比較
 
-- いつ使うか: Step 2 で `state == "completed"` と判定し、上の `jq -ce` で現在の `$head_sha` を取得した直後に実行する
+- いつ使うか: Step 2 で `state == "completed"` と判定し、上の `gh api --jq` で現在の `$head_sha` を取得した直後に実行する
 - 判定条件: 保存済み `head_sha` を取得できる
 - 次アクション: 保存済みと現在 (`$head_sha`) が異なれば追加コミットありとしてこの候補を選定し、PR 変更ファイル一覧の取得へ進む。一致するなら PR 変更ファイル一覧は取得せず、この候補はスキップして Step 2 で次の候補に戻る
 
@@ -182,7 +197,7 @@ set -o pipefail && gh api repos/$org/$repository/pulls/$pr_number/files --pagina
 
 #### 変数の保持例
 
-1つ目の `jq -ce` の出力が `{"repository_full_name":"octo/example","head_sha":"deadbeef01","base_sha":"cafebabe02","branch":"feat/dark-mode","base_branch":"main","merge_commit_sha":""}`、2つ目の `jq -sce` の出力が `["src/theme.ts","src/App.tsx"]` の場合、以下のように Bash 変数へ保持する:
+1つ目の `gh api --jq` の出力が `{"repository_full_name":"octo/example","head_sha":"deadbeef01","base_sha":"cafebabe02","branch":"feat/dark-mode","base_branch":"main","merge_commit_sha":""}`、2つ目の `jq -sce` の出力が `["src/theme.ts","src/App.tsx"]` の場合、以下のように Bash 変数へ保持する:
 
 - `$repository_full_name = octo/example`（owner/repo 形式の文字列）
 - `$head_sha = deadbeef01`（文字列そのまま）
@@ -750,7 +765,7 @@ jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" --arg head
 ## エラーハンドリング
 
 - PRがclosed/merged → `skipped` としてログに記録し、次の候補へ進む
-- Step 2b の metadata `jq -ce` / files `jq -sce` で `missing repository_full_name / headRefOid / baseRefOid / headRefName / baseRefName / files` が出た → `state=failed` で記録し、その回は終了（PR メタデータまたは変更ファイル一覧が必須フィールドを欠いているため信頼できるレビュー不可）
+- Step 2b の metadata `gh api --jq` / files `jq -sce` で `missing repository_full_name / head_sha / base_sha / branch / base_branch / files` が出た → `state=failed` で記録し、その回は終了（PR メタデータまたは変更ファイル一覧が必須フィールドを欠いているため信頼できるレビュー不可）
 - Step 3 の `gh pr diff` が失敗または空出力（`pr.diff` 未生成） → `state=failed` で記録し、その回は終了（PR 差分スコープが確定できないため Step 4 に進まない）
 - Step 3 の `run-plan.json` 生成が失敗 → `state=failed` で記録し、その回は終了（preflight 指標が欠落したまま Step 4 に進まない）
 - Step 5 の `run-plan.json` 追記更新が失敗 → `state=completed` を先に確定せず `state=failed` で記録し、その回は終了（壊れた `run-plan.json` を completed 扱いで残さない）

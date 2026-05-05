@@ -136,6 +136,71 @@ class ValidateFindingsTest(unittest.TestCase):
         finding["evidence"] = [{"type": "reference", "url": "http://[bad"}]
         self.assert_invalid_without_crash(artifact, ".evidence[0].url: must be a URI")
 
+    def test_malformed_enum_values_are_invalid_without_crash(self) -> None:
+        mutations = {
+            "severity-list": (lambda f: f.update(severity=[]), ".severity: invalid value"),
+            "category-dict": (lambda f: f.update(category={}), ".category: invalid value"),
+            "evidence-level-list": (lambda f: f.update(evidence_level=[]), ".evidence_level: invalid value"),
+            "location-side-list": (lambda f: f["location"].update(side=[]), ".location.side: must be LEFT or RIGHT"),
+            "axis-value-list": (lambda f: f["axes"].update(real=[]), ".axes.real: invalid value"),
+            "post-policy-list": (lambda f: f["posting"].update(post_policy=[]), ".posting.post_policy: invalid value"),
+            "not-postable-reason-list": (
+                lambda f: f["posting"].update(explanation_postable=False, not_postable_reason=[]),
+                ".posting.not_postable_reason: invalid value",
+            ),
+            "audience-list": (lambda f: f["posting"].update(post_policy="local_only", audience=[]), ".posting.audience: invalid value"),
+            "severity-by-source-list": (
+                lambda f: f.update(severity_disputed=True, severity_by_source={"claude": []}, merger_rule_applied="none", verifier_required=True),
+                ".severity_by_source.claude: invalid severity",
+            ),
+            "merger-rule-list": (
+                lambda f: f.update(severity_disputed=True, severity_by_source={"claude": "must_fix"}, merger_rule_applied=[], verifier_required=True),
+                ".merger_rule_applied: invalid value",
+            ),
+            "evidence-type-list": (lambda f: f.update(evidence=[{"type": []}]), ".evidence[0].type: invalid value"),
+        }
+        for name, (mutate, expected_fragment) in mutations.items():
+            with self.subTest(name=name):
+                artifact = copy.deepcopy(valid_artifact())
+                mutate(artifact["findings"][0])
+                self.assert_invalid_without_crash(artifact, expected_fragment)
+
+    def test_m1_send_contract_is_validator_enforced(self) -> None:
+        mutations = {
+            "non-must-inline": (
+                lambda f: f.update(severity="should_fix"),
+                "only must_fix findings may use post_policy=inline",
+            ),
+            "must-fix-non-inline": (
+                lambda f: f["posting"].update(post_policy="body_summary"),
+                "must_fix findings must use post_policy=inline",
+            ),
+            "must-fix-not-postable": (
+                lambda f: f["posting"].update(explanation_postable=False, not_postable_reason="other_explained"),
+                "must_fix findings must set explanation_postable=true",
+            ),
+            "must-fix-left-side": (
+                lambda f: f["location"].update(side="LEFT"),
+                "must_fix findings must target location.side=RIGHT",
+            ),
+        }
+        for name, (mutate, expected_fragment) in mutations.items():
+            with self.subTest(name=name):
+                artifact = copy.deepcopy(valid_artifact())
+                mutate(artifact["findings"][0])
+                self.assert_invalid_without_crash(artifact, expected_fragment)
+
+    def test_duplicate_ids_and_fingerprints_are_invalid(self) -> None:
+        artifact = copy.deepcopy(valid_artifact())
+        artifact["findings"].append(copy.deepcopy(artifact["findings"][0]))
+        self.assert_invalid_without_crash(artifact, "duplicate id/fingerprint")
+
+    def test_fingerprint_golden_vector(self) -> None:
+        self.assertEqual(
+            valid_artifact()["findings"][0]["fingerprint"],
+            "ef28e327aaa0533331150e3c6661f3b567c93d3e7de124765e980daa3406a1d1",
+        )
+
     def test_id_must_equal_recomputed_fingerprint(self) -> None:
         artifact = copy.deepcopy(valid_artifact())
         artifact["findings"][0]["id"] = "0" * 64

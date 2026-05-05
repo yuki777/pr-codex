@@ -160,6 +160,70 @@ def validate_string_field(errors: list[str], path: str, obj: dict[str, Any], key
         errors.append(f"{path}.{key}: must be a non-empty string")
 
 
+def validate_enum_value(errors: list[str], path: str, value: Any, allowed: set[str], message: str = "invalid value") -> bool:
+    if not isinstance(value, str) or value not in allowed:
+        errors.append(f"{path}: {message}")
+        return False
+    return True
+
+
+def validate_unique_finding_identity(
+    errors: list[str],
+    fpath: str,
+    index: int,
+    identifier: Any,
+    fingerprint: Any,
+    seen_ids: dict[str, int],
+    seen_fingerprints: dict[str, int],
+) -> None:
+    prior_indexes: set[int] = set()
+    if isinstance(identifier, str) and FINGERPRINT_RE.match(identifier):
+        prior_id = seen_ids.get(identifier)
+        if prior_id is not None:
+            prior_indexes.add(prior_id)
+        else:
+            seen_ids[identifier] = index
+    if isinstance(fingerprint, str) and FINGERPRINT_RE.match(fingerprint):
+        prior_fingerprint = seen_fingerprints.get(fingerprint)
+        if prior_fingerprint is not None:
+            prior_indexes.add(prior_fingerprint)
+        else:
+            seen_fingerprints[fingerprint] = index
+    if prior_indexes:
+        matched = ", ".join(f"$.findings[{prior}]" for prior in sorted(prior_indexes))
+        errors.append(f"{fpath}: duplicate id/fingerprint (matches {matched})")
+
+
+def validate_m1_posting_contract(
+    errors: list[str],
+    fpath: str,
+    finding: dict[str, Any],
+    location: Any,
+    posting: dict[str, Any],
+    valid_severity: set[str],
+    valid_post_policy: set[str],
+) -> None:
+    severity_value = finding.get("severity")
+    post_policy_value = posting.get("post_policy")
+    if (
+        not isinstance(severity_value, str)
+        or severity_value not in valid_severity
+        or not isinstance(post_policy_value, str)
+        or post_policy_value not in valid_post_policy
+    ):
+        return
+
+    if severity_value == "must_fix":
+        if not isinstance(location, dict) or location.get("side") != "RIGHT":
+            errors.append(f"{fpath}.location.side: must_fix findings must target location.side=RIGHT")
+        if post_policy_value != "inline":
+            errors.append(f"{fpath}.posting.post_policy: must_fix findings must use post_policy=inline")
+        if posting.get("explanation_postable") is not True:
+            errors.append(f"{fpath}.posting.explanation_postable: must_fix findings must set explanation_postable=true")
+    elif post_policy_value == "inline":
+        errors.append(f"{fpath}.posting.post_policy: only must_fix findings may use post_policy=inline")
+
+
 def validate_artifact(schema: dict[str, Any], data: Any) -> list[str]:
     severity = enum_from_schema(schema, "severity", {"must_fix", "should_fix", "nit", "note"})
     axis_value = enum_from_schema(schema, "axis_value", {"yes", "no", "unknown"})
@@ -230,6 +294,9 @@ def validate_artifact(schema: dict[str, Any], data: Any) -> list[str]:
         errors.append("$.findings: must be an array")
         return errors
 
+    seen_ids: dict[str, int] = {}
+    seen_fingerprints: dict[str, int] = {}
+
     for index, finding in enumerate(findings):
         fpath = f"$.findings[{index}]"
         if not isinstance(finding, dict):
@@ -266,6 +333,7 @@ def validate_artifact(schema: dict[str, Any], data: Any) -> list[str]:
             errors.append(f"{fpath}.id: must be 64 lowercase hex characters")
         if identifier != fingerprint:
             errors.append(f"{fpath}: id must equal fingerprint")
+        validate_unique_finding_identity(errors, fpath, index, identifier, fingerprint, seen_ids, seen_fingerprints)
         if isinstance(fingerprint, str) and FINGERPRINT_RE.match(fingerprint):
             expected = compute_fingerprint(finding)
             if fingerprint != expected:
@@ -281,14 +349,11 @@ def validate_artifact(schema: dict[str, Any], data: Any) -> list[str]:
         if not isinstance(merged_from, list) or not merged_from or any(not non_empty_string(v) for v in merged_from):
             errors.append(f"{fpath}.merged_from: must be a non-empty array of non-empty strings")
 
-        if finding.get("severity") not in severity:
-            errors.append(f"{fpath}.severity: invalid value")
-        if finding.get("category") not in category:
-            errors.append(f"{fpath}.category: invalid value")
+        validate_enum_value(errors, f"{fpath}.severity", finding.get("severity"), severity)
+        validate_enum_value(errors, f"{fpath}.category", finding.get("category"), category)
         for key in ("title", "problem", "reason", "suggestion", "category_label"):
             validate_string_field(errors, fpath, finding, key)
-        if finding.get("evidence_level") not in evidence_level:
-            errors.append(f"{fpath}.evidence_level: invalid value")
+        validate_enum_value(errors, f"{fpath}.evidence_level", finding.get("evidence_level"), evidence_level)
 
         location = finding.get("location")
         if not isinstance(location, dict):
@@ -305,7 +370,8 @@ def validate_artifact(schema: dict[str, Any], data: Any) -> list[str]:
                     errors.append(f"{fpath}.location.end_line: must be an integer >= 1")
                 elif is_positive_int(location.get("start_line")) and location["end_line"] < location["start_line"]:
                     errors.append(f"{fpath}.location.end_line: must be >= start_line")
-            if location.get("side") not in {"LEFT", "RIGHT"}:
+            side = location.get("side")
+            if not isinstance(side, str) or side not in {"LEFT", "RIGHT"}:
                 errors.append(f"{fpath}.location.side: must be LEFT or RIGHT")
 
         axes = finding.get("axes")
@@ -315,8 +381,7 @@ def validate_artifact(schema: dict[str, Any], data: Any) -> list[str]:
             add_unexpected(errors, f"{fpath}.axes", axes, AXES_KEYS)
             require_keys(errors, f"{fpath}.axes", axes, AXES_KEYS)
             for key in AXES_KEYS:
-                if axes.get(key) not in axis_value:
-                    errors.append(f"{fpath}.axes.{key}: invalid value")
+                validate_enum_value(errors, f"{fpath}.axes.{key}", axes.get(key), axis_value)
 
         posting = finding.get("posting")
         if not isinstance(posting, dict):
@@ -324,20 +389,20 @@ def validate_artifact(schema: dict[str, Any], data: Any) -> list[str]:
         else:
             add_unexpected(errors, f"{fpath}.posting", posting, POSTING_KEYS)
             require_keys(errors, f"{fpath}.posting", posting, {"post_policy", "explanation_postable"})
-            if posting.get("post_policy") not in post_policy:
-                errors.append(f"{fpath}.posting.post_policy: invalid value")
+            validate_enum_value(errors, f"{fpath}.posting.post_policy", posting.get("post_policy"), post_policy)
             if not isinstance(posting.get("explanation_postable"), bool):
                 errors.append(f"{fpath}.posting.explanation_postable: must be boolean")
-            if "not_postable_reason" in posting and posting.get("not_postable_reason") not in not_postable_reason:
-                errors.append(f"{fpath}.posting.not_postable_reason: invalid value")
-            if "audience" in posting and posting.get("audience") not in audience:
-                errors.append(f"{fpath}.posting.audience: invalid value")
+            if "not_postable_reason" in posting:
+                validate_enum_value(errors, f"{fpath}.posting.not_postable_reason", posting.get("not_postable_reason"), not_postable_reason)
+            if "audience" in posting:
+                validate_enum_value(errors, f"{fpath}.posting.audience", posting.get("audience"), audience)
             if posting.get("explanation_postable") is False and "not_postable_reason" not in posting:
                 errors.append(f"{fpath}.posting.not_postable_reason: required when explanation_postable=false")
             if finding.get("evidence_level") == "suspicion" and posting.get("explanation_postable") is not False:
                 errors.append(f"{fpath}.posting.explanation_postable: must be false when evidence_level=suspicion")
             if posting.get("post_policy") == "local_only" and "audience" not in posting:
                 errors.append(f"{fpath}.posting.audience: required when post_policy=local_only")
+            validate_m1_posting_contract(errors, fpath, finding, location, posting, severity, post_policy)
 
         if "severity_disputed" in finding and not isinstance(finding["severity_disputed"], bool):
             errors.append(f"{fpath}.severity_disputed: must be boolean")
@@ -351,10 +416,12 @@ def validate_artifact(schema: dict[str, Any], data: Any) -> list[str]:
                 errors.append(f"{fpath}.severity_by_source: must be a non-empty object")
             else:
                 for source, value in severity_by_source.items():
-                    if not non_empty_string(source) or value not in severity:
-                        errors.append(f"{fpath}.severity_by_source.{source}: invalid severity")
-        if "merger_rule_applied" in finding and finding.get("merger_rule_applied") not in merger_rule:
-            errors.append(f"{fpath}.merger_rule_applied: invalid value")
+                    if not non_empty_string(source):
+                        errors.append(f"{fpath}.severity_by_source: keys must be non-empty strings")
+                    else:
+                        validate_enum_value(errors, f"{fpath}.severity_by_source.{source}", value, severity, "invalid severity")
+        if "merger_rule_applied" in finding:
+            validate_enum_value(errors, f"{fpath}.merger_rule_applied", finding.get("merger_rule_applied"), merger_rule)
         if "verifier_required" in finding and not isinstance(finding.get("verifier_required"), bool):
             errors.append(f"{fpath}.verifier_required: must be boolean")
 
@@ -370,8 +437,7 @@ def validate_artifact(schema: dict[str, Any], data: Any) -> list[str]:
                         continue
                     add_unexpected(errors, epath, item, EVIDENCE_KEYS)
                     require_keys(errors, epath, item, {"type"})
-                    if item.get("type") not in evidence_type:
-                        errors.append(f"{epath}.type: invalid value")
+                    validate_enum_value(errors, f"{epath}.type", item.get("type"), evidence_type)
                     for key in ("tool", "command", "diagnostic_code", "path", "note"):
                         validate_string_field(errors, epath, item, key)
                     if "line" in item and not is_positive_int(item.get("line")):

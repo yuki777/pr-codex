@@ -87,19 +87,28 @@ jq -r '"org=\(.org)\nrepository=\(.repository)\npr_number=\(.pr_number)\npr_url=
 test -f ~/claude-loop-pr-codex/$dir_name/findings.verified.json
 ```
 
+### Step 2.5: plugin root / schema / validator path の解決
+
+primary / fallback のどちらへ進む場合も、Step 4.5 の Codex セルフレビューで `{SCHEMA_PATH}` / `{VALIDATOR_PATH}` を絶対パスへ置換できるよう、ここで `schema_path` と `validator_path` を保持する。`findings.verified.json` が存在する primary path では同じ値を Step 3 の同梱 validator 実行にも使う。`$CLAUDE_PLUGIN_ROOT` が未設定・不明な場合は review skill と同じ手順（`echo "$CLAUDE_PLUGIN_ROOT"`、空なら `**/pr-codex/skills/review/REVIEW_CRITERIA.md` の探索結果から plugin root を逆算）で絶対パスを確定する。
+
+保持する値:
+
+- `schema_path = <plugin-root>/schemas/findings.v1.json`
+- `validator_path = <plugin-root>/tasks/validate_findings.py`
+
 ### Step 3: `findings.verified.json` の解析 (primary)
 
-`findings.verified.json` が存在する場合、**これを一次情報源**として payload を組み立てる。`review.md` は `## 総評` / `## 良い点` の本文取得と、Must Fix 件数 gate の確認にだけ使う。まず `$CLAUDE_PLUGIN_ROOT/schemas/findings.v1.json` の絶対パスを解決し、`findings.verified.json` がその schema に適合するかを review 側と同じ同梱 validator で外部検証してから抽出へ進む。`$CLAUDE_PLUGIN_ROOT` の絶対パス解決は review skill の `REVIEW_CRITERIA.md` 読み込み時と同じ手順に従い、解決した絶対パスは Step 4.5 の Codex セルフレビューにも渡す。
+`findings.verified.json` が存在する場合、**これを一次情報源**として payload を組み立てる。`review.md` は `## 総評` / `## 良い点` の本文取得と、Must Fix 件数 gate の確認にだけ使う。まず Step 2.5 で保持した `validator_path` / `schema_path` を使い、`findings.verified.json` がその schema に適合するかを review 側と同じ同梱 validator で外部検証してから抽出へ進む。
 
 #### 同梱 validator コマンド
 
 - いつ使うか: `findings.verified.json` が存在する primary path の開始直後、JSON 抽出や payload 生成の前に必ず実行する
 - 判定条件: 終了コード 0
 - 次アクション: 成功なら Read ツールで `findings.verified.json` を読み Step 3 の抽出へ進む。失敗ならユーザーに通知して中断し、Markdown fallback へは切り替えない
-- `$CLAUDE_PLUGIN_ROOT` が shell 環境で未設定の場合は、review skill と同じ手順で解決した plugin root の絶対パスに置換してから Bash ツールへ渡す。同時に `schema_path` として `<plugin-root>/schemas/findings.v1.json`、`validator_path` として `<plugin-root>/tasks/validate_findings.py` の絶対パスを保持し、Step 4.5 のプロンプトへ埋め込む
+- `$CLAUDE_PLUGIN_ROOT` が shell 環境で未設定の場合は、Step 2.5 で保持した `validator_path` / `schema_path` の実値へ置換してから Bash ツールへ渡す。Step 4.5 のプロンプトにも同じ絶対パスを埋め込む
 
 ```bash
-python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings.py --schema $CLAUDE_PLUGIN_ROOT/schemas/findings.v1.json --data ~/claude-loop-pr-codex/$dir_name/findings.verified.json
+python3 $validator_path --schema $schema_path --data ~/claude-loop-pr-codex/$dir_name/findings.verified.json
 ```
 
 Claude 側でメモリ上に以下を抽出する:
@@ -303,7 +312,7 @@ Codex は以下の観点で payload を確認する:
 - いつ使うか: Step 4 で `review-payload.json` を生成した直後、Step 5 の承認プロンプト前に必ず実行する
 - 判定条件: 標準出力に VERDICT: PASS または VERDICT: FAIL の行が含まれる
 - 次アクション: PASS なら Step 5 へ進む。FAIL なら標準出力の指摘内容を読み取り、payload を再生成して再度本ステップを実行する（最大 3 回まで）。3 回連続 FAIL なら処理中断してユーザーへ通知
-- `{SCHEMA_PATH}` は Step 3 で保持した `$CLAUDE_PLUGIN_ROOT/schemas/findings.v1.json`、`{VALIDATOR_PATH}` は `$CLAUDE_PLUGIN_ROOT/tasks/validate_findings.py` の絶対パスに置換される。Bash ツールに渡す前に Claude 側で prompt 内の両プレースホルダを絶対パス文字列へ置換する
+- `{SCHEMA_PATH}` は Step 2.5 で保持した `schema_path`、`{VALIDATOR_PATH}` は `validator_path` の絶対パスに置換される。Bash ツールに渡す前に Claude 側で prompt 内の両プレースホルダを絶対パス文字列へ置換する
 
 ```bash
 codex --ask-for-approval never exec \
