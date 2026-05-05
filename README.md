@@ -16,6 +16,7 @@ GitHub PRを **Claude Code** と **Codex CLI** の2者レビュー方式で自�
 - Codex CLI (`codex-cli 0.121.0` 以上、`codex exec -m gpt-5.5` が使えること)
 - GitHub CLI (`gh`)
 - `jq`（SKILL.md 内の全テンプレートで利用する。macOS 標準では未インストール）
+- Node.js / npm の `npx`（`findings.verified.json` を Ajv Draft 2020-12 で検証するため）
 
 ## セットアップ
 
@@ -120,10 +121,19 @@ cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
 - canonical runtime artifact は `schemas/findings.v1.json` (JSON Schema Draft 2020-12) で定義する
 - `findings.verified.json` は top-level `generated_at` を持ち、per-finding `created_at` は持たない
 - M1 の `finding.id` は **`fingerprint` と同値**に固定する（retry / send の `source_finding_id` / eval harness 比較で決定論的に追跡するため）
+- `category` は schema enum（`bug` / `security` / `performance` / `tests` / `design` / `code_quality` / `consistency` / `runtime_error`）に固定し、自由文字列の揺れを `fingerprint` に入れない
 - `fingerprint` の入力は `path` / `category` / `normalized_title` / `primary_symbol` に固定し、`line` は含めない
 - JSON Schema Draft 2020-12 単体では sibling equality (`id == fingerprint`) を標準機能だけで強制しにくいため、この等値は **review/send workflow の必須 runtime gate** として扱う
-- review 側は `findings.verified.json` を completed 前に `schemas/findings.v1.json` で検証し、send 側 primary path も同じ schema validation に失敗したら fallback せず中断する
+- review 側は `findings.verified.json` を completed 前に Ajv で `schemas/findings.v1.json` へ検証し、send 側 primary path も同じ Ajv validation に失敗したら fallback せず中断する
 - schema 自体は `location.side` に `LEFT` も残すが、M1 の send workflow は `RIGHT` のみ受け付ける
+
+### fingerprint 正準アルゴリズム
+
+1. `path`: `location.path` のリポジトリ相対 POSIX path をそのまま使う
+2. `category`: schema enum の値をそのまま使う
+3. `normalized_title`: `title` に Unicode NFKC 正規化 → Unicode lowercase → 連続空白を ASCII space 1 個へ畳み込み → 前後 trim → 末尾の Unicode punctuation（General Category が P で始まる文字）をなくなるまで除去、の順で処理する
+4. `primary_symbol`: `title` 内で最初に backtick で囲まれた symbol を使う。存在しない場合は空文字列にする
+5. `id = fingerprint = lowercase_hex(sha256(path + "\x1f" + category + "\x1f" + normalized_title + "\x1f" + (primary_symbol || "")))`
 
 ## バージョンアップ（作者向け）
 

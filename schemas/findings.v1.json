@@ -4,7 +4,7 @@
   "title": "pr-codex canonical findings v1",
   "type": "object",
   "additionalProperties": false,
-  "$comment": "Issue #16 latest comment and the associated gist finalized top-level generated_at for canonical findings. The older per-finding created_at field is intentionally omitted here. M1 also fixes finding.id to the same deterministic value as fingerprint so retries and send.source_finding_id can track a finding stably.",
+  "$comment": "Issue #16 latest comment and the associated gist finalized top-level generated_at for canonical findings. The older per-finding created_at field is intentionally omitted here. M1 fixes finding.id to the same deterministic lowercase sha256 hex value as fingerprint so retries and send.source_finding_id can track a finding stably. Fingerprint canonical form: lowercase_hex(sha256(path + U+001F + category + U+001F + normalized_title + U+001F + primary_symbol_or_empty)); normalized_title uses Unicode NFKC, Unicode lowercase, whitespace collapse, trim, and trailing Unicode punctuation (General Category P*) removal; primary_symbol is the first back-ticked symbol in title, or empty string if absent.",
   "required": [
     "schema_version",
     "producer",
@@ -319,12 +319,11 @@
       ],
       "properties": {
         "id": {
-          "$ref": "#/$defs/non_empty_string",
-          "description": "M1 deterministic identifier. Use exactly the same string as fingerprint so reruns, retry send flows, and eval harness comparisons can trace the same finding without a separate allocator."
+          "$ref": "#/$defs/fingerprint",
+          "description": "M1 deterministic identifier. Use exactly the same lowercase SHA-256 hex string as fingerprint so reruns, retry send flows, and eval harness comparisons can trace the same finding without a separate allocator."
         },
         "fingerprint": {
-          "$ref": "#/$defs/non_empty_string",
-          "description": "Stable hash over README-defined inputs: path, category, normalized_title, and primary_symbol. In M1, id must equal fingerprint."
+          "$ref": "#/$defs/fingerprint"
         },
         "source_agents": {
           "type": "array",
@@ -348,7 +347,7 @@
           "$ref": "#/$defs/severity"
         },
         "category": {
-          "$ref": "#/$defs/non_empty_string"
+          "$ref": "#/$defs/category"
         },
         "title": {
           "$ref": "#/$defs/non_empty_string"
@@ -391,6 +390,10 @@
         },
         "php": {
           "$ref": "#/$defs/php"
+        },
+        "category_label": {
+          "$ref": "#/$defs/non_empty_string",
+          "description": "Optional human-readable category nuance. It is explicitly not a fingerprint input; category enum remains the stable fingerprint component."
         }
       },
       "allOf": [
@@ -405,7 +408,8 @@
                 },
                 "required": [
                   "explanation_postable"
-                ]
+                ],
+                "type": "object"
               }
             },
             "required": [
@@ -417,7 +421,8 @@
               "posting": {
                 "required": [
                   "not_postable_reason"
-                ]
+                ],
+                "type": "object"
               }
             }
           }
@@ -443,7 +448,8 @@
                 },
                 "required": [
                   "explanation_postable"
-                ]
+                ],
+                "type": "object"
               }
             }
           }
@@ -459,7 +465,8 @@
                 },
                 "required": [
                   "post_policy"
-                ]
+                ],
+                "type": "object"
               }
             },
             "required": [
@@ -471,7 +478,8 @@
               "posting": {
                 "required": [
                   "audience"
-                ]
+                ],
+                "type": "object"
               }
             }
           }
@@ -496,6 +504,24 @@
           }
         }
       ]
+    },
+    "category": {
+      "description": "Stable category used as a fingerprint input. Free-form category variants are not allowed in M1; put nuance in category_label/title/problem instead.",
+      "enum": [
+        "bug",
+        "security",
+        "performance",
+        "tests",
+        "design",
+        "code_quality",
+        "consistency",
+        "runtime_error"
+      ]
+    },
+    "fingerprint": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "Deterministic lowercase hex SHA-256. Compute lowercase_hex(sha256(path + U+001F + category + U+001F + normalized_title + U+001F + primary_symbol_or_empty)); normalized_title = title normalized with Unicode NFKC, Unicode lowercase, whitespace collapsed to one ASCII space, trimmed, and trailing Unicode punctuation (General Category P*) removed; primary_symbol = first back-ticked symbol in title, or empty string. In M1, id must equal fingerprint."
     }
   }
 }
