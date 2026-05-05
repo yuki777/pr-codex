@@ -422,6 +422,26 @@ def validate_completed_head_check_before_files() -> None:
             raise AssertionError(f"completed head_sha comparison docs missing required snippet: {snippet}")
 
 
+def validate_step2b_jq_allowlist_docs() -> None:
+    text = SKILL_PATH.read_text()
+    stale_snippets = [
+        "`gh api` や `gh pr view` の `--jq` フラグは使わない",
+        "テンプレートはすべて `| jq` パイプ形式で統一",
+    ]
+    for snippet in stale_snippets:
+        if snippet in text:
+            raise AssertionError(f"Step 2b metadata docs still contain stale --jq prohibition: {snippet}")
+
+    required_snippets = [
+        "Step 2b の metadata 取得テンプレートだけは",
+        "`gh api ... --jq '...'` を明示的に使う",
+        "`gh pr view --jq` は使わない",
+    ]
+    for snippet in required_snippets:
+        if snippet not in text:
+            raise AssertionError(f"Step 2b metadata allowlist docs missing required snippet: {snippet}")
+
+
 def validate_review_preflight_supplement_docs() -> None:
     text = SKILL_PATH.read_text()
     line = single_line_containing(text, "## 補足` に preflight 情報")
@@ -519,6 +539,7 @@ def main() -> None:
     validate_threshold_behavior(schema)
     validate_risk_tag_detection()
     validate_completed_head_check_before_files()
+    validate_step2b_jq_allowlist_docs()
     validate_review_preflight_supplement_docs()
     validate_step5_write_order()
     validate_escape_rule_docs()

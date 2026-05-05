@@ -842,7 +842,7 @@ $CLAUDE_PLUGIN_ROOT/tasks/
 
 補助注記（いずれもテンプレート一字一句原則の具体適用例）:
 
-- `gh api` や `gh pr view` の `--jq` フラグは使わない。テンプレートはすべて `| jq` パイプ形式で統一しており、クォートを含むフラグ値は auto mode の分類器でも停止要因になり得る
+- Step 2b の metadata 取得テンプレートだけは、`gh` の version-dependent な `gh pr view --json headRefOid/baseRefOid` を避けるため `gh api ... --jq '...'` を明示的に使う。それ以外のテンプレートへ任意に `--jq` を追加しない。`gh pr view --jq` は使わない
 - `set -o pipefail &&` が明示されたテンプレートでは、`gh api --paginate` など upstream の非ゼロ終了を最後段の `jq` 成功で握りつぶさないため、必ずテンプレートどおりに残す
 - `$()` は使わない。コマンド置換はテンプレートに含まれず、auto mode でも承認プロンプトや停止要因になり得る（変数展開 `$org` 等はテンプレート内で使用する）
 - `for` / `while` / `while read` / `xargs` などのループ・反復構文は使わない。テンプレート外であり、実行単位・ログの再現性を崩す
