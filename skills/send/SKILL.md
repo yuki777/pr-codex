@@ -115,6 +115,7 @@ Claude 側でメモリ上に以下を抽出する:
   - 上記同梱 validator による `schemas/findings.v1.json` validation を通ること
   - すべての finding で `id == fingerprint` が成り立ち、同梱 validator が正準アルゴリズムで再計算した fingerprint と一致すること
   - `findings[]` のうち `severity == "must_fix"` の要素を `$must_fix` 配列として抽出する
+  - M1 の投稿 contract として、`severity != "must_fix"` の finding に `posting.post_policy == "inline"` が含まれないことを確認する
 
 #### `findings.verified.json` から抽出するフィールド
 
@@ -135,6 +136,7 @@ Claude 側でメモリ上に以下を抽出する:
 
 - `findings.verified.json` が空 / JSON parse 失敗 / top-level object でない / `findings[]` 不在または非配列 / 同梱 validator による `schemas/findings.v1.json` validation / fingerprint 再計算 / format / range validation 失敗 / `id != fingerprint` のいずれかなら、ユーザーに通知して **中断** する（fallback へは切り替えない）
 - `severity == "must_fix"` の finding は、M1 では **`posting.post_policy == "inline"` かつ `posting.explanation_postable == true`** のものだけを自動投稿対象として扱う
+- `severity != "must_fix"` の finding に `posting.post_policy == "inline"` が 1 件でもあれば、review 側の M1 posting contract 違反として **中断** する（fallback へは切り替えない）。M1 では `should_fix` / `nit` / `note` は inline 自動投稿対象外であり、`body_summary` / `local_only` / `suppress` のいずれかで表現する
 - `severity == "must_fix"` の finding で `location.side != "RIGHT"` が 1 件でもあれば、現 workflow の `pr.diff.ranges.txt` が head/new 側前提のため **中断** する（fallback へは切り替えない）
 - `must_fix` なのに `posting.post_policy` が `body_summary` / `local_only` / `suppress` のもの、または `posting.explanation_postable == false` のものが 1 件でもあれば、GitHub payload へ安全に変換できないため **中断** する（fallback へは切り替えない）
 - `findings.verified.json` が存在する場合、`$must_fix` の件数と `$must_fix_markdown_count` が **完全一致** しなければ中断する。人手で `review.md` が編集された、または review 側の派生生成が壊れている可能性があるため、fallback へは切り替えない
@@ -327,7 +329,7 @@ codex --ask-for-approval never exec \
 - metadata.json: 対象 PR のメタデータ（files 配列を含む）
 
 ## 検証観点
-1. findings.verified.json が存在する場合は payload.comments[] の各要素が findings[].severity == 'must_fix' の finding に対応すること。存在しない場合は review.md の '## 重大な問題 (Must Fix)' セクション内の '### path:L<行番号>' 見出しに対応すること。Must Fix 以外（findings の should_fix / nit / note、または review.md の '## 改善提案 (Should Fix)' / '## 軽微な指摘 (Nit)' / '## 補足'）由来のエントリが含まれていないこと
+1. findings.verified.json が存在する場合は payload.comments[] の各要素が findings[].severity == 'must_fix' の finding に対応すること。存在しない場合は review.md の '## 重大な問題 (Must Fix)' セクション内の '### path:L<行番号>' 見出しに対応すること。Must Fix 以外（findings の should_fix / nit / note、または review.md の '## 改善提案 (Should Fix)' / '## 軽微な指摘 (Nit)' / '## 補足'）由来のエントリが含まれていないこと。findings.verified.json が存在する場合は、M1 posting contract として severity != 'must_fix' の finding に posting.post_policy == 'inline' が含まれていないことも確認する
 2. payload.comments[] の各 path が metadata.json.files[] に含まれること
 3. payload.comments[] の各エントリで、path と line（および start_line）が pr.diff.ranges.txt の同一 path の hunk 範囲内に収まること（複数行は両端が同一 hunk）
 4. payload.event が 'Must Fix が1件以上 → REQUEST_CHANGES / 0件 → COMMENT' のルールに従うこと

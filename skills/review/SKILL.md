@@ -585,16 +585,16 @@ MCP について:
    - `title` は短い見出し、`problem` / `reason` / `suggestion` は review.md の 3 点組にそのまま再利用できる粒度で書く
    - `axes` は `{real, triggerable, impactful, general}` の 4 軸を必ず埋める。各軸は、2 者が同じ事実を肯定している、または verifier / テスト / CI / 静的解析で肯定できた場合は `yes`、1 者のみの主張または根拠不足なら `unknown`、生レビューまたは根拠が明示的に否定している場合は `no` とする。severity だけから `yes` を推測してはならない
    - `evidence_level` は決定論的に選ぶ。verifier / 再現テスト / CI / 静的解析で確認できたら `verified`、具体的な影響まで説明できるなら `impact_explained`、head diff 上の発火経路を特定できるなら `trigger_path_identified`、2 者が同一問題または同一 trigger path を示すが発火経路・影響が未確定なら `corroborated`、1 者のみまたは根拠が弱い場合は `suspicion` とする。`suspicion` は schema 上 `posting.explanation_postable=false` を強制するため、GitHub 投稿対象にしない
-   - `posting` は `{post_policy, explanation_postable, not_postable_reason?, audience?}` を severity ごとに固定する:
+   - `posting` は M1 の `/pr-codex:send` が **Must Fix のみ自動投稿**する前提に合わせ、`{post_policy, explanation_postable, not_postable_reason?, audience?}` を severity ごとに固定する:
      - `must_fix`: `pr.diff.ranges.txt` 範囲内で、`evidence_level != "suspicion"` かつ説明投稿が安全なものだけ `post_policy=inline` / `explanation_postable=true`。それ以外は `must_fix` として採用せず、`note` + `local_only` または `## 補足` に退避する
-     - `should_fix`: 範囲内かつ説明投稿が安全なら `post_policy=inline` / `explanation_postable=true`。範囲外退避時は `post_policy=local_only` / `audience=human_reviewer` とし、必要なら `not_postable_reason` を付ける
-     - `nit`: `post_policy=body_summary` / `explanation_postable=true` を既定にする。範囲外または低根拠なら `local_only` に退避する
+     - `should_fix`: M1 では GitHub inline 自動投稿対象外のため、説明投稿が安全なら `post_policy=body_summary` / `explanation_postable=true` を既定にする。範囲外・低根拠・投稿に不向きなものは `post_policy=local_only` / `audience=human_reviewer` とし、必要なら `not_postable_reason` を付ける。`should_fix` に `post_policy=inline` は付けない
+     - `nit`: M1 では GitHub inline 自動投稿対象外のため、`post_policy=body_summary` / `explanation_postable=true` を既定にする。範囲外または低根拠なら `local_only` に退避する
      - `note`: `post_policy=local_only` 固定で `audience` を必須にする（既定は `human_reviewer`）。`evidence_level=suspicion` の場合は `explanation_postable=false` / `not_postable_reason=low_evidence_suspicion` を必ず付ける
    - `fingerprint` の入力は README 記載どおり `path` / `category` / `normalized_title` / `primary_symbol` に固定し、`line` は含めない
    - JSON Schema Draft 2020-12 だけでは sibling equality (`id == fingerprint`) や fingerprint 再計算を標準機能だけで強制しづらいため、Step 4c の runtime gate として **全 finding で `id == fingerprint` と正準 fingerprint 再計算一致を確認**する。1 件でもずれたら failed とし、completed にしてはならない
    - **`created_at` は finding 個別には書かない**。Issue #16 の最新 comment と参照 gist を優先し、canonical runtime artifact では top-level `generated_at` に集約する
 4. **破棄ルール (必須)**: `metadata.json.files[]` に含まれないパスへの指摘は canonical findings に採用しない。ファイルパスが `.md` の見出しやコードブロックで言及されていたら、そのパスが `files[]` 配列に属するかを必ず照合する。有益な一般的指摘で残す価値があるものだけ、`severity=note` + `posting.post_policy=local_only` もしくは `review.md` の `## 補足` 末尾に「参考（範囲外）」として残す。`must_fix` / `should_fix` には絶対に採用しない
-5. **コメント可能行範囲の自己検証 (必須)**: `must_fix` / `should_fix` として採用する各 finding について、`location.path` と `location.start_line` / `location.end_line` が `pr.diff.ranges.txt` の同一 `path` の範囲内に収まるかをメインコンテキストで検証する。単一行は `start_line`、複数行は `[start_line, end_line]` の両端が同じ hunk 範囲内にある場合だけ有効とする。範囲外なら、同一ファイルの最も近いコメント可能行へ `location` を差し替え、`problem` または `reason` に `(参考: 元の行 path:L<行番号>)` を補足する。同一ファイルにコメント可能行がない場合は `must_fix` / `should_fix` には採用せず、`note` / `local_only` または `## 補足` に退避する
+5. **コメント可能行範囲の自己検証 (必須)**: `must_fix` として採用する各 finding について、`location.path` と `location.start_line` / `location.end_line` が `pr.diff.ranges.txt` の同一 `path` の範囲内に収まるかをメインコンテキストで検証する。単一行は `start_line`、複数行は `[start_line, end_line]` の両端が同じ hunk 範囲内にある場合だけ有効とする。範囲外なら、同一ファイルの最も近いコメント可能行へ `location` を差し替え、`problem` または `reason` に `(参考: 元の行 path:L<行番号>)` を補足する。同一ファイルにコメント可能行がない場合は `must_fix` には採用せず、`note` / `local_only` または `## 補足` に退避する。`should_fix` / `nit` は M1 では inline 自動投稿対象外だが、`review.md` の参照性を保つため、可能な限り diff 範囲内の head 側行番号を使う
 6. severity が衝突した場合は **conservative min** を採用し、`severity_disputed=true`, `severity_by_source`, `merger_rule_applied="conservative_min_until_verifier_available"`, `verifier_required=true` を記録する。validation status (`metadata_files_member`, `diff_range_valid`) は canonical findings には入れず、必要なら副成果物 `validation-report.json` に分離する
 7. 生レビューを内部的に比較し、最終 findings へ統合する。この比較過程は `review.md` に書かない:
    - **一致点**: 同一原因・同一影響・同一箇所の重複指摘をまとめ、採用判断の信頼度評価に使う
@@ -664,7 +664,7 @@ mv ~/claude-loop-pr-codex/$org-$repository-$pr_number/validation-report.json.tmp
 
 ## 改善提案 (Should Fix)
 
-修正が強く推奨される問題。`findings.verified.json` の `severity=should_fix` から導出し、同じフォーマットで記載する。見出し行番号は必ず `pr.diff.ranges.txt` の同一 path の範囲内に収める。
+修正が強く推奨される問題。`findings.verified.json` の `severity=should_fix` から導出し、同じフォーマットで記載する。M1 の `/pr-codex:send` では inline 自動投稿対象外のため、canonical finding の `posting.post_policy` は `body_summary` または `local_only` とする。見出し行番号は可能な限り `pr.diff.ranges.txt` の同一 path の範囲内に収める。
 
 ### `path/to/file.ext:L<行番号>` (もしくは `path/to/file.ext:L<開始>-L<終了>`)
 

@@ -130,6 +130,12 @@ class ValidateFindingsTest(unittest.TestCase):
         finding["posting"]["explanation_postable"] = True
         self.assert_invalid_without_crash(artifact, "must be false when evidence_level=suspicion")
 
+    def test_malformed_evidence_url_is_invalid_without_crash(self) -> None:
+        artifact = copy.deepcopy(valid_artifact())
+        finding = artifact["findings"][0]
+        finding["evidence"] = [{"type": "reference", "url": "http://[bad"}]
+        self.assert_invalid_without_crash(artifact, ".evidence[0].url: must be a URI")
+
     def test_id_must_equal_recomputed_fingerprint(self) -> None:
         artifact = copy.deepcopy(valid_artifact())
         artifact["findings"][0]["id"] = "0" * 64

@@ -89,7 +89,10 @@ def is_rfc3339_datetime(value: str) -> bool:
 def is_uri(value: str) -> bool:
     if not isinstance(value, str) or not value:
         return False
-    parsed = urlparse(value)
+    try:
+        parsed = urlparse(value)
+    except ValueError:
+        return False
     return bool(parsed.scheme and (parsed.netloc or parsed.scheme in {"urn", "file"}))
 
 
