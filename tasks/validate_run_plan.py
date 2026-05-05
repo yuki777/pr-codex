@@ -21,6 +21,8 @@ RISK_TAG_ENUM = [
     "api_contract",
 ]
 
+ESCAPE_RULE_TEXT = '`\\` → `\\\\`、`"` → `\\"`、`$` → `\\$`、`` ` `` → `\\``'
+
 
 def load_json(path: Path) -> object:
     with path.open() as f:
@@ -318,6 +320,57 @@ def validate_step5_write_order() -> None:
             raise AssertionError(f"duration block missing required snippet: {snippet}")
 
 
+def single_line_containing(text: str, marker: str) -> str:
+    matches = [line for line in text.splitlines() if marker in line]
+    if len(matches) != 1:
+        raise AssertionError(f"expected exactly one line containing {marker!r}, got {len(matches)}")
+    return matches[0]
+
+
+def extract_escape_rule(line: str, pattern: str, name: str) -> str:
+    match = re.search(pattern, line)
+    if not match:
+        raise AssertionError(f"{name} escape rule not found in line: {line}")
+    return match.group("rule")
+
+
+def validate_escape_rule_docs() -> None:
+    text = SKILL_PATH.read_text()
+    criteria_line = single_line_containing(
+        text,
+        "4a / 4b の Bash コマンド文字列中の `{REVIEW_CRITERIA}`",
+    )
+    if "バッククォート (`) を" in criteria_line:
+        raise AssertionError("{REVIEW_CRITERIA} preprocessing must not keep the old backtick-only escape rule")
+    if ESCAPE_RULE_TEXT not in criteria_line or "共通のエスケープ規則" not in criteria_line:
+        raise AssertionError("{REVIEW_CRITERIA} preprocessing must reference the common 4-character escape rule")
+
+    preprocessing_line = single_line_containing(
+        text,
+        "{REVIEW_CRITERIA}` / `{RUN_PLAN_GUIDANCE}` を bash double-quote 内へ差し込む前",
+    )
+    constraint_line = single_line_containing(
+        text,
+        "10. Step 4a / 4b のプロンプト中に含まれる `{REVIEW_CRITERIA}`",
+    )
+    preprocessing_rule = extract_escape_rule(
+        preprocessing_line,
+        r"両方とも (?P<rule>.+?) の順でエスケープする",
+        "Step 4 preprocessing",
+    )
+    constraint_rule = extract_escape_rule(
+        constraint_line,
+        r"差し込み前に \*\*(?P<rule>.+?)\*\* の順でエスケープする",
+        "allowlist rule #10",
+    )
+    if preprocessing_rule != ESCAPE_RULE_TEXT:
+        raise AssertionError(f"Step 4 preprocessing escape rule mismatch: {preprocessing_rule}")
+    if constraint_rule != ESCAPE_RULE_TEXT:
+        raise AssertionError(f"allowlist rule #10 escape rule mismatch: {constraint_rule}")
+    if preprocessing_rule != constraint_rule:
+        raise AssertionError("Step 4 preprocessing and allowlist rule #10 escape rules must match")
+
+
 def validate_schema_contract(schema: dict[str, object]) -> None:
     items = schema["properties"]["risk_tags"]["items"]
     assert items["enum"] == RISK_TAG_ENUM, f"risk_tags enum mismatch: {items['enum']}"
@@ -331,6 +384,7 @@ def main() -> None:
         validate_fixture(fixture, schema)
     validate_threshold_behavior(schema)
     validate_step5_write_order()
+    validate_escape_rule_docs()
     print("run-plan validation passed")
 
 
