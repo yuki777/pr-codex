@@ -22,3 +22,5 @@ jobs:
           sudo apt-get install -y jq
       - name: Validate run-plan contract
         run: python3 tasks/validate_run_plan.py
+      - name: Run findings validator unit tests
+        run: python3 -m unittest tasks.test_validate_findings
