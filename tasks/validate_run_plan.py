@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 import subprocess
 import tempfile
 from pathlib import Path
@@ -116,6 +117,8 @@ def files_list_block() -> str:
     block = extract_bash_block("gh api repos/$org/$repository/pulls/$pr_number/files --paginate")
     if "--json headRefOid,headRefName,baseRefName,files" in block:
         raise AssertionError("Step 2b must not depend on gh pr view --json files")
+    if "set -o pipefail && gh api repos/$org/$repository/pulls/$pr_number/files --paginate" not in block:
+        raise AssertionError("Step 2b paginated files template must enable pipefail")
     return block
 
 
@@ -353,6 +356,27 @@ def validate_paginated_files_template() -> None:
     assert actual == expected, f"paginated files mismatch\nexpected={expected}\nactual={actual}"
 
 
+def validate_paginated_files_pipefail() -> None:
+    jq_filter = extract_jq_filter(files_list_block())
+    partial_page = json.dumps([{"filename": "src/partial.ts"}])
+    command = (
+        "set -o pipefail && "
+        f"(printf '%s\\n' {shlex.quote(partial_page)}; exit 42) | jq -sce {shlex.quote(jq_filter)}"
+    )
+    completed = subprocess.run(
+        ["bash", "-c", command],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode == 0:
+        raise AssertionError(
+            "paginated files pipeline must fail when upstream exits non-zero after partial output\n"
+            f"stdout={completed.stdout}\n"
+            f"stderr={completed.stderr}"
+        )
+
+
 def validate_step5_write_order() -> None:
     text = SKILL_PATH.read_text()
     duration_index = text.index('tmp_run_plan=~/claude-loop-pr-codex/$org-$repository-$pr_number/run-plan.json.tmp')
@@ -480,6 +504,7 @@ def main() -> None:
     schema = load_json(SCHEMA_PATH)
     validate_schema_contract(schema)
     validate_paginated_files_template()
+    validate_paginated_files_pipefail()
     for fixture in ("small", "medium", "large"):
         validate_fixture(fixture, schema)
     validate_threshold_behavior(schema)

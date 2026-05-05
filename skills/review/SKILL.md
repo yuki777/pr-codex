@@ -171,11 +171,11 @@ jq -r '.head_sha' ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.js
 続いて、選定が確定した PR の変更ファイル一覧を **REST API の paginate** で全件取得する。`gh pr view --json files` は 100 件で truncate され得るため、`files_changed > 100` 判定と `metadata.json.files[]` の完全性を守るにはこのテンプレートを使う必要がある。
 
 - いつ使うか: `state != "completed"` の候補、または `state == "completed"` だが保存済み `head_sha` と現在の `$head_sha` が異なる候補に対して実行する
-- 判定条件: 標準出力に `[` で始まる非空の JSON 配列が出力される
+- 判定条件: 標準出力に `[` で始まる非空の JSON 配列が出力される。`set -o pipefail` により `gh api --paginate` が途中ページ出力後に失敗した場合もパイプライン全体が非ゼロ終了する
 - 次アクション: 出力された JSON 配列そのものを `$files_json` として保持する（Bash 変数には JSON 配列文字列をそのまま入れる）。empty files の PR は `missing files` エラーで fail-fast する
 
 ```bash
-gh api repos/$org/$repository/pulls/$pr_number/files --paginate | jq -sce '[.[][] | .filename] | if length == 0 then error("missing files") else . end'
+set -o pipefail && gh api repos/$org/$repository/pulls/$pr_number/files --paginate | jq -sce '[.[][] | .filename] | if length == 0 then error("missing files") else . end'
 ```
 
 `$files_json` の担保理由: Step 4a / 4b で「PR 差分範囲外のファイルをレビュー対象にしない」制約を効かせるため、PR 変更ファイルの一覧を確定情報として skill 下流に伝達する必要がある。Step 2b では REST paginate を使って 101 ファイル以上の PR でも完全な一覧を保持する。
@@ -748,7 +748,7 @@ $CLAUDE_PLUGIN_ROOT/skills/review/
 1. 最上位ルール: テンプレートに明示された構文のみ許可する。テンプレート外の構文追加は禁止
 2. 各テンプレートは 1テンプレート = 1シェル実行単位として扱う
 3. テンプレートの改変は変数置換のみ許可する。フラグ、引数順、引用符、リダイレクト、パイプ、演算子はテンプレート記載どおりに使う
-4. シェル演算子はテンプレート中に明示された `|` `<` `>` `2>` `&&` のみ許可する
+4. シェル演算子はテンプレート中に明示された `|` `<` `>` `2>` `&&` のみ許可する。パイプラインの upstream 失敗検知のため、テンプレート中に明示された `set -o pipefail &&` は削除せずそのまま使う
 5. JSON 生成は `jq -n --arg` / `--argjson` / `--slurpfile` / `--rawfile` を使う。ヒアドキュメントで JSON を直接組み立てない
 6. ファイル書き込みの使い分け:
    - 統合レビュー `review.md` は `Write` ツールで書き出す（`file_path` は `~` / `$...` を展開しないため、実値の絶対パスを渡す）
@@ -764,6 +764,7 @@ $CLAUDE_PLUGIN_ROOT/skills/review/
 補助注記（いずれもテンプレート一字一句原則の具体適用例）:
 
 - `gh api` や `gh pr view` の `--jq` フラグは使わない。テンプレートはすべて `| jq` パイプ形式で統一しており、クォートを含むフラグ値は auto mode の分類器でも停止要因になり得る
+- `set -o pipefail &&` が明示されたテンプレートでは、`gh api --paginate` など upstream の非ゼロ終了を最後段の `jq` 成功で握りつぶさないため、必ずテンプレートどおりに残す
 - `$()` は使わない。コマンド置換はテンプレートに含まれず、auto mode でも承認プロンプトや停止要因になり得る（変数展開 `$org` 等はテンプレート内で使用する）
 - `for` / `while` / `while read` / `xargs` などのループ・反復構文は使わない。テンプレート外であり、実行単位・ログの再現性を崩す
 - Codex CLI のグローバルオプション（`--ask-for-approval` 等）は `exec` サブコマンドよりも前に置くこと。`exec` の後ろに付けると受け付けられず非対話実行が止まる
