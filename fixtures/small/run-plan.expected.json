@@ -1,0 +1,20 @@
+{
+  "files_changed": 2,
+  "hunks": 2,
+  "lines_added": 7,
+  "lines_removed": 2,
+  "risk_tags": [
+    "dependency"
+  ],
+  "selected_hunters": [
+    "claude",
+    "codex"
+  ],
+  "depth_actual": "deep",
+  "recommended_mode": "standard",
+  "skip_reason": null,
+  "estimated_stages": 4,
+  "estimated_timeout_ms": 390900,
+  "actual_duration_ms": null,
+  "actual_tokens": null
+}
