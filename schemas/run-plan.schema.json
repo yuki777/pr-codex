@@ -107,5 +107,34 @@
       ],
       "minimum": 0
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "recommended_mode": {
+            "const": "skip"
+          }
+        },
+        "required": [
+          "recommended_mode"
+        ]
+      },
+      "then": {
+        "properties": {
+          "skip_reason": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "skip_reason": {
+            "type": "null"
+          }
+        }
+      }
+    }
+  ]
 }

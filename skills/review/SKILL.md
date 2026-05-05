@@ -138,27 +138,39 @@ jq -r '.state' ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json
 jq -r '.started_at' ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json
 ```
 
-4. `state == "completed"` の場合は Step 2b で保存済み `head_sha` と現在の `head_sha` の比較を行うため、**ここでは選定を確定せずに必ず Step 2b に進む**。比較テンプレートは Step 2b 末尾に記載。
+4. `state == "completed"` の場合は Step 2b で現在の `head_sha` だけを先に取得し、保存済み `head_sha` と比較するため、**ここでは選定を確定せずに必ず Step 2b に進む**。同一 `head_sha` なら PR 変更ファイル一覧の取得は行わずスキップする。
 
 全候補がスキップなら何もせず終了。
 
 ### Step 2b: 選定PRの `head_sha` / `branch` / `base_branch` / `files` を取得
 
-Step 2 で対象PRを1件選定した直後、未レビュー / failed / stale / completed のどの経路でも必ず実行する。Step 3 の clone と `metadata.json` / `run-plan.json` 作成・Step 4 の PR 差分スコープ制御は `$head_sha` / `$branch` / `$base_branch` / `$files_json` に依存するため、欠落すると後続が破綻する。
+Step 2 で対象PRを1件選定した直後、未レビュー / failed / stale / completed のどの経路でもまず `head_sha` / `branch` / `base_branch` を取得する。`state == "completed"` の場合はこの時点で保存済み `head_sha` と比較し、同一ならスキップして PR 変更ファイル一覧は取得しない。未レビュー / failed / stale、または completed だが `head_sha` が変わっている場合だけ、完全な `files[]` を取得して Step 3 へ進む。Step 3 の clone と `metadata.json` / `run-plan.json` 作成・Step 4 の PR 差分スコープ制御は `$head_sha` / `$branch` / `$base_branch` / `$files_json` に依存するため、選定後に欠落すると後続が破綻する。
 
 まず `head_sha` / `branch` / `base_branch` を取得する。
 
 - いつ使うか: Step 2 で対象PRを1件選定した直後に必ず実行する
 - 判定条件: 標準出力に `{"head_sha":"...","branch":"...","base_branch":"..."}` の JSON が出力される（いずれかが欠落した場合は `jq` が非ゼロ終了し、stderr に `missing <field>` が出る）
-- 次アクション: 出力 JSON の `.head_sha` を `$head_sha`、`.branch` を `$branch`、`.base_branch` を `$base_branch` に保持する。続いて **別テンプレートで完全な `files[]` を取得**し、`state == "completed"` の場合は保存済み `head_sha` と比較、それ以外は Step 3 へ進む
+- 次アクション: 出力 JSON の `.head_sha` を `$head_sha`、`.branch` を `$branch`、`.base_branch` を `$base_branch` に保持する。`state == "completed"` の場合は、続く保存済み `head_sha` 比較テンプレートを先に実行する。一致したらこの候補をスキップし、異なる場合だけ **別テンプレートで完全な `files[]` を取得**して Step 3 へ進む。`state != "completed"` の場合はそのまま完全な `files[]` を取得する
 
 ```bash
 gh pr view $pr_number --repo $org/$repository --json headRefOid,headRefName,baseRefName | jq -ce 'if ((.headRefOid // "") == "") then error("missing headRefOid") elif ((.headRefName // "") == "") then error("missing headRefName") elif ((.baseRefName // "") == "") then error("missing baseRefName") else {head_sha:.headRefOid,branch:.headRefName,base_branch:.baseRefName} end'
 ```
 
-続いて PR 変更ファイル一覧を **REST API の paginate** で全件取得する。`gh pr view --json files` は 100 件で truncate され得るため、`files_changed > 100` 判定と `metadata.json.files[]` の完全性を守るにはこのテンプレートを使う必要がある。
+#### `state == "completed"` の場合の保存済み `head_sha` 比較
 
-- いつ使うか: 上の `head_sha` / `branch` / `base_branch` 取得直後に必ず実行する
+- いつ使うか: Step 2 で `state == "completed"` と判定し、上の `jq -ce` で現在の `$head_sha` を取得した直後に実行する
+- 判定条件: 保存済み `head_sha` を取得できる
+- 次アクション: 保存済みと現在 (`$head_sha`) が異なれば追加コミットありとしてこの候補を選定し、PR 変更ファイル一覧の取得へ進む。一致するなら PR 変更ファイル一覧は取得せず、この候補はスキップして Step 2 で次の候補に戻る
+
+```bash
+jq -r '.head_sha' ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json
+```
+
+#### PR 変更ファイル一覧の取得
+
+続いて、選定が確定した PR の変更ファイル一覧を **REST API の paginate** で全件取得する。`gh pr view --json files` は 100 件で truncate され得るため、`files_changed > 100` 判定と `metadata.json.files[]` の完全性を守るにはこのテンプレートを使う必要がある。
+
+- いつ使うか: `state != "completed"` の候補、または `state == "completed"` だが保存済み `head_sha` と現在の `$head_sha` が異なる候補に対して実行する
 - 判定条件: 標準出力に `[` で始まる非空の JSON 配列が出力される
 - 次アクション: 出力された JSON 配列そのものを `$files_json` として保持する（Bash 変数には JSON 配列文字列をそのまま入れる）。empty files の PR は `missing files` エラーで fail-fast する
 
@@ -178,16 +190,6 @@ gh api repos/$org/$repository/pulls/$pr_number/files --paginate | jq -sce '[.[][
 - `$files_json = ["src/theme.ts","src/App.tsx"]`（**JSON 配列そのままの文字列**。Step 3 の metadata.json 生成で `jq --argjson files "$files_json"` に渡す）
 
 `$files_json` は 2つ目のテンプレートの標準出力そのままを JSON 配列文字列として保持したもの。抽出は Claude 側で 2 回の出力を読み取って変数へ分解する（シェル側で追加の `jq` パイプは挟まない。1 テンプレート = 1 シェル実行単位の原則に従う）。
-
-#### `state == "completed"` の場合の保存済み `head_sha` 比較
-
-- いつ使うか: Step 2 で `state == "completed"` と判定し、上の `jq -ce` で現在の `$head_sha` を取得した直後に実行する
-- 判定条件: 保存済み `head_sha` を取得できる
-- 次アクション: 保存済みと現在 (`$head_sha`) が異なれば追加コミットありとしてこの候補を選定し Step 3 へ進む。一致するならこの候補はスキップし、Step 2 で次の候補に戻る
-
-```bash
-jq -r '.head_sha' ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json
-```
 
 ### Step 3: 作業ディレクトリの準備
 
@@ -367,8 +369,8 @@ jq -n --slurpfile metadata ~/claude-loop-pr-codex/$org-$repository-$pr_number/me
       if any(files[]; test("(^|/)(migrations?|schema|ddl|sql|seed|database|db|prisma|alembic|flyway|liquibase)(/|$|[.])"; "i")) then "data_migration" else empty end,
       if any(files[]; test("(^|/)(package[.]json|package-lock[.]json|pnpm-lock[.]yaml|yarn[.]lock|bun[.]lockb|composer[.]json|composer[.]lock|Gemfile|Gemfile[.]lock|go[.]mod|go[.]sum|Cargo[.]toml|Cargo[.]lock|requirements[.]txt|poetry[.]lock|pyproject[.]toml)$"; "i")) then "dependency" else empty end,
       if any(files[]; test("(^|/)([.]github/|Dockerfile$|docker-compose|helm/|k8s/|terraform/|deploy/|ops/)"; "i")) then "infra" else empty end,
-      if any(files[]; test("(^|/)(tests?|spec)(/|$)|(^|/).*(Test|Spec)[.][^/]+$"; "i")) then "test_touch" else empty end,
-      if any(files[]; test("(openapi|swagger|schema[.]graphql|[.]proto$)"; "i")) then "api_contract" else empty end
+      if any(files[]; (test("(^|/)(tests?|spec)(/|$)|(^|/)[^/]*[._-](test|spec)[.][^/]+$"; "i") or test("(^|/)[^/]*(Test|Spec)[.][^/]+$"))) then "test_touch" else empty end,
+      if any(files[]; test("(^|/)(openapi|swagger)(/|$|[.])|(^|/)schema[.]graphql$|[.]proto$"; "i")) then "api_contract" else empty end
     ];
   def files_changed: (files | length);
   def total_lines: (lines_added + lines_removed);
@@ -573,7 +575,7 @@ MCP について:
    - **相違点**: 一部の生レビューにだけある指摘は、pr.diff と checkout 済みソースで妥当性を再検証して採否と重要度を決める
    - **補完**: 見落とされていた観点が補われている場合は、根拠を確認したうえで最終レビューに反映する
    - review.md には最終判断のみを書く。レビュー実行者名 / モデル名 / どの生レビュー由来かを示す表現 / '両者一致' / '片方のみ' のような由来表現は書かない
-6. `run-plan.json.skip_reason` が非 null の場合は、`## 補足` に `- preflight: <skip_reason>。M1 の既定では focused fallback でレビューを継続した。` を最低限残す
+6. `run-plan.json` で `skip_reason != null`、`recommended_mode != "standard"`、または `depth_actual != "deep"` のいずれかに該当する場合は、`## 補足` に preflight 情報を最低限残す。`skip_reason != null` の場合は `- preflight: <skip_reason>。M1 の既定では focused fallback でレビューを継続した。` を含める。加えて `files_changed` / `lines_added` / `lines_removed` / `recommended_mode` / `depth_actual` / `risk_tags` を明記し、レビュー範囲や重点が意図的に変わった事実を受け手が判断できるようにする
 7. 統合した最終レビューを `Write` ツールで `$HOME/claude-loop-pr-codex/<org>-<repository>-<pr_number>/review.md` に書き出す（`<...>` は実値に置換した絶対パスで指定する）
 
 - いつ使うか: `claude-review.md` と `codex-review.md` の両方が揃った後

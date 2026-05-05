@@ -21,6 +21,26 @@ RISK_TAG_ENUM = [
     "api_contract",
 ]
 
+RISK_TAG_CASES = [
+    ("src/auth/login.go", {"security"}),
+    ("config/oauth.json", {"security"}),
+    ("notauth.go", set()),
+    ("db/seed.sql", {"data_migration"}),
+    ("composer.json", {"dependency"}),
+    (".github/workflows/ci.yml", {"infra"}),
+    ("tests/foo_test.go", {"test_touch"}),
+    ("src/UserTest.php", {"test_touch"}),
+    ("latest.go", set()),
+    ("attest.go", set()),
+    ("api/openapi.yaml", {"api_contract"}),
+    ("docs/swagger.json", {"api_contract"}),
+    ("schema.graphql", {"data_migration", "api_contract"}),
+    ("proto/service.proto", {"api_contract"}),
+    ("notopenapi.go", set()),
+    ("frontend/swagger-foo-helper.go", set()),
+    ("myschema.graphql.bak", set()),
+]
+
 ESCAPE_RULE_TEXT = '`\\` → `\\\\`、`"` → `\\"`、`$` → `\\$`、`` ` `` → `\\``'
 
 
@@ -190,8 +210,19 @@ def validate_schema(schema: dict[str, object], value: object, path: str = "$") -
         elif not json_type_matches(expected_type, value):
             raise AssertionError(f"{path}: expected {expected_type}, got {type(value).__name__}")
 
+    if "const" in schema and value != schema["const"]:
+        raise AssertionError(f"{path}: expected const {schema['const']!r}, got {value!r}")
+
     if "enum" in schema and value not in schema["enum"]:
         raise AssertionError(f"{path}: expected one of {schema['enum']}, got {value!r}")
+
+    for index, child_schema in enumerate(schema.get("allOf", [])):
+        validate_schema(child_schema, value, f"{path}.allOf[{index}]")
+
+    if "if" in schema:
+        branch = schema.get("then") if schema_matches(schema["if"], value) else schema.get("else")
+        if branch:
+            validate_schema(branch, value, path)
 
     if value is None:
         return
@@ -226,6 +257,14 @@ def validate_schema(schema: dict[str, object], value: object, path: str = "$") -
         for key, child_schema in properties.items():
             if key in value:
                 validate_schema(child_schema, value[key], f"{path}.{key}")
+
+
+def schema_matches(schema: dict[str, object], value: object) -> bool:
+    try:
+        validate_schema(schema, value)
+    except AssertionError:
+        return False
+    return True
 
 
 def validate_fixture(name: str, schema: dict[str, object]) -> None:
@@ -295,6 +334,17 @@ def validate_threshold_behavior(schema: dict[str, object]) -> None:
     validate_schema(schema, duration_case)
 
 
+def validate_risk_tag_detection() -> None:
+    for path, expected_tags in RISK_TAG_CASES:
+        actual = synthetic_plan([path], 1, 1, 0)
+        actual_tags = set(actual["risk_tags"])
+        assert actual_tags == expected_tags, (
+            f"{path}: risk_tags mismatch\n"
+            f"expected={sorted(expected_tags)}\n"
+            f"actual={sorted(actual_tags)}"
+        )
+
+
 def validate_paginated_files_template() -> None:
     page_one = [{"filename": f"src/file_{index}.ts"} for index in range(100)]
     page_two = [{"filename": "src/file_100.ts"}]
@@ -318,6 +368,42 @@ def validate_step5_write_order() -> None:
     for snippet in required_snippets:
         if snippet not in block:
             raise AssertionError(f"duration block missing required snippet: {snippet}")
+
+
+def validate_completed_head_check_before_files() -> None:
+    text = SKILL_PATH.read_text()
+    head_index = text.index('gh pr view $pr_number --repo $org/$repository --json headRefOid,headRefName,baseRefName')
+    saved_head_section_index = text.index('#### `state == "completed"` の場合の保存済み `head_sha` 比較')
+    saved_head_index = text.index("jq -r '.head_sha' ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json")
+    files_index = text.index("gh api repos/$org/$repository/pulls/$pr_number/files --paginate")
+    if not (head_index < saved_head_index < files_index):
+        raise AssertionError("completed head_sha comparison must be documented before paginated files fetch")
+
+    text_between = text[saved_head_section_index:files_index]
+    required_snippets = [
+        "一致するなら PR 変更ファイル一覧は取得せず",
+        "異なれば追加コミットありとしてこの候補を選定し、PR 変更ファイル一覧の取得へ進む",
+    ]
+    for snippet in required_snippets:
+        if snippet not in text_between:
+            raise AssertionError(f"completed head_sha comparison docs missing required snippet: {snippet}")
+
+
+def validate_review_preflight_supplement_docs() -> None:
+    text = SKILL_PATH.read_text()
+    line = single_line_containing(text, "## 補足` に preflight 情報")
+    required_terms = [
+        'skip_reason != null',
+        'recommended_mode != "standard"',
+        'depth_actual != "deep"',
+        'files_changed',
+        'lines_added',
+        'lines_removed',
+        'risk_tags',
+    ]
+    for term in required_terms:
+        if term not in line:
+            raise AssertionError(f"review preflight supplement docs missing required term: {term}")
 
 
 def single_line_containing(text: str, marker: str) -> str:
@@ -375,6 +461,20 @@ def validate_schema_contract(schema: dict[str, object]) -> None:
     items = schema["properties"]["risk_tags"]["items"]
     assert items["enum"] == RISK_TAG_ENUM, f"risk_tags enum mismatch: {items['enum']}"
 
+    skip_plan = synthetic_plan([f"src/file_{index}.ts" for index in range(101)], 1, 1, 0)
+    validate_schema(schema, skip_plan)
+
+    missing_skip_reason = dict(skip_plan, skip_reason=None)
+    if schema_matches(schema, missing_skip_reason):
+        raise AssertionError("schema must reject skip recommended_mode with null skip_reason")
+
+    focused_with_reason = dict(
+        synthetic_plan([f"src/file_{index}.ts" for index in range(51)], 1, 1, 0),
+        skip_reason="unexpected",
+    )
+    if schema_matches(schema, focused_with_reason):
+        raise AssertionError("schema must reject non-skip recommended_mode with non-null skip_reason")
+
 
 def main() -> None:
     schema = load_json(SCHEMA_PATH)
@@ -383,6 +483,9 @@ def main() -> None:
     for fixture in ("small", "medium", "large"):
         validate_fixture(fixture, schema)
     validate_threshold_behavior(schema)
+    validate_risk_tag_detection()
+    validate_completed_head_check_before_files()
+    validate_review_preflight_supplement_docs()
     validate_step5_write_order()
     validate_escape_rule_docs()
     print("run-plan validation passed")
