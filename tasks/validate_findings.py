@@ -107,18 +107,34 @@ def primary_symbol(title: str) -> str:
 
 
 def compute_fingerprint(finding: dict[str, Any]) -> str:
-    location = finding.get("location", {})
-    path = location.get("path", "")
-    category = finding.get("category", "")
-    title = finding.get("title", "")
-    normalized_title = normalize_title(title) if isinstance(title, str) else ""
-    symbol = primary_symbol(title) if isinstance(title, str) else ""
+    raw_location = finding.get("location")
+    location = raw_location if isinstance(raw_location, dict) else {}
+
+    raw_path = location.get("path")
+    path = raw_path if isinstance(raw_path, str) else ""
+
+    raw_category = finding.get("category")
+    category = raw_category if isinstance(raw_category, str) else ""
+
+    raw_title = finding.get("title")
+    title = raw_title if isinstance(raw_title, str) else ""
+
+    normalized_title = normalize_title(title)
+    symbol = primary_symbol(title)
     material = "\x1f".join([path, category, normalized_title, symbol])
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
 def enum_from_schema(schema: dict[str, Any], name: str, fallback: set[str]) -> set[str]:
-    values = schema.get("$defs", {}).get(name, {}).get("enum")
+    if not isinstance(schema, dict):
+        return fallback
+    defs = schema.get("$defs")
+    if not isinstance(defs, dict):
+        return fallback
+    definition = defs.get(name)
+    if not isinstance(definition, dict):
+        return fallback
+    values = definition.get("enum")
     return set(values) if isinstance(values, list) and all(isinstance(v, str) for v in values) else fallback
 
 
@@ -320,14 +336,14 @@ def validate_artifact(schema: dict[str, Any], data: Any) -> list[str]:
             if posting.get("post_policy") == "local_only" and "audience" not in posting:
                 errors.append(f"{fpath}.posting.audience: required when post_policy=local_only")
 
-        if finding.get("severity_disputed") is not None and not isinstance(finding.get("severity_disputed"), bool):
+        if "severity_disputed" in finding and not isinstance(finding["severity_disputed"], bool):
             errors.append(f"{fpath}.severity_disputed: must be boolean")
         if finding.get("severity_disputed") is True:
             for key in ("severity_by_source", "merger_rule_applied", "verifier_required"):
                 if key not in finding:
                     errors.append(f"{fpath}.{key}: required when severity_disputed=true")
-        severity_by_source = finding.get("severity_by_source")
-        if severity_by_source is not None:
+        if "severity_by_source" in finding:
+            severity_by_source = finding["severity_by_source"]
             if not isinstance(severity_by_source, dict) or not severity_by_source:
                 errors.append(f"{fpath}.severity_by_source: must be a non-empty object")
             else:
@@ -339,8 +355,8 @@ def validate_artifact(schema: dict[str, Any], data: Any) -> list[str]:
         if "verifier_required" in finding and not isinstance(finding.get("verifier_required"), bool):
             errors.append(f"{fpath}.verifier_required: must be boolean")
 
-        evidence = finding.get("evidence")
-        if evidence is not None:
+        if "evidence" in finding:
+            evidence = finding["evidence"]
             if not isinstance(evidence, list):
                 errors.append(f"{fpath}.evidence: must be an array")
             else:
@@ -360,8 +376,8 @@ def validate_artifact(schema: dict[str, Any], data: Any) -> list[str]:
                     if "url" in item and not is_uri(item.get("url")):
                         errors.append(f"{epath}.url: must be a URI")
 
-        php = finding.get("php")
-        if php is not None:
+        if "php" in finding:
+            php = finding["php"]
             if not isinstance(php, dict):
                 errors.append(f"{fpath}.php: must be an object")
             else:
