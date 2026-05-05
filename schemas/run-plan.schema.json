@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yuki777/pr-codex/blob/main/schemas/run-plan.schema.json",
+  "title": "pr-codex run-plan artifact",
+  "description": "Preflight and post-run execution metadata for /pr-codex:review.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "files_changed",
+    "hunks",
+    "lines_added",
+    "lines_removed",
+    "risk_tags",
+    "selected_hunters",
+    "depth_actual",
+    "recommended_mode",
+    "skip_reason",
+    "estimated_stages",
+    "estimated_timeout_ms",
+    "actual_duration_ms",
+    "actual_tokens"
+  ],
+  "properties": {
+    "files_changed": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "hunks": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "lines_added": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "lines_removed": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "risk_tags": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "security",
+          "data_migration",
+          "dependency",
+          "infra",
+          "test_touch",
+          "api_contract"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "selected_hunters": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": [
+          "claude",
+          "codex"
+        ]
+      }
+    },
+    "depth_actual": {
+      "type": "string",
+      "enum": [
+        "deep",
+        "standard"
+      ]
+    },
+    "recommended_mode": {
+      "type": "string",
+      "enum": [
+        "standard",
+        "focused",
+        "skip"
+      ]
+    },
+    "skip_reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "estimated_stages": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "estimated_timeout_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "actual_duration_ms": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "actual_tokens": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "recommended_mode": {
+            "const": "skip"
+          }
+        },
+        "required": [
+          "recommended_mode"
+        ]
+      },
+      "then": {
+        "properties": {
+          "skip_reason": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "skip_reason": {
+            "type": "null"
+          }
+        }
+      }
+    }
+  ]
+}
