@@ -471,13 +471,13 @@ MCP について:
 
 1. `claude-review.md` / `codex-review.md` / `pr.diff.ranges.txt` / `metadata.json` を読み、さらに canonical schema として `$CLAUDE_PLUGIN_ROOT/schemas/findings.v1.json` を Read する（パス解決は Step 4 前処理の `REVIEW_CRITERIA.md` と同じく `$CLAUDE_PLUGIN_ROOT` 基準で行う）
 2. **スコープ検証 (必須)**: どちらか一方でも本文が `PR_DIFF_UNAVAILABLE` のみなら、統合成果物は作成せず Step 5 の **failed 更新** へ遷移する（`findings.verified.json` / `review.md` は生成しない）
-3. まず 2 つの生レビューから finding 候補を正規化し、**`findings.verified.json` をメモリ上で先に構築する**。`review.md` も同じくメモリ上でこの canonical artifact から派生生成し、ID / 件数 gate と temp file への外部 schema validation を通すまで final path へは書き出さない。`findings.verified.json` は `schemas/findings.v1.json` に従い、最低限以下を満たす:
+3. まず 2 つの生レビューから finding 候補を正規化し、**`findings.verified.json` をメモリ上で先に構築する**。`review.md` も同じくメモリ上でこの canonical artifact から派生生成し、ID / fingerprint 再計算 / 件数 gate と temp file への同梱 validator 検証を通すまで final path へは書き出さない。`findings.verified.json` は `schemas/findings.v1.json` に従い、最低限以下を満たす:
    - top-level: `schema_version = "findings.v1"`, `producer`, `pr`, `generated_at`, `findings[]`
    - `producer.name` は `pr-codex`、`producer.version` は Step 4 前処理で `$CLAUDE_PLUGIN_ROOT/.claude-plugin/plugin.json` から読んだ `$plugin_version`、`producer.run_id` は `<org>-<repository>-<pr_number>-<head_sha>` のような再生成可能な値にする
    - `pr.repository` は `metadata.json.repository_full_name`（owner/repo 形式）を使い、`pr.number` / `pr.base_sha` / `pr.head_sha` も `metadata.json` から埋める。`merge_commit_sha` は `metadata.json.merge_commit_sha` が `null` でない場合のみ入れる
    - canonical finding では **`source_agent` 単数形は使わず**、`source_agents[]` と `merged_from[]` を使う。`merged_from[]` には生レビュー中の見出しや内部IDなど、由来追跡できる文字列を入れる
    - `id` は M1 では **`fingerprint` と完全に同じ値**に固定する。`fingerprint` は README の「fingerprint 正準アルゴリズム」で定義された `lowercase_hex(sha256(path + "\x1f" + category + "\x1f" + normalized_title + "\x1f" + (primary_symbol || "")))` だけを使う。別のハッシュ、UUID、連番、`run_id` 付き ID は使わない
-   - `normalized_title` は `title` を Unicode NFKC → Unicode lowercase → 連続空白を ASCII space 1 個へ畳み込み → 前後 trim → 末尾の Unicode punctuation（General Category P*）をなくなるまで除去、の順で正規化する。`primary_symbol` は `title` 内で最初に backtick で囲まれた symbol に固定し、存在しない場合は空文字列にする
+   - `normalized_title` は `title` を Unicode NFKC → Unicode lowercase → 連続空白を ASCII space 1 個へ畳み込み → 前後 trim → 末尾の Unicode punctuation（General Category P*）をなくなるまで除去 → 最後に右 trim、の順で正規化する。`primary_symbol` は `title` 内で最初に backtick で囲まれた symbol を前後 trim した値に固定し、存在しない場合は空文字列にする
    - `location` は `{path, start_line, end_line?, side, diff_hunk_ref?}`。本 workflow では head 基準のため `side` は通常 `RIGHT` を使う
    - `category` は schema enum の `bug` / `security` / `performance` / `tests` / `design` / `code_quality` / `consistency` / `runtime_error` のいずれかだけを使う。`bugs` や `security_issue` のような自由ラベルは禁止。人間向けの細分類が必要な場合だけ、`fingerprint` 入力外の `category_label` に入れる
    - `title` は短い見出し、`problem` / `reason` / `suggestion` は review.md の 3 点組にそのまま再利用できる粒度で書く
@@ -489,7 +489,7 @@ MCP について:
      - `nit`: `post_policy=body_summary` / `explanation_postable=true` を既定にする。範囲外または低根拠なら `local_only` に退避する
      - `note`: `post_policy=local_only` 固定で `audience` を必須にする（既定は `human_reviewer`）。`evidence_level=suspicion` の場合は `explanation_postable=false` / `not_postable_reason=low_evidence_suspicion` を必ず付ける
    - `fingerprint` の入力は README 記載どおり `path` / `category` / `normalized_title` / `primary_symbol` に固定し、`line` は含めない
-   - JSON Schema Draft 2020-12 だけでは `id == fingerprint` の sibling equality を標準機能で強制しづらいため、Step 4c の runtime gate として **全 finding で `id == fingerprint` を確認**する。1 件でもずれたら failed とし、completed にしてはならない
+   - JSON Schema Draft 2020-12 だけでは sibling equality (`id == fingerprint`) や fingerprint 再計算を標準機能だけで強制しづらいため、Step 4c の runtime gate として **全 finding で `id == fingerprint` と正準 fingerprint 再計算一致を確認**する。1 件でもずれたら failed とし、completed にしてはならない
    - **`created_at` は finding 個別には書かない**。Issue #16 の最新 comment と参照 gist を優先し、canonical runtime artifact では top-level `generated_at` に集約する
 4. **破棄ルール (必須)**: `metadata.json.files[]` に含まれないパスへの指摘は canonical findings に採用しない。ファイルパスが `.md` の見出しやコードブロックで言及されていたら、そのパスが `files[]` 配列に属するかを必ず照合する。有益な一般的指摘で残す価値があるものだけ、`severity=note` + `posting.post_policy=local_only` もしくは `review.md` の `## 補足` 末尾に「参考（範囲外）」として残す。`must_fix` / `should_fix` には絶対に採用しない
 5. **コメント可能行範囲の自己検証 (必須)**: `must_fix` / `should_fix` として採用する各 finding について、`location.path` と `location.start_line` / `location.end_line` が `pr.diff.ranges.txt` の同一 `path` の範囲内に収まるかをメインコンテキストで検証する。単一行は `start_line`、複数行は `[start_line, end_line]` の両端が同じ hunk 範囲内にある場合だけ有効とする。範囲外なら、同一ファイルの最も近いコメント可能行へ `location` を差し替え、`problem` または `reason` に `(参考: 元の行 path:L<行番号>)` を補足する。同一ファイルにコメント可能行がない場合は `must_fix` / `should_fix` には採用せず、`note` / `local_only` または `## 補足` に退避する
@@ -500,22 +500,22 @@ MCP について:
    - **補完**: 見落とされていた観点が補われている場合は、根拠を確認したうえで最終 findings に反映する
    - `review.md` には最終判断のみを書く。レビュー実行者名 / モデル名 / どの生レビュー由来かを示す表現 / `両者一致` / `片方のみ` のような由来表現は書かない
 8. `review.md` は **`findings.verified.json` から派生生成** する。`must_fix` → `## 重大な問題 (Must Fix)`, `should_fix` → `## 改善提案 (Should Fix)`, `nit` → `## 軽微な指摘 (Nit)`, `note` や `post_policy=local_only/suppress` の項目 → `## 補足` に対応させる。`## 総評` と `## 良い点` は人間向け要約として記述してよいが、Must Fix / Should Fix の件数や内容が canonical findings と矛盾してはならない
-9. **ID 整合 gate (必須)**: 全 finding で `id == fingerprint` を確認する。1 件でもずれたら Step 5 の **failed 更新** へ遷移し、final artifact を書き出してはならない
+9. **fingerprint 整合 gate (必須)**: 全 finding で `id == fingerprint` を確認し、さらに `path` / `category` / `title` から README の正準アルゴリズムで fingerprint を再計算した値が JSON 内の `fingerprint` と一致することを、後述の `tasks/validate_findings.py` で検証する。1 件でもずれたら Step 5 の **failed 更新** へ遷移し、final artifact を書き出してはならない
 10. **件数一致 gate (必須)**: `findings.verified.json` の `severity=must_fix` 件数と、派生生成した `review.md` の `## 重大な問題 (Must Fix)` 見出し件数は **100% 一致** させる。1 件でもずれたら Step 5 の **failed 更新** へ遷移し、completed にしてはならない
 11. 上記 runtime gate を通過した場合のみ、`findings.verified.json` / `review.md`（必要なら `validation-report.json` も）をまず `*.tmp` へ `Write` ツールで書き出す
-12. **schema validation gate (必須)**: `findings.verified.json.tmp` を Ajv Draft 2020-12 で `schemas/findings.v1.json` に照らして外部検証する。必須フィールド欠落、型不一致、enum 不一致、`posting` / `evidence_level` 条件違反、`pr.number` 非整数など 1 件でも schema に反したら Step 5 の **failed 更新** へ遷移し、final artifact を書き出してはならない
-13. temp write と Ajv validation が成功した場合のみ Bash の `mv` で final path へ反映する。途中で temp write / Ajv validation / `mv` のいずれかが失敗した場合は Step 5 の **failed 更新** へ遷移し、completed にしてはならない
+12. **同梱 validator gate (必須)**: `findings.verified.json.tmp` を `tasks/validate_findings.py` で検証する。必須フィールド欠落、型不一致、enum 不一致、`posting` / `evidence_level` 条件違反、`pr.number` 非整数、RFC3339 / URI format 不正、`end_line < start_line`、`id != fingerprint`、fingerprint 再計算不一致など 1 件でも contract に反したら Step 5 の **failed 更新** へ遷移し、final artifact を書き出してはならない
+13. temp write と同梱 validator が成功した場合のみ Bash の `mv` で final path へ反映する。途中で temp write / validator / `mv` のいずれかが失敗した場合は Step 5 の **failed 更新** へ遷移し、completed にしてはならない
 
 - いつ使うか: `claude-review.md` と `codex-review.md` の両方が揃った後
-- 判定条件: 全 finding で `id == fingerprint` が成り立ち、`review.md` と Must Fix 件数が一致し、`findings.verified.json.tmp` が Ajv schema validation を通過したうえで temp file → final path の反映まで完了する（`PR_DIFF_UNAVAILABLE` の場合は生成しない）
-- 次アクション: 書き出し後 Step 5 へ進む（`PR_DIFF_UNAVAILABLE` / `id != fingerprint` / 件数不一致 / temp write failure / Ajv schema validation failure / `mv` failure があった場合は Step 5 failed 分岐へ）
+- 判定条件: 全 finding で `id == fingerprint` が成り立ち、`review.md` と Must Fix 件数が一致し、`findings.verified.json.tmp` が同梱 validator を通過したうえで temp file → final path の反映まで完了する（`PR_DIFF_UNAVAILABLE` の場合は生成しない）
+- 次アクション: 書き出し後 Step 5 へ進む（`PR_DIFF_UNAVAILABLE` / `id != fingerprint` / 件数不一致 / temp write failure / validator failure / `mv` failure があった場合は Step 5 failed 分岐へ）
 
 `Write` ツールは `~` やシェル変数（`$org` 等）を展開しない。`file_path` にはホームディレクトリを `$HOME` の実値（例: `/Users/adachi`）に展開済みの絶対パスを渡し、`$org` / `$repository` / `$pr_number` も実値に置換してから呼び出すこと。`findings.verified.json` の JSON 本文も、プレースホルダを残さず実値で埋める。temp file を使う場合も同様に絶対パスで指定する。
 
-temp file 書き出し後、final artifact へ反映する前に以下の外部 validator を必ず実行する。`$CLAUDE_PLUGIN_ROOT` が shell 環境で未設定の場合は、Step 4 前処理で解決した plugin root の絶対パスに置換してから Bash ツールへ渡す（コマンド構造は変えない）。
+temp file 書き出し後、final artifact へ反映する前に以下の同梱 validator を必ず実行する。`$CLAUDE_PLUGIN_ROOT` が shell 環境で未設定の場合は、Step 4 前処理で解決した plugin root の絶対パスに置換してから Bash ツールへ渡す（コマンド構造は変えない）。この validator は stdlib-only で、npm cache やネットワークを使わず、作業ディレクトリ外へ書き込まない。
 
 ```bash
-npx --yes ajv-cli@5 validate --spec=draft2020 --strict=false --validate-formats=false -s $CLAUDE_PLUGIN_ROOT/schemas/findings.v1.json -d ~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.verified.json.tmp --errors=text
+python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings.py --schema $CLAUDE_PLUGIN_ROOT/schemas/findings.v1.json --data ~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.verified.json.tmp
 ```
 
 temp file を final artifact に反映する際は、以下の `mv` テンプレートだけを使う。`review.md` を先に反映し、その後 `findings.verified.json` を反映する。これにより `findings.verified.json` だけが残る状態を避け、completed 更新前に send primary path の前提が成立しないようにする。
@@ -631,7 +631,7 @@ jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" --arg head
 - `codex exec` がタイムアウト（20分） → `state=failed` で記録
 - `codex exec` が非ゼロ終了 → `state=failed` で記録
 - **`claude-review.md` / `codex-review.md` のいずれかが `PR_DIFF_UNAVAILABLE` のみ → `state=failed` で記録し、`review.md` は生成しない**
-- **`findings.verified.json.tmp` が Ajv による `schemas/findings.v1.json` validation に失敗 → `state=failed` で記録し、final artifact は反映しない**
+- **`findings.verified.json.tmp` が同梱 validator による `schemas/findings.v1.json` validation / fingerprint 再計算 / format / range validation に失敗 → `state=failed` で記録し、final artifact は反映しない**
 - **`findings.verified.json` のいずれかの finding で `id != fingerprint` → `state=failed` で記録し、final artifact は反映しない**
 - **`findings.verified.json` の Must Fix 件数と `review.md` の Must Fix 見出し件数が不一致 → `state=failed` で記録し、send へ進めない**
 - **`*.tmp` の Write または temp → final の `mv` が失敗 → `state=failed` で記録し、completed にしない**
@@ -645,6 +645,8 @@ jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" --arg head
 $CLAUDE_PLUGIN_ROOT/skills/review/
   ├── SKILL.md                ← 本ファイル
   └── REVIEW_CRITERIA.md      ← 4a / 4b 共通のレビュー観点本文。Step 4 前処理で Read し、{REVIEW_CRITERIA} プレースホルダに置換
+$CLAUDE_PLUGIN_ROOT/tasks/
+  └── validate_findings.py    ← canonical findings の schema / fingerprint / format / range validator
 ```
 
 実行時の作業ディレクトリ:
@@ -674,7 +676,7 @@ $CLAUDE_PLUGIN_ROOT/skills/review/
 
 本スキルは Claude Code を `--permission-mode auto` で起動することを前提とする（README の「使い方」参照）。auto mode でも、許可済みツールやコマンドの内容によっては分類器の判断で承認が必要になり得るため、本スキルではテンプレートに明示された操作だけを実行する。
 
-ローカルの書き込みは作業ディレクトリ `~/claude-loop-pr-codex/` 配下に限り、`clone-claude/` / `clone-codex/` の作成と更新、`status.json` / `metadata.json` / `pr.diff` / `pr.diff.ranges.txt` / `claude.log` / `codex.log` / `claude-review.md` / `codex-review.md` / `findings.verified.json` / `validation-report.json` / `review.md` と、それらの `*.tmp` 一時ファイル作成のみ許可する。schema validation のために `npx --yes ajv-cli@5 validate ...` を実行してよいが、validator は成果物を書き換えず検証だけに使う。
+ローカルの書き込みは作業ディレクトリ `~/claude-loop-pr-codex/` 配下に限り、`clone-claude/` / `clone-codex/` の作成と更新、`status.json` / `metadata.json` / `pr.diff` / `pr.diff.ranges.txt` / `claude.log` / `codex.log` / `claude-review.md` / `codex-review.md` / `findings.verified.json` / `validation-report.json` / `review.md` と、それらの `*.tmp` 一時ファイル作成のみ許可する。schema / fingerprint validation のために `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings.py ...` を実行してよいが、validator は成果物を書き換えず検証だけに使う。
 
 許可ルールは以下の allowlist に従う。
 
@@ -690,7 +692,7 @@ $CLAUDE_PLUGIN_ROOT/skills/review/
    - `pr.diff.ranges.txt` は Step 3 の `awk` の標準出力を `>` でリダイレクトして作成する
    - `claude-review.md` / `codex-review.md` / `claude.log` / `codex.log` は Step 4a / 4b の標準出力・標準エラーを `>` / `2>` でリダイレクトして作成する
 7. Step 4a / 4b の timeout は必ず `1200000` に固定する
-8. テンプレートに明示された `git fetch` / `git checkout FETCH_HEAD` / `npx --yes ajv-cli@5 validate ...` / temp file から final artifact への `mv` / 成果物ファイル作成以外の状態変更操作は実行しない。禁止例: `git push` / `git merge` / `git reset --*` / `git clean -fd[x]` / `git stash` / `git commit` / `git tag` / `git branch -D`、`rm -rf` 系、`gh pr` / `gh issue` の write 操作、および GitHub / Backlog / DocBase の write 系 MCP ツール
+8. テンプレートに明示された `git fetch` / `git checkout FETCH_HEAD` / `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings.py ...` / temp file から final artifact への `mv` / 成果物ファイル作成以外の状態変更操作は実行しない。禁止例: `git push` / `git merge` / `git reset --*` / `git clean -fd[x]` / `git stash` / `git commit` / `git tag` / `git branch -D`、`rm -rf` 系、`gh pr` / `gh issue` の write 操作、および GitHub / Backlog / DocBase の write 系 MCP ツール
 9. 1回の実行で選定・処理する PR は 1 件のみとする
 10. Step 4a / 4b のプロンプト中に含まれる `{REVIEW_CRITERIA}` プレースホルダは、Step 4 前処理で Read した `REVIEW_CRITERIA.md` の本文を **bash double-quote 内で安全になるようバッククォート (`) を `\`` にエスケープした文字列** で置換したうえで、Bash ツールに渡す完全体のコマンド文字列として使う。置換は Claude 側で行い、シェルでのコマンド置換 (`$()`) やヒアドキュメントは使わない
 

@@ -4,7 +4,7 @@
   "title": "pr-codex canonical findings v1",
   "type": "object",
   "additionalProperties": false,
-  "$comment": "Issue #16 latest comment and the associated gist finalized top-level generated_at for canonical findings. The older per-finding created_at field is intentionally omitted here. M1 fixes finding.id to the same deterministic lowercase sha256 hex value as fingerprint so retries and send.source_finding_id can track a finding stably. Fingerprint canonical form: lowercase_hex(sha256(path + U+001F + category + U+001F + normalized_title + U+001F + primary_symbol_or_empty)); normalized_title uses Unicode NFKC, Unicode lowercase, whitespace collapse, trim, and trailing Unicode punctuation (General Category P*) removal; primary_symbol is the first back-ticked symbol in title, or empty string if absent.",
+  "$comment": "Issue #16 latest comment and the associated gist finalized top-level generated_at for canonical findings. The older per-finding created_at field is intentionally omitted here. M1 fixes finding.id to the same deterministic lowercase sha256 hex value as fingerprint so retries and send.source_finding_id can track a finding stably. Fingerprint canonical form: lowercase_hex(sha256(path + U+001F + category + U+001F + normalized_title + U+001F + primary_symbol_or_empty)); normalized_title uses Unicode NFKC, Unicode lowercase, whitespace collapse, trim, and trailing Unicode punctuation (General Category P*) removal followed by a final right trim; primary_symbol is the trimmed first back-ticked symbol in title, or empty string if absent.",
   "required": [
     "schema_version",
     "producer",
@@ -181,7 +181,8 @@
         },
         "end_line": {
           "type": "integer",
-          "minimum": 1
+          "minimum": 1,
+          "description": "Optional inclusive end line for multi-line comments. Must be greater than or equal to start_line; the bundled tasks/validate_findings.py enforces this cross-field rule."
         },
         "side": {
           "description": "Schema keeps LEFT/RIGHT for forward compatibility, but the M1 review/send workflow only emits and accepts RIGHT. LEFT must be rejected by the current send primary path until old-side range validation exists.",
@@ -521,7 +522,7 @@
     "fingerprint": {
       "type": "string",
       "pattern": "^[0-9a-f]{64}$",
-      "description": "Deterministic lowercase hex SHA-256. Compute lowercase_hex(sha256(path + U+001F + category + U+001F + normalized_title + U+001F + primary_symbol_or_empty)); normalized_title = title normalized with Unicode NFKC, Unicode lowercase, whitespace collapsed to one ASCII space, trimmed, and trailing Unicode punctuation (General Category P*) removed; primary_symbol = first back-ticked symbol in title, or empty string. In M1, id must equal fingerprint."
+      "description": "Deterministic lowercase hex SHA-256. Compute lowercase_hex(sha256(path + U+001F + category + U+001F + normalized_title + U+001F + primary_symbol_or_empty)); normalized_title = title normalized with Unicode NFKC, Unicode lowercase, whitespace collapsed to one ASCII space, trimmed, and trailing Unicode punctuation (General Category P*) removed followed by a final right trim; primary_symbol = trimmed first back-ticked symbol in title, or empty string. In M1, id must equal fingerprint."
     }
   }
 }
