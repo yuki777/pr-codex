@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import urllib.request
+import hashlib
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,6 +28,8 @@ DEFAULT_HERMES_ROOT = Path(os.environ.get("PR_CODEX_HERMES_ROOT", "~/.hermes")).
 DEFAULT_STATE_PATH = DEFAULT_HERMES_ROOT / "automation" / "pr-codex" / "state.json"
 DEFAULT_OUTBOX_PATH = DEFAULT_HERMES_ROOT / "automation" / "pr-codex" / "tasks.jsonl"
 HERMES_AUTO_MARKER = "<!-- hermes-auto:"
+ISSUE_TRIAGE_SENTINEL_KIND = "issue-triage"
+ISSUE_TRIAGE_SENTINEL_VERSION = "v1"
 STATE_SCHEMA_VERSION = 1
 
 
@@ -52,6 +56,190 @@ def today_utc() -> str:
 
 def contains_hermes_marker(text: str | None) -> bool:
     return HERMES_AUTO_MARKER in (text or "")
+
+
+def repo_project_slug(repo: str) -> str:
+    """Return the repo-local slug used in Hermes public sentinels."""
+
+    return ((repo or "").rsplit("/", 1)[-1] or repo or "unknown").strip()
+
+
+def _record_substitution(
+    text: str,
+    pattern: re.Pattern[str],
+    replacement: str,
+    category: str,
+    redactions: set[str],
+) -> str:
+    updated, count = pattern.subn(replacement, text)
+    if count:
+        redactions.add(category)
+    return updated
+
+
+def scrub_for_public(text: str | None, *, max_chars: int = 800) -> tuple[str, list[str]]:
+    """Redact content that must not be posted to a public GitHub issue.
+
+    Returns ``(scrubbed_text, redaction_categories)``. The category list is
+    intended for dry-run reports and Kanban metadata.
+    """
+
+    scrubbed = "" if text is None else str(text)
+    redactions: set[str] = set()
+
+    raw_block_patterns: tuple[tuple[re.Pattern[str], str, str], ...] = (
+        (
+            re.compile(r"```(?:log|logs|console|shell|bash|zsh|text|output|json|graphql)?\s*\n[\s\S]*?```", re.I),
+            "[REDACTED_RAW_LOG_OR_PAYLOAD]",
+            "raw_log_or_payload",
+        ),
+        (
+            re.compile(r"(?ms)^Traceback \(most recent call last\):.*?(?=^\S|\Z)"),
+            "[REDACTED_RAW_STACK_TRACE]",
+            "raw_stack_trace",
+        ),
+        (
+            re.compile(r"(?is)\b(query|mutation)\s+[A-Za-z0-9_]*\s*\{[\s\S]{40,}?\}"),
+            "[REDACTED_RAW_GRAPHQL]",
+            "raw_graphql_payload",
+        ),
+    )
+    for pattern, replacement, category in raw_block_patterns:
+        scrubbed = _record_substitution(scrubbed, pattern, replacement, category, redactions)
+
+    secret_patterns: tuple[tuple[re.Pattern[str], str, str], ...] = (
+        (re.compile(r"\bsk_live_\S+", re.I), "[REDACTED_SECRET]", "openai_secret"),
+        (re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"), "[REDACTED_SECRET]", "openai_secret"),
+        (re.compile(r"\bgh[pousr]_[A-Za-z0-9_]{20,}\b"), "[REDACTED_GITHUB_TOKEN]", "github_token"),
+        (
+            re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/\-]+=*"),
+            "Bearer [REDACTED]",
+            "bearer_token",
+        ),
+        (
+            re.compile(
+                r"\b(?:AWS|GH|OPENAI|DISCORD|HERMES|PR_CODEX)_[A-Z_]*(?:TOKEN|KEY|SECRET|PASSWORD)\s*[:=]\s*\S+",
+                re.I,
+            ),
+            "[REDACTED_ENV_SECRET]",
+            "env_secret",
+        ),
+        (
+            re.compile(
+                r"(?i)\b(?:api[_-]?key|access[_-]?token|token|secret|password|credential|client_secret)"
+                r"(\s*[:=]\s*)([\"']?)[^\s,;\"']+([\"']?)"
+            ),
+            "[REDACTED_SECRET_ASSIGNMENT]",
+            "secret_assignment",
+        ),
+        (
+            re.compile(r"https://[^\s/@:]+:[^\s/@]+@"),
+            "https://[REDACTED_CREDENTIALS]@",
+            "url_credentials",
+        ),
+        (
+            re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b"),
+            "[REDACTED_IP]",
+            "ip_address",
+        ),
+    )
+    for pattern, replacement, category in secret_patterns:
+        scrubbed = _record_substitution(scrubbed, pattern, replacement, category, redactions)
+
+    if ".agent-orchestrator/" in scrubbed:
+        redactions.add("agent_orchestrator_path")
+
+    private_path_patterns: tuple[tuple[re.Pattern[str], str, str], ...] = (
+        (
+            re.compile(r"(?<!\w)/Users/[^/\s`'\"]+(?:/[^\s`'\"]*)?"),
+            "/Users/<user>/[REDACTED_PATH]",
+            "local_private_path",
+        ),
+        (
+            re.compile(r"(?<!\w)/home/[^/\s`'\"]+(?:/[^\s`'\"]*)?"),
+            "/home/<user>/[REDACTED_PATH]",
+            "local_private_path",
+        ),
+        (re.compile(r"~/.hermes\S*"), "~/.hermes/[REDACTED_PATH]", "hermes_private_path"),
+        (
+            re.compile(r"\S*\.agent-orchestrator/\S*"),
+            "[REDACTED_AGENT_ORCHESTRATOR_PATH]",
+            "agent_orchestrator_path",
+        ),
+    )
+    for pattern, replacement, category in private_path_patterns:
+        scrubbed = _record_substitution(scrubbed, pattern, replacement, category, redactions)
+
+    operational_patterns: tuple[tuple[re.Pattern[str], str, str], ...] = (
+        (re.compile(r"\bt_[0-9a-f]{8,}\b"), "[REDACTED_HERMES_TASK_ID]", "hermes_task_id"),
+        (re.compile(r"\bpc-\d+\b"), "[REDACTED_PROFILE_SESSION]", "profile_session"),
+    )
+    for pattern, replacement, category in operational_patterns:
+        scrubbed = _record_substitution(scrubbed, pattern, replacement, category, redactions)
+
+    scrubbed = "\n".join(" ".join(line.split()) for line in scrubbed.splitlines()).strip()
+    if max_chars > 0 and len(scrubbed) > max_chars:
+        scrubbed = scrubbed[: max_chars - 1].rstrip() + "…"
+        redactions.add("truncated")
+    return scrubbed, sorted(redactions)
+
+
+def public_text_has_substance(text: str) -> bool:
+    """Return True when scrubbed text contains more than redaction placeholders."""
+
+    without_placeholders = re.sub(r"\[(?:REDACTED|redacted)[^\]]*\]", "", text, flags=re.I)
+    without_paths = without_placeholders.replace("/Users/<user>/", "").replace("/home/<user>/", "")
+    without_secret_scaffolding = re.sub(r"(?i)\b(authorization|bearer|basic|token|secret|password)\b", "", without_paths)
+    return bool(re.search(r"[A-Za-z0-9ぁ-んァ-ヶ一-龥]", without_secret_scaffolding))
+
+
+def triage_publish_content_hash(scrubbed_body: str) -> str:
+    """Return the short hash used in issue-triage sentinels."""
+
+    return hashlib.sha256(scrubbed_body.encode("utf-8")).hexdigest()[:8]
+
+
+def triage_publish_idempotency_key(issue_number: int, scrub_hash: str) -> str:
+    """Return the publisher-specific idempotency key for a scrubbed conclusion."""
+
+    return f"issue_triage:publish:#{int(issue_number)}:{scrub_hash}"
+
+
+def build_issue_triage_sentinel(
+    *,
+    repo: str,
+    issue_number: int,
+    scrub_hash: str,
+    version: str = ISSUE_TRIAGE_SENTINEL_VERSION,
+) -> str:
+    """Build the public marker for a Hermes issue-triage comment."""
+
+    return (
+        f"<!-- hermes-auto:{repo_project_slug(repo)} {ISSUE_TRIAGE_SENTINEL_KIND} "
+        f"{version} issue=#{int(issue_number)} hash={scrub_hash} -->"
+    )
+
+
+def parse_issue_triage_sentinels(body: str | None) -> list[dict[str, str]]:
+    """Extract issue-triage sentinel attributes from a GitHub comment body."""
+
+    if HERMES_AUTO_MARKER not in (body or ""):
+        return []
+    pattern = re.compile(
+        r"<!--\s*hermes-auto:(?P<project>\S+)\s+issue-triage\s+"
+        r"(?P<version>\S+)(?P<attrs>.*?)-->",
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    sentinels: list[dict[str, str]] = []
+    for match in pattern.finditer(body or ""):
+        attrs = {
+            "project": match.group("project"),
+            "version": match.group("version"),
+        }
+        for key, value in re.findall(r"([A-Za-z_][A-Za-z0-9_-]*)=([^\s>]+)", match.group("attrs")):
+            attrs[key] = value.strip("\"'")
+        sentinels.append(attrs)
+    return sentinels
 
 
 def split_csv_env(value: str | None) -> set[str]:
