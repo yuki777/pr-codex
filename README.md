@@ -83,13 +83,22 @@ cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
 `/pr-codex:send` の挙動:
 
 1. `~/claude-loop-pr-codex/` 配下から `status.json` が `state:completed` でかつ `findings.verified.json` / `review.md` が存在するディレクトリを1件選定する（名前昇順の先頭1件）
-2. `findings.verified.json` を必須の一次入力として `Must Fix` を抽出し、`review.md` から `## 総評` / `## 良い点` を body に使う（F13 以降は Markdown parser fallback へ切り替えず、欠落・schema 不整合・Must Fix 件数不一致なら中断する）
-3. Step 4.5 の verifier pipeline を schema / range / semantic / payload consistency の 4 stage で実行し、従来互換の `preflight-codex.md` に加えて `preflight-result.json` を保存する。semantic stage では各 Must Fix finding に「この指摘が誤りである可能性」を 1 つ挙げる反証 prompt を適用し、反証できた finding は review 再生成が必要な FAIL とする
-4. GitHub Reviews API への payload サマリをユーザーに提示し、明示的な承認を得る
-5. 承認後、`gh api --method POST .../reviews` で投稿（`event` は Must Fix ありなら `REQUEST_CHANGES`、なければ `COMMENT`。`APPROVE` は自動では出さない）
-6. 投稿成功後、対象ディレクトリを `~/claude-loop-pr-codex/sent/$org-$repo-$pr-$head_sha_short/` に移動する（同一 PR でも HEAD 更新後の再投稿履歴が衝突しないよう、`head_sha` の先頭 7 文字を suffix に付ける）
+2. `findings.verified.json` を必須の一次入力として `Must Fix` / `Should Fix` / `Nit` の投稿方針を抽出し、`review.md` から `## 総評` / `## 良い点` を body に使う（F13 以降は Markdown parser fallback へ切り替えず、欠落・schema 不整合・Must Fix 件数不一致なら中断する）
+3. `Should Fix` のうち `post_policy: body_summary` の候補がある場合、上位 3 件を body の `## 非ブロッキング改善 (Should Fix)` に含めるかを確認する（default: no）
+4. `Nit` は PR に投稿せず、primary path では `nits.md` にローカル artifact として書き出す（0 件なら作成しない）
+5. Step 4.5 の verifier pipeline を schema / range / semantic / payload consistency の 4 stage で実行し、従来互換の `preflight-codex.md` に加えて `preflight-result.json` を保存する。semantic stage では Must Fix の反証、Should Fix body summary の対応関係、Nit の payload 混入を検証する
+6. GitHub Reviews API への payload サマリをユーザーに提示し、明示的な承認を得る
+7. 承認後、`gh api --method POST .../reviews` で投稿（`event` は Must Fix ありなら `REQUEST_CHANGES`、なければ `COMMENT`。`APPROVE` は自動では出さない）
+8. 投稿成功後、対象ディレクトリを `~/claude-loop-pr-codex/sent/$org-$repo-$pr-$head_sha_short/` に移動する（同一 PR でも HEAD 更新後の再投稿履歴が衝突しないよう、`head_sha` の先頭 7 文字を suffix に付ける）
 
 `/loop` には載せず、対話実行で使う。1回の実行で1件のみ処理する。
+
+### Should Fix / Nit の取り扱い
+
+- `Must Fix` は従来どおり GitHub review の inline comment として投稿される
+- `Should Fix` は自動では投稿されない。手動実行時に `yes` を選ぶと、author が見落としやすい非ブロッキング改善だけを上位 3 件まで PR body に短く同梱できる
+- `Nit` はノイズ抑制のため PR には載せず、`nits.md` に控えとして残す。投稿後は `sent/` 配下の履歴ディレクトリで確認できる
+- `findings.verified.json` がない fallback path では、従来どおり `Should Fix` / `Nit` / 補足を投稿 payload に含めない
 
 ## Hermes Agent 自動化 (Phase 0)
 
@@ -124,12 +133,14 @@ Phase 0 は read-only observer です。GitHub への自動コメント、label/
   │     ├── preflight-codex.md    # /pr-codex:send Step 4.5 の人間可読 verifier 結果
   │     ├── preflight-result.json # /pr-codex:send Step 4.5 の構造化 verifier 結果
   │     ├── preflight-codex.log
+  │     ├── nits.md               # Nit がある場合のみ。PR には投稿しない控え
   │     ├── claude.log
   │     └── codex.log
   └── sent/                       # /pr-codex:send で投稿済み
         └── $org-$repo-$pr-$head_sha_short/ # 投稿後にここへ移動される
               ├── findings.verified.json
               ├── review.md
+              ├── nits.md               # Nit があった場合のみ
               ├── review-payload.json   # 投稿した GitHub Reviews API の payload
               ├── review-response.json  # gh api のレスポンス（.html_url 等）
               ├── preflight-prompt.md

@@ -106,7 +106,7 @@ Step 3 と Step 4.5 の verifier pipeline で `{SCHEMA_PATH}` / `{VALIDATOR_PATH
 - `preflight_schema_path = <plugin-root>/schemas/preflight-result.v1.json`
 - `preflight_validator_path = <plugin-root>/tasks/validate_preflight_result.py`
 
-### Step 3: `findings.verified.json` の解析
+### Step 3: `findings.verified.json` の解析 (primary)
 
 `findings.verified.json` を **必須の一次情報源**として payload を組み立てる。`review.md` は `## 総評` / `## 良い点` の本文取得と、Must Fix 件数 gate の確認にだけ使う。まず Step 2.5 で保持した `validator_path` / `schema_path` を使い、`findings.verified.json` がその schema に適合するかを review 側と同じ同梱 validator で外部検証してから抽出へ進む。
 
@@ -135,6 +135,8 @@ Claude 側でメモリ上に以下を抽出する:
   - top-level `pr.repository` / `pr.number` / `pr.head_sha` / `pr.base_sha` が `metadata.json.repository_full_name` / `metadata.json.pr_number` / `metadata.json.head_sha` / `metadata.json.base_sha` と一致し、`metadata.json.repository_full_name == "$org/$repository"` で投稿先 repo と一致すること
   - すべての finding で `id == fingerprint` が成り立ち、同梱 validator が正準アルゴリズムで再計算した fingerprint と一致すること
   - `findings[]` のうち `severity == "must_fix"` の要素を `$must_fix` 配列として抽出する
+  - `findings[]` のうち `severity == "should_fix" && posting.post_policy == "body_summary"` の要素を `$should_fix_body_summary_candidates` 配列として抽出する。順序は `findings[]` の登場順を保ち、Step 5 の opt-in がない限り body には含めない
+  - `findings[]` のうち `severity == "nit"` の要素を `$nit_findings` 配列として抽出する。`posting.post_policy` の値に関わらず GitHub payload には含めず、primary path でのみ `nits.md` に書き出す
   - M1 の投稿 contract として、`severity != "must_fix"` の finding に `posting.post_policy == "inline"` が含まれないことを確認する
 
 #### `findings.verified.json` から抽出するフィールド
@@ -152,7 +154,31 @@ Claude 側でメモリ上に以下を抽出する:
 | `heading_markdown` | ``### `path:L<行番号>` `` または ``### `path:L<開始>-L<終了>` `` |
 | `source_finding_id` | finding の `id` |
 
-#### 必須ガード
+各 Should Fix body summary 候補から以下をメモリ上に保持する:
+
+| 出力キー        | 値 |
+| --------------- | --- |
+| `path`          | `location.path` |
+| `line`          | `location.end_line` があればその値、なければ `location.start_line` |
+| `heading_markdown` | ``### `path:L<行番号>` `` または ``### `path:L<開始>-L<終了>` `` |
+| `summary_line`  | `problem` を 1 行に畳み込んだ改善内容 |
+| `suggestion_line` | `suggestion` を 1 行に畳み込んだ提案 |
+| `source_finding_id` | finding の `id` |
+
+`$should_fix_body_summary_candidates` の上位判定は `findings[]` の配列順に固定し、send 側で severity / category / path などによる再ソートは行わない。Step 5 で opt-in された場合だけ、先頭から最大 3 件を `$included_should_fix_body_summary` として Step 4 の body に使う。
+
+各 Nit finding から以下を `nits.md` 用に保持する:
+
+| 出力キー        | 値 |
+| --------------- | --- |
+| `path`          | `location.path` |
+| `line`          | `location.end_line` があればその値、なければ `location.start_line` |
+| `heading_markdown` | ``### `path:L<行番号>` `` または ``### `path:L<開始>-L<終了>` `` |
+| `problem`       | finding の `problem` |
+| `suggestion`    | finding の `suggestion` |
+| `source_finding_id` | finding の `id` |
+
+#### primary path の必須ガード
 
 - `findings.verified.json` が存在しない / 空 / JSON parse 失敗 / top-level object でない / `findings[]` 不在または非配列 / 同梱 validator による `schemas/findings.v1.json` validation / fingerprint 再計算 / format / range validation 失敗 / `id != fingerprint` のいずれかなら、ユーザーに通知して **中断** する（Markdown fallback へは切り替えない）
 - `findings.verified.json.pr.repository != metadata.json.repository_full_name`、`findings.verified.json.pr.number != metadata.json.pr_number`、`findings.verified.json.pr.head_sha != metadata.json.head_sha`、`findings.verified.json.pr.base_sha != metadata.json.base_sha`、または `metadata.json.repository_full_name != "$org/$repository"` のいずれかなら、canonical artifact が投稿先 PR と一致しないため **中断** する（Markdown fallback へは切り替えない）
@@ -177,10 +203,33 @@ Must Fix:
 #### 空セクションの扱い
 
 - `$must_fix` が空配列になっても構わない
+- `$should_fix_body_summary_candidates` が空配列なら Should Fix body inclusion の opt-in prompt は表示しない
+- `$nit_findings` が空配列なら `nits.md` は作成しない
 - `$good_points` が空文字列なら body から `## 良い点` セクションを省略する
 - `$summary` が空になることは想定しない（`/pr-codex:review` のテンプレートで必ず出力されるため）。万一空ならユーザーに通知して処理を中断する
 
 Step 3.5 で範囲外コメントをレビュー body 末尾へ退避するため、各 finding について `heading_markdown` と `body`（GitHub API 用に整形する前の元情報）も Claude 側のメモリ上に保持する。
+
+#### `nits.md` の書き出し (primary path のみ)
+
+`$nit_findings` が 1 件以上ある場合、Step 4 の payload 構築前に Write ツールで `~/claude-loop-pr-codex/$dir_name/nits.md` へ Markdown を書き出す。`file_path` には `~` を実値に展開した絶対パスを渡し、`$dir_name` も実値に置換する。0 件の場合は `nits.md` を作成しない。
+
+形式:
+
+```markdown
+PR には投稿しない軽微な指摘の控えです。
+
+### `path/to/file.ext:L<行番号>`
+
+- 内容: <problem>
+- 提案: <suggestion>
+```
+
+複数件ある場合は finding ごとに同じ `###` ブロックを繰り返す。`nits.md` は投稿 payload には含めず、Step 7 の `mv` で他 artifact と一緒に `sent/` 配下へ移動される。
+
+### Step 3b: `review.md` の解析 (fallback 廃止)
+
+F13 以降、`findings.verified.json` は必須の一次入力であり、`review.md` parser fallback は使わない。`findings.verified.json` が存在しない、壊れている、または `review.md` と Must Fix 件数が一致しない場合は、payload 生成へ進まず処理を中断する。Should Fix body summary の opt-in と `nits.md` 書き出しも primary path のみで行う。
 
 ### Step 3.5: 行範囲検証
 
@@ -225,6 +274,23 @@ awk '
 
 既存の正常系 PR で全指摘が範囲内の場合、`$out_of_range_comments` は空配列となり、Step 4 以降の payload は従来と同じ内容になる。
 
+### Step 3.75: Should Fix body inclusion opt-in (Step 5 第1ステップ)
+
+`findings.verified.json` primary path で `$should_fix_body_summary_candidates` が 1 件以上ある場合のみ、payload 構築前に以下をユーザーへ提示する。fallback path、または候補 0 件の場合はこのステップを表示せず、`$include_should_fix_body_summary=false` / `$included_should_fix_body_summary=[]` として Step 4 へ進む。
+
+```
+非ブロッキング改善 (Should Fix) の上位 3 件を投稿 body に含めますか? (default: no)
+候補:
+- <path>:L<line> — <summary_line>
+- ...
+
+含める場合のみ yes と入力してください。 (yes/no)
+```
+
+候補は `findings.verified.json` の `findings[]` 配列順の先頭 3 件までを表示する。ユーザーの応答が `yes` / `y` / `はい` 等の明示的な承認である場合のみ `$include_should_fix_body_summary=true` とし、候補先頭から最大 3 件を `$included_should_fix_body_summary` として保持する。それ以外（`no` / `n` / `いいえ` / 曖昧・無回答）は default の `$include_should_fix_body_summary=false` として扱い、Should Fix は body に含めない。
+
+この opt-in は投稿そのものの承認ではない。Step 4.5 の Codex セルフレビューで最終 payload を検証した後、Step 5 第2ステップで従来どおり投稿可否を確認する。
+
 ### Step 4: payload の構築
 
 以下のルールで GitHub Reviews API の payload JSON を組み立てる（`POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews` の request body 仕様に従う）:
@@ -247,6 +313,17 @@ awk '
     ```
     <$summary>
     ```
+  - `$include_should_fix_body_summary == true` かつ `$included_should_fix_body_summary` が非空の場合は、`## 良い点` セクションの後ろ（`$good_points` が空の場合は `$summary` の直後）に以下を追加する:
+    ```
+    ## 非ブロッキング改善 (Should Fix)
+
+    - `path/to/file.ext:L<行番号>`
+      改善内容: <summary_line>
+      提案: <suggestion_line>
+    ```
+    - 最大 3 件まで。`findings.verified.json` の `findings[]` 配列順を保つ
+    - 1 件あたり 3 行以内（path 行 + 改善内容 1 行 + 提案 1 行）
+    - Nit / Note / Must Fix はこのセクションに混ぜない
   - `$out_of_range_comments` が非空の場合は body 末尾に以下を追加する:
     ```
     ## 行コメント不可 (diff 範囲外)
@@ -264,26 +341,29 @@ awk '
   - `body` (Step 3 の body フォーマット)
   - `start_line` / `start_side` は範囲指定の場合のみ含める
 
-範囲検証後の `$must_fix` が空だった場合でも、`event: "COMMENT"` + body (総評 + 良い点 + 必要なら行コメント不可セクション) のみで投稿する。ただし `$out_of_range_comments` に `Must Fix` が含まれる場合の `event` は上記ルールどおり `"REQUEST_CHANGES"` とする。
+範囲検証後の `$must_fix` が空だった場合でも、`event: "COMMENT"` + body (総評 + 良い点 + opt-in された Should Fix body summary + 必要なら行コメント不可セクション) のみで投稿する。ただし `$out_of_range_comments` に `Must Fix` が含まれる場合の `event` は上記ルールどおり `"REQUEST_CHANGES"` とする。
+
+body のセクション順は必ず `総評` → `## 良い点`（存在する場合）→ `## 非ブロッキング改善 (Should Fix)`（opt-in された場合）→ `## 行コメント不可 (diff 範囲外)`（存在する場合）とする。Should Fix セクションを含めても `comments` 配列は Must Fix のみで、GitHub inline comment に Should Fix / Nit / Note を混ぜてはならない。
 
 payload は Write ツールで `~/claude-loop-pr-codex/$dir_name/review-payload.json` に書き出す。`file_path` には `~` を実値に展開した絶対パスを渡し、`$dir_name` も実値に置換する。整形された JSON（インデント 2）で書き出して後から人間が読めるようにする。
 
 ### Step 4.5: 投稿前 verifier pipeline (Codex セルフレビュー)
 
-Claude が生成した `review-payload.json` を Codex CLI に独立検証させ、投稿直前の検証を **4 stage verifier pipeline** として実行する。Step 5（承認プロンプト）の直前で必ず実行する。`findings.verified.json` は必須入力であり、Markdown fallback は使わない。従来互換の `preflight-codex.md` / `preflight-codex.log` は維持し、新たに構造化結果 `preflight-result.json` を出力する。
+Claude が生成した `review-payload.json` を Codex CLI に独立検証させ、投稿直前の検証を **4 stage verifier pipeline** として実行する。Step 5 第2ステップ（最終承認プロンプト）の直前で必ず実行する。`findings.verified.json` は必須入力であり、Markdown fallback は使わない。検証では `comments[]` への Must Fix 以外の混入、Should Fix body summary の対応関係、Nit の payload 混入、schema/side 違反、行範囲外コメント、event/body 不整合を検出する。従来互換の `preflight-codex.md` / `preflight-codex.log` は維持し、新たに構造化結果 `preflight-result.json` を出力する。検証プロンプトには `$CLAUDE_PLUGIN_ROOT/schemas/findings.v1.json` と `$CLAUDE_PLUGIN_ROOT/schemas/preflight-result.v1.json`、および両 validator の絶対パスを埋め込み、`--cd ~/claude-loop-pr-codex/$dir_name` 配下の相対 `schemas/` には依存しない。
 
 `findings.verified.json` 検証プロンプトには `$CLAUDE_PLUGIN_ROOT/schemas/findings.v1.json` の**絶対パス**（Step 2.5 で解決した `schema_path`）と同梱 validator の絶対パス（`validator_path`）を埋め込む。`preflight-result.json` 抽出/検証には `preflight_schema_path` と `preflight_validator_path` を使い、Codex の出力崩れを `PASS` と誤判定しない。
 
 #### 4 stage と既存観点の対応
 
-Codex は以下の 4 stage を順に判定する。各 stage は前段の結論に依存せず、毎回 `findings.verified.json` / `review-payload.json` / `review.md` / `pr.diff` / `pr.diff.ranges.txt` / `metadata.json` / 当該 finding 抜粋を根拠として再検証する。
+Codex は以下の 4 stage を順に判定する。各 stage は前段の結論に依存せず、毎回 `findings.verified.json` / `review-payload.json` / `review.md` / `pr.diff` / `pr.diff.ranges.txt` / `metadata.json` / 当該 finding 抜粋を根拠として再検証する。既存観点として、Must Fix 対応、Should Fix body summary の 1:1 対応と 3 件上限、Nit の payload 混入禁止、body セクション順序も stage 内で検証する。
+
 
 | Stage | 検証観点 |
 | --- | --- |
 | 1. `schema_validation` | `findings.verified.json` の `schema_version == "findings.v1"`、同梱 validator validation、top-level `pr.*` と `metadata.json` の一致、全 finding の `id == fingerprint` と正準 fingerprint 再計算一致 |
 | 2. `range_validation` | `payload.comments[]` の `path` が `metadata.json.files[]` に含まれること、`line` / `start_line` が `pr.diff.ranges.txt` の同一 hunk 範囲内にあること |
-| 3. `semantic_preflight` | `payload.comments[]` が `severity == "must_fix"` の finding だけに対応すること、Should Fix / Nit / Note の inline 混入がないこと、4 軸 + `evidence_level` gate、反証 prompt |
-| 4. `payload_consistency` | `event` 判定、`body` 冒頭の `## 総評` 一致、`## 良い点` 一致、`findings.verified.json` ↔ `review.md` ↔ `review-payload.json` の Must Fix 件数一致 |
+| 3. `semantic_preflight` | `payload.comments[]` が `severity == "must_fix"` の finding だけに対応すること、Should Fix / Nit / Note の inline 混入がないこと、Nit が body に混入していないこと、4 軸 + `evidence_level` gate、反証 prompt |
+| 4. `payload_consistency` | `event` 判定、`body` 冒頭の `## 総評` 一致、`## 良い点` 一致、`findings.verified.json` ↔ `review.md` ↔ `review-payload.json` の Must Fix 件数一致、Should Fix body summary の 1:1 対応・3 件上限・セクション順序 |
 
 semantic preflight の反証 prompt は Must Fix finding のみに適用する。Codex は各 Must Fix finding について「この指摘が誤りである可能性」を 1 つだけ、1〜2 文で探索する。`pr.diff` / `pr.diff.ranges.txt` / `metadata.json` / 当該 finding 抜粋だけを根拠にし、反証を挙げられない場合のみ採用する。反証を挙げられた場合は `counterargument_succeeded` violation として `requires_review_regeneration=true` で報告する（反証成功 = 不採用 / FAIL）。
 
@@ -496,7 +576,7 @@ python3 $preflight_validator_path --schema $preflight_schema_path --from-markdow
 
 ### Step 5: 承認プロンプト
 
-投稿前にユーザーに以下のサマリをテキストで提示し、明示的な承認を求める:
+Step 3.75 の Should Fix body inclusion opt-in（候補がある場合のみ表示）と Step 4.5 の Codex セルフレビューを終えた後、投稿前の最終確認として以下のサマリをテキストで提示し、明示的な承認を求める:
 
 ```
 対象 PR: <$pr_url> (<$title>)
@@ -506,7 +586,9 @@ review file: ~/claude-loop-pr-codex/<$dir_name>/review.md
 body プレビュー:
   <$summary の先頭 200 文字。長ければ "..." で省略>
 インラインコメント: Must Fix N 件
-（Should Fix / Nit / 議論項目は投稿対象外のため payload に含めず、review.md にのみ残ります）
+Should Fix body summary: included <yes|no> (<included_count>/<candidate_count> 件、default: no)
+Nit artifact: <~/claude-loop-pr-codex/<$dir_name>/nits.md | nit: 0 件>
+（Should Fix は opt-in された上位 3 件のみ body に含めます。Nit は PR には載せず nits.md にのみ残します）
 行範囲外で除外したインラインコメント (Must Fix のみ): K 件
   - <path>:L<line> (本文末尾の「行コメント不可」セクションに移動)
 payload: ~/claude-loop-pr-codex/<$dir_name>/review-payload.json
@@ -517,11 +599,13 @@ preflight result: ~/claude-loop-pr-codex/<$dir_name>/preflight-result.json
 ```
 
 `$out_of_range_comments` が空の場合も、サマリ行は `行範囲外で除外したインラインコメント: 0 件` として表示する。除外したエントリの箇条書きは 1 件以上ある場合のみ表示する。
+fallback path では `Should Fix body summary: included no (0/0 件、default: no)`、`Nit artifact: nit: 0 件` と表示する。primary path で `$nit_findings` が 1 件以上ある場合は `nits.md` のパスを表示し、0 件なら `nit: 0 件` と表示する。
 
 ユーザーの応答が `yes` / `y` / `はい` 等の明示的な承認である場合のみ Step 6 に進む。それ以外（`no` / `n` / `いいえ` / 曖昧・無回答）の場合は処理を中断し、以下を報告して終了する:
 
 - 投稿はスキップした旨
 - payload ファイルは保持されている旨 (`~/claude-loop-pr-codex/$dir_name/review-payload.json`)
+- Nit 件数。`nits.md` を生成した場合は `~/claude-loop-pr-codex/$dir_name/nits.md`、0 件なら `nit: 0 件`
 - 再実行したい場合は再度 `/pr-codex:send` を叩くか、payload を手動編集してから `gh api --method POST ... --input <payload>` で直接投稿できる旨
 
 承認拒否時は `sent/` への移動は行わない。
@@ -591,6 +675,8 @@ test ! -d ~/claude-loop-pr-codex/$dir_name && test -d ~/claude-loop-pr-codex/sen
 - 投稿した review の URL: `$review_url`
 - 選択した `event`
 - インラインコメント件数 (Must Fix のみ)
+- Should Fix body summary 同梱結果 (`included yes/no` と件数)
+- Nit 件数。`nits.md` を生成した場合は移動後の path `~/claude-loop-pr-codex/sent/$dir_name-$head_sha_short/nits.md`、0 件なら `nit: 0 件`
 - 行範囲外で除外したインラインコメント件数
 - preflight result: `~/claude-loop-pr-codex/sent/$dir_name-$head_sha_short/preflight-result.json`
 - 移動先: `~/claude-loop-pr-codex/sent/$dir_name-$head_sha_short`
@@ -598,6 +684,7 @@ test ! -d ~/claude-loop-pr-codex/$dir_name && test -d ~/claude-loop-pr-codex/sen
 失敗時（Step 6 が非ゼロ終了、Step 7 の移動先衝突、または Step 7 の移動完了検証が失敗した場合）:
 
 - エラー内容または状況 (`gh api` の stderr、Step 7 の移動先衝突、または Step 7 の移動完了検証失敗)
+- Nit 件数。`nits.md` を生成した場合は未移動の path `~/claude-loop-pr-codex/$dir_name/nits.md`、0 件なら `nit: 0 件`
 - 推定原因:
   - 422 → Step 3.5 で PR diff 範囲外のインラインコメントは除外済みのため、残ったコメントの `path` / `line` / `start_line` が GitHub 側で解決不能になっている可能性がある。`review-payload.json` の `comments` と `pr.diff.ranges.txt` / `pr.diff` を照合し、必要なら payload から該当コメントを除外するようユーザーに案内
   - 403 → 権限不足。`gh auth status` の確認と、PR リポジトリへのコメント権限を案内
@@ -617,7 +704,7 @@ test ! -d ~/claude-loop-pr-codex/$dir_name && test -d ~/claude-loop-pr-codex/sen
 - `findings.verified.json` の Must Fix 件数と `review.md` の Must Fix 見出し件数が不一致 → ユーザーに通知して処理中断（Markdown fallback へは切り替えない）
 - `findings.verified.json` の Must Fix に `location.side != RIGHT` が含まれる → ユーザーに通知して処理中断（M1 では old-side 投稿を扱わない）
 - `findings.verified.json` の Must Fix に `posting.post_policy != inline` または `explanation_postable != true` が含まれる → ユーザーに通知して処理中断（M1 では安全に自動投稿しない）
-- `review.md` に Must Fix が一件も無い → それでも `event: COMMENT` + body (総評 + 良い点) のみで投稿する（インラインコメント配列は空）
+- `review.md` に Must Fix が一件も無い → それでも `event: COMMENT` + body (総評 + 良い点 + opt-in された Should Fix body summary) のみで投稿する（インラインコメント配列は空）
 - `review.md` の `## 総評` セクションが空 or 見つからない → ユーザーに通知して処理中断。`sent/` 移動は行わない
 - Step 3.5 で `pr.diff.ranges.txt` が空 → インラインコメント候補はすべて body 末尾の `## 行コメント不可 (diff 範囲外)` に移動し、`comments` 配列には含めない
 - Step 4.5 の Codex verifier が `RESULT_JSON` を出力しない、最後の `RESULT_JSON` 見出しが dangling、final `VERDICT:` line と JSON verdict が一致しない、または `tasks/validate_preflight_result.py` が `preflight-result.json` validation に失敗 → 構造化 preflight 失敗として最大 3 回まで再試行し、解消しなければ投稿を中止
@@ -635,12 +722,12 @@ test ! -d ~/claude-loop-pr-codex/$dir_name && test -d ~/claude-loop-pr-codex/sen
 2. テンプレートの改変は変数置換のみ許可する。フラグ、引数順、引用符、リダイレクトはテンプレート記載どおりに使う
 3. シェル演算子はテンプレート中に明示された `|` `<` `>` `2>` `&&` のみ許可する
 4. `findings.verified.json` は必須の一次入力とし、`review.md` parser fallback は使わない。parse failure / shape failure / validator failure / `location.side != RIGHT` / 件数不一致 / posting policy 不整合時に Markdown fallback へ自動切替してはならない
-5. payload JSON と `preflight-prompt.md` の生成は Write ツールで行う（`jq -n` によるインラインでの複雑な配列組み立てや shell 文字列内 prompt 埋め込みは使わない）
+5. payload JSON、`preflight-prompt.md`、`nits.md` の生成は Write ツールで行う（`jq -n` によるインラインでの複雑な配列組み立てや shell 文字列内 prompt 埋め込みは使わない）
 6. `$()` / `for` / `while` / `xargs` / ヒアドキュメントは使わない
 7. `mv` は `sent/` への移動以外では使わない
 8. `gh` の write 系操作は `gh api --method POST .../reviews` のみとし、`gh pr review` / `gh pr comment` / `gh pr merge` などは使わない
 9. 1 回の実行で処理する対象ディレクトリは 1 件のみとする
-10. 投稿前の Step 5 承認プロンプトは必須。自動投稿はしない
+10. 投稿前の Step 5 承認プロンプトは必須。自動投稿はしない。Should Fix body summary は default no とし、Step 3.75 で明示 opt-in された場合だけ上位 3 件を body に含める
 11. Step 3 の `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings.py ...` を **必ず**実行する。`findings.verified.json` 欠落または validator 失敗時に payload 生成や Markdown fallback へ進んではならない
 12. Step 4.5 の verifier pipeline は **必須**。スキップしてはならない。`preflight-result.json.verdict == "PASS"` と `preflight-codex.md` の `VERDICT: PASS` を確認するまで Step 5 に進まない。schema 検証観点では `$CLAUDE_PLUGIN_ROOT/schemas/findings.v1.json` と `$CLAUDE_PLUGIN_ROOT/schemas/preflight-result.v1.json` の絶対パスを prompt / 抽出コマンドに埋め込み、`--cd` 配下の相対 `schemas/` には依存しない
 
@@ -678,6 +765,7 @@ $CLAUDE_PLUGIN_ROOT/schemas/
         ├── preflight-codex.md      ← Step 4.5 の人間可読 verifier 結果（VERDICT: PASS/FAIL）
         ├── preflight-result.json   ← Step 4.5 の構造化 verifier 結果 (`schemas/preflight-result.v1.json`)
         ├── preflight-codex.log     ← Codex 実行時の stderr
+        ├── nits.md                 ← primary path で Nit がある場合のみ生成（PR には投稿しない）
         └── codex.log
 ```
 
@@ -703,5 +791,6 @@ $CLAUDE_PLUGIN_ROOT/schemas/
               ├── preflight-codex.md
               ├── preflight-result.json
               ├── preflight-codex.log
+              ├── nits.md                ← Nit があった場合のみ。他 artifact と一緒に移動される
               └── codex.log
 ```

@@ -254,6 +254,31 @@ class ValidateFindingsTest(unittest.TestCase):
                 mutate(artifact["findings"][0])
                 self.assert_invalid_without_crash(artifact, expected_fragment)
 
+    def test_nonblocking_post_policy_contract_preserves_signal_conservatively(self) -> None:
+        valid_cases = {
+            "should-fix-default-local-only": lambda f: (
+                f.update(severity="should_fix", evidence_level="corroborated"),
+                f["posting"].update(post_policy="local_only", explanation_postable=True, audience="human_reviewer"),
+            ),
+            "should-fix-opt-in-body-summary": lambda f: (
+                f.update(severity="should_fix", evidence_level="corroborated"),
+                f["posting"].update(post_policy="body_summary", explanation_postable=True),
+            ),
+            "nit-local-artifact-only": lambda f: (
+                f.update(severity="nit", evidence_level="corroborated"),
+                f["posting"].update(post_policy="local_only", explanation_postable=True, audience="human_reviewer"),
+            ),
+            "nit-body-summary-is-send-local-artifact": lambda f: (
+                f.update(severity="nit", evidence_level="corroborated"),
+                f["posting"].update(post_policy="body_summary", explanation_postable=True),
+            ),
+        }
+        for name, mutate in valid_cases.items():
+            with self.subTest(name=name):
+                artifact = copy.deepcopy(valid_artifact())
+                mutate(artifact["findings"][0])
+                self.assertEqual(validate_artifact(self.schema, artifact), [])
+
     def test_must_fix_four_axes_gate_is_validator_enforced(self) -> None:
         gate_message = (
             "must_fix requires axes={real,triggerable,impactful}=yes "
@@ -310,6 +335,33 @@ class ValidateFindingsTest(unittest.TestCase):
         finding["axes"].update(triggerable="unknown", impactful="unknown")
         finding["posting"]["post_policy"] = "body_summary"
         self.assertEqual(validate_artifact(self.schema, artifact), [])
+
+    def test_f15_non_blocking_post_policies_are_accepted_by_schema_contract(self) -> None:
+        should_fix = copy.deepcopy(valid_artifact())
+        should_fix_finding = should_fix["findings"][0]
+        should_fix_finding["severity"] = "should_fix"
+        should_fix_finding["posting"] = {
+            "post_policy": "body_summary",
+            "explanation_postable": True,
+        }
+        self.assertEqual(validate_artifact(self.schema, should_fix), [])
+
+        nit_body_summary = copy.deepcopy(valid_artifact())
+        nit_body_summary_finding = nit_body_summary["findings"][0]
+        nit_body_summary_finding["severity"] = "nit"
+        nit_body_summary_finding["posting"] = {
+            "post_policy": "body_summary",
+            "explanation_postable": True,
+        }
+        self.assertEqual(validate_artifact(self.schema, nit_body_summary), [])
+
+        nit_local_only = copy.deepcopy(nit_body_summary)
+        nit_local_only["findings"][0]["posting"] = {
+            "post_policy": "local_only",
+            "explanation_postable": True,
+            "audience": "human_reviewer",
+        }
+        self.assertEqual(validate_artifact(self.schema, nit_local_only), [])
 
     def test_duplicate_ids_and_fingerprints_are_invalid(self) -> None:
         artifact = copy.deepcopy(valid_artifact())
