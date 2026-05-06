@@ -201,9 +201,10 @@ export PR_CODEX_HERMES_AUTO_APPS="pr-codex-hermes"
 allow-list:
 
 - classification (`bug` / `feature` / `docs` / `infra` / `other`)
-- priority recommendation
-- suggested labels, clearly marked as proposals only
-- duplicate/related Issue numbers
+- priority recommendation (`low`, `medium`, `high`, `critical`, `urgent`, or `p0`–`p4`)
+- suggested labels, clearly marked as proposals only and constrained to short
+  GitHub label-shaped text
+- duplicate/related Issue numbers; arbitrary dependency prose is omitted
 - dependencies and ready/blocked status
 - recommended next action in 1–3 short lines
 

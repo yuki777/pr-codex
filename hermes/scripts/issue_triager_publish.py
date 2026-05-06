@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any, Iterable, Protocol
 
@@ -39,6 +40,17 @@ PUBLISH_ENV_FLAG = "PR_CODEX_HERMES_ISSUE_TRIAGE_PUBLISH"
 POLICY_PHASE = "1b-issue-triage-publication-policy"
 MAX_PUBLIC_FIELD_CHARS = 800
 MAX_LIST_ITEMS = 8
+ALLOWED_CLASSIFICATIONS = frozenset({"bug", "feature", "docs", "infra", "other"})
+ALLOWED_PRIORITIES = frozenset({"low", "medium", "high", "critical", "urgent", "p0", "p1", "p2", "p3", "p4"})
+SAFE_LABEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._/-]{0,49}$")
+SAFE_PUBLIC_TEXT_FORBIDDEN_CHARS_RE = re.compile(r"[{}<>`$|\\]")
+SAFE_PUBLIC_TEXT_FORBIDDEN_TERMS_RE = re.compile(
+    r"(?i)\b("
+    r"api[_ -]?key|authorization|bearer|credential|password|private[_ -]?path|raw[_ -]?(?:log|payload)|"
+    r"secret|stack[_ -]?trace|token|graphql|rest[_ -]?payload|"
+    r"hermes[_ -]?task|profile[_ -]?session"
+    r")\b|/Users/|/home/|~/.hermes|\.agent-orchestrator|t_[0-9a-f]{8,}|pc-\d+"
+)
 
 
 class IssueCommentClient(Protocol):
@@ -101,6 +113,96 @@ def _scrub_value(value: Any, *, max_chars: int = MAX_PUBLIC_FIELD_CHARS) -> tupl
     return text, redactions
 
 
+def _append_omission(omissions: list[dict[str, str]], field: str, reason: str) -> None:
+    omissions.append({"field": field, "reason": reason})
+
+
+def _policy_text_value(
+    value: Any,
+    *,
+    field: str,
+    omissions: list[dict[str, str]],
+    redactions: list[str],
+    max_chars: int = MAX_PUBLIC_FIELD_CHARS,
+    max_lines: int = 3,
+) -> str | None:
+    """Return a public-safe free-text field only if it passes the Phase 1B policy."""
+
+    if value in (None, ""):
+        return None
+    raw = str(value)
+    if len(raw) > max_chars:
+        _append_omission(omissions, field, "overlong")
+        return None
+    if raw.count("\n") + 1 > max_lines:
+        _append_omission(omissions, field, "too_many_lines")
+        return None
+    text, categories = _scrub_value(raw, max_chars=max_chars)
+    redactions.extend(categories)
+    if categories:
+        _append_omission(omissions, field, "redacted_content")
+        return None
+    if not public_text_has_substance(text):
+        _append_omission(omissions, field, "no_public_substance")
+        return None
+    if SAFE_PUBLIC_TEXT_FORBIDDEN_CHARS_RE.search(text):
+        _append_omission(omissions, field, "forbidden_characters")
+        return None
+    if SAFE_PUBLIC_TEXT_FORBIDDEN_TERMS_RE.search(text):
+        _append_omission(omissions, field, "forbidden_public_terms")
+        return None
+    if "http://" in text.lower() or "https://" in text.lower():
+        _append_omission(omissions, field, "urls_not_allowed_in_free_text")
+        return None
+    return text
+
+
+def _policy_enum_value(
+    value: Any,
+    *,
+    field: str,
+    allowed: frozenset[str],
+    omissions: list[dict[str, str]],
+) -> str | None:
+    if value in (None, ""):
+        return None
+    normalized = str(value).strip().lower()
+    if normalized not in allowed:
+        _append_omission(omissions, field, "not_allowlisted")
+        return None
+    return normalized
+
+
+def _policy_labels(
+    value: Any,
+    *,
+    omissions: list[dict[str, str]],
+    redactions: list[str],
+    max_items: int = MAX_LIST_ITEMS,
+) -> list[str]:
+    if value in (None, ""):
+        return []
+    items = value if isinstance(value, (list, tuple, set)) else [value]
+    labels: list[str] = []
+    for item in items:
+        text, categories = _scrub_value(item, max_chars=50)
+        redactions.extend(categories)
+        if categories:
+            _append_omission(omissions, "suggested_labels", "redacted_content")
+            continue
+        if not SAFE_LABEL_RE.fullmatch(text):
+            _append_omission(omissions, "suggested_labels", "invalid_label_shape")
+            continue
+        if SAFE_PUBLIC_TEXT_FORBIDDEN_TERMS_RE.search(text):
+            _append_omission(omissions, "suggested_labels", "forbidden_public_terms")
+            continue
+        if text not in labels:
+            labels.append(text)
+        if len(labels) >= max_items:
+            break
+    return labels
+
+
 def _normalize_text_list(value: Any, *, max_chars: int = 120, max_items: int = MAX_LIST_ITEMS) -> tuple[list[str], list[str]]:
     if value in (None, ""):
         return [], []
@@ -136,20 +238,28 @@ def _normalize_issue_ref(value: Any) -> str | None:
             return f"#{number}"
     if "/" in text and "#" in text:
         owner_repo, number = text.rsplit("#", 1)
-        if owner_repo and number.isdigit():
+        if owner_repo and number.isdigit() and re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", owner_repo):
             return f"{owner_repo}#{number}"
-    scrubbed, _ = scrub_for_public(text, max_chars=80)
-    return scrubbed or None
+    return None
 
 
-def _normalize_issue_refs(value: Any, *, max_items: int = MAX_LIST_ITEMS) -> list[str]:
+def _normalize_issue_refs(
+    value: Any,
+    *,
+    field: str,
+    omissions: list[dict[str, str]],
+    max_items: int = MAX_LIST_ITEMS,
+) -> list[str]:
     if value in (None, ""):
         return []
     items = value if isinstance(value, (list, tuple, set)) else [value]
     refs: list[str] = []
     for item in items:
         ref = _normalize_issue_ref(item)
-        if ref and ref not in refs:
+        if not ref:
+            _append_omission(omissions, field, "invalid_issue_ref")
+            continue
+        if ref not in refs:
             refs.append(ref)
         if len(refs) >= max_items:
             break
@@ -172,6 +282,7 @@ def render_issue_triage_body(payload: dict[str, Any]) -> dict[str, Any]:
     """Render the scrubbed body without the sentinel and report safety metadata."""
 
     redactions: list[str] = []
+    policy_omissions: list[dict[str, str]] = []
     lines = [
         "## Hermes issue triage",
         "",
@@ -179,36 +290,56 @@ def render_issue_triage_body(payload: dict[str, Any]) -> dict[str, Any]:
     ]
     public_values_for_substance: list[str] = []
 
-    classification = _first_present(payload, ("classification", "category"))
-    if classification not in (None, ""):
-        text, categories = _scrub_value(classification, max_chars=80)
-        redactions.extend(categories)
-        if text:
-            lines.append(f"- Classification: `{text}`")
-            public_values_for_substance.append(text)
-
-    priority = _first_present(payload, ("priority",))
-    if priority not in (None, ""):
-        text, categories = _scrub_value(priority, max_chars=80)
-        redactions.extend(categories)
-        if text:
-            lines.append(f"- Priority: `{text}`")
-            public_values_for_substance.append(text)
-
-    labels, categories = _normalize_text_list(
-        _first_present(payload, ("suggested_labels", "labels")),
-        max_chars=80,
+    classification = _policy_enum_value(
+        _first_present(payload, ("classification", "category")),
+        field="classification",
+        allowed=ALLOWED_CLASSIFICATIONS,
+        omissions=policy_omissions,
     )
-    redactions.extend(categories)
+    if classification:
+        lines.append(f"- Classification: `{classification}`")
+        public_values_for_substance.append(classification)
+
+    priority = _policy_enum_value(
+        _first_present(payload, ("priority",)),
+        field="priority",
+        allowed=ALLOWED_PRIORITIES,
+        omissions=policy_omissions,
+    )
+    if priority:
+        lines.append(f"- Priority: `{priority}`")
+        public_values_for_substance.append(priority)
+
+    labels = _policy_labels(
+        _first_present(payload, ("suggested_labels",)),
+        omissions=policy_omissions,
+        redactions=redactions,
+    )
     if labels:
         lines.append(f"- Suggested labels (proposal only): {', '.join(f'`{label}`' for label in labels)}")
         public_values_for_substance.extend(labels)
 
     ready = _bool_or_none(_first_present(payload, ("ready",)))
-    blocked_by = _normalize_issue_refs(_first_present(payload, ("blocked_by",)))
-    dependencies = _normalize_issue_refs(_first_present(payload, ("dependencies", "depends_on")))
-    duplicate_of = _normalize_issue_refs(_first_present(payload, ("duplicate_of",)))
-    related = _normalize_issue_refs(_first_present(payload, ("related_issues", "related")))
+    blocked_by = _normalize_issue_refs(
+        _first_present(payload, ("blocked_by",)),
+        field="blocked_by",
+        omissions=policy_omissions,
+    )
+    dependencies = _normalize_issue_refs(
+        _first_present(payload, ("dependencies", "depends_on")),
+        field="dependencies",
+        omissions=policy_omissions,
+    )
+    duplicate_of = _normalize_issue_refs(
+        _first_present(payload, ("duplicate_of",)),
+        field="duplicate_of",
+        omissions=policy_omissions,
+    )
+    related = _normalize_issue_refs(
+        _first_present(payload, ("related_issues", "related")),
+        field="related_issues",
+        omissions=policy_omissions,
+    )
 
     if duplicate_of or related:
         refs = []
@@ -231,33 +362,26 @@ def render_issue_triage_body(payload: dict[str, Any]) -> dict[str, Any]:
         lines.append(f"- Ready/blocked: `{status}`")
         public_values_for_substance.append(status)
 
-    summary_value = _first_present(payload, ("public_summary", "summary", "rationale"))
-    if summary_value not in (None, ""):
-        text, categories = _scrub_value(summary_value)
-        redactions.extend(categories)
-        if text:
-            lines.extend(["", f"Summary: {text}"])
-            public_values_for_substance.append(text)
-
-    next_action = _first_present(payload, ("recommended_next_action", "next_action"))
-    if next_action not in (None, ""):
-        text, categories = _scrub_value(next_action)
-        redactions.extend(categories)
-        if text:
-            lines.extend(["", f"Recommended next action: {text}"])
-            public_values_for_substance.append(text)
-
-    needs_info, categories = _normalize_text_list(
-        _first_present(payload, ("needs_human_decision", "needs_info", "questions")),
-        max_chars=220,
-        max_items=3,
+    summary_text = _policy_text_value(
+        _first_present(payload, ("public_summary", "summary")),
+        field="public_summary",
+        omissions=policy_omissions,
+        redactions=redactions,
     )
-    redactions.extend(categories)
-    if needs_info:
-        lines.extend(["", "Needs human decision:"])
-        for item in needs_info:
-            lines.append(f"- {item}")
-        public_values_for_substance.extend(needs_info)
+    if summary_text:
+        lines.extend(["", f"Summary: {summary_text}"])
+        public_values_for_substance.append(summary_text)
+
+    next_action_text = _policy_text_value(
+        _first_present(payload, ("recommended_next_action", "next_action")),
+        field="recommended_next_action",
+        omissions=policy_omissions,
+        redactions=redactions,
+        max_lines=3,
+    )
+    if next_action_text:
+        lines.extend(["", f"Recommended next action: {next_action_text}"])
+        public_values_for_substance.append(next_action_text)
 
     lines.extend(
         [
@@ -273,6 +397,7 @@ def render_issue_triage_body(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "body_without_sentinel": body + "\n",
         "redactions": sorted(set(redactions)),
+        "policy_omissions": policy_omissions,
         "has_public_substance": has_substance,
         "rendered_from_allowlisted_fields": True,
     }
@@ -320,14 +445,20 @@ def build_publication_plan(
 ) -> dict[str, Any]:
     rendered = render_issue_triage_body(payload)
     if not rendered["has_public_substance"]:
+        omission_reasons = {item["reason"] for item in rendered["policy_omissions"]}
+        if rendered["redactions"] and omission_reasons <= {"redacted_content"}:
+            skip_reason = "all-redacted"
+        else:
+            skip_reason = "no-policy-approved-content" if rendered["policy_omissions"] else "all-redacted"
         return {
             "phase": POLICY_PHASE,
             "policy_version": ISSUE_TRIAGE_SENTINEL_VERSION,
             "repo": repo,
             "issue_number": issue,
             "action": "skip",
-            "skip_reason": "all-redacted",
+            "skip_reason": skip_reason,
             "redactions": rendered["redactions"],
+            "policy_omissions": rendered["policy_omissions"],
             "body": rendered["body_without_sentinel"],
             "github_writes_enabled": False,
         }
@@ -348,6 +479,7 @@ def build_publication_plan(
         "sentinel": sentinel,
         "body": body,
         "redactions": rendered["redactions"],
+        "policy_omissions": rendered["policy_omissions"],
         "rendered_from_allowlisted_fields": True,
         "github_writes_enabled": False,
     }

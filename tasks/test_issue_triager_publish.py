@@ -257,6 +257,78 @@ class IssueTriagerPublishTests(unittest.TestCase):
         self.assertEqual(report["skip_reason"], "all-redacted")
         self.assertEqual(len(client.posted), 0)
 
+    def test_non_allowlisted_public_fields_do_not_publish_by_themselves(self):
+        state = self.empty_state()
+        client = FakeIssueCommentClient()
+
+        report = publisher.publish_issue_triage(
+            {
+                "issue_number": 43,
+                "classification": "security-but-public-raw",
+                "priority": "ship after private escalation",
+                "suggested_labels": ["prod<secret>"],
+                "dependencies": ["internal task after t_051678e3"],
+                "public_summary": "Publish the raw GraphQL payload from /Users/adachi/tmp.",
+                "recommended_next_action": "Use OPENAI_API_KEY=secret-value from the Hermes task.",
+            },
+            state=state,
+            client=client,
+            dry_run=False,
+            sink="github",
+            env=self.enabled_env(),
+        )
+
+        self.assertEqual(report["action"], "skip")
+        self.assertEqual(report["skip_reason"], "no-policy-approved-content")
+        self.assertEqual(len(client.posted), 0)
+        omitted_fields = {item["field"] for item in report["policy_omissions"]}
+        self.assertIn("classification", omitted_fields)
+        self.assertIn("priority", omitted_fields)
+        self.assertIn("suggested_labels", omitted_fields)
+        self.assertIn("dependencies", omitted_fields)
+        self.assertIn("public_summary", omitted_fields)
+        self.assertIn("recommended_next_action", omitted_fields)
+
+    def test_malformed_optional_fields_are_omitted_when_safe_fields_remain(self):
+        state = self.empty_state()
+        client = FakeIssueCommentClient()
+
+        report = publisher.publish_issue_triage(
+            {
+                "issue_number": 43,
+                "classification": "feature",
+                "priority": "after private customer escalation",
+                "suggested_labels": ["enhancement", "bad<label>"],
+                "dependencies": [28, "internal roadmap item"],
+                "public_summary": "Document the publication policy.",
+                "recommended_next_action": "Keep the publisher disabled by default.",
+                # Existing issue labels are not publication proposals and must be ignored.
+                "labels": ["do-not-publish-as-suggestion"],
+            },
+            state=state,
+            client=client,
+            dry_run=False,
+            sink="github",
+            env=self.enabled_env(),
+        )
+
+        self.assertEqual(report["action"], "published")
+        self.assertEqual(len(client.posted), 1)
+        body = client.posted[0]["body"]
+        self.assertIn("Classification: `feature`", body)
+        self.assertIn("Suggested labels (proposal only): `enhancement`", body)
+        self.assertIn("Dependencies: #28", body)
+        self.assertIn("Document the publication policy.", body)
+        self.assertIn("Keep the publisher disabled by default.", body)
+        self.assertNotIn("after private customer", body)
+        self.assertNotIn("bad<label>", body)
+        self.assertNotIn("internal roadmap", body)
+        self.assertNotIn("do-not-publish-as-suggestion", body)
+        omitted_fields = {item["field"] for item in report["policy_omissions"]}
+        self.assertIn("priority", omitted_fields)
+        self.assertIn("suggested_labels", omitted_fields)
+        self.assertIn("dependencies", omitted_fields)
+
     def test_disabled_by_default_does_not_call_github_post(self):
         state = self.empty_state()
         client = FakeIssueCommentClient()

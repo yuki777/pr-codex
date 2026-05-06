@@ -18,9 +18,10 @@ triage stay dry-run/recommendation-only by default.
 Allowed public comment content is restricted to this whitelist:
 
 - classification: `bug`, `feature`, `docs`, `infra`, or `other`
-- priority recommendation
-- suggested labels, explicitly phrased as proposals only (never apply them)
-- duplicate/related Issue numbers
+- priority recommendation: `low`, `medium`, `high`, `critical`, `urgent`, or `p0`–`p4`
+- suggested labels, explicitly phrased as proposals only (never apply them);
+  labels must be short GitHub label-shaped text, not free-form prose
+- duplicate/related Issue numbers; free-form dependency text is not publishable
 - dependencies, including explicit `depends on #N` / `blocked by #N` and the
   inferred schema → validator/gate → workflow → docs ordering
 - ready / blocked status
