@@ -135,6 +135,40 @@ class ScoreFixtureTest(unittest.TestCase):
         errors = validate_score_report(report)
         self.assertIn("$.gate_checks[1].actual: must equal $.false_positive_rate", errors)
 
+    def test_score_report_includes_oracle_scoring_gate(self) -> None:
+        report = score("medium", "perfect")
+        self.assertEqual(
+            report["scoring_gate"],
+            {
+                "acceptable_pass_rate_min": 0.8,
+                "exact_pass_rate_min": 0.5,
+                "false_positive_rate_max": 0.1,
+            },
+        )
+        self.assertEqual(
+            {check["name"] for check in report["gate_checks"]},
+            set(report["scoring_gate"]),
+        )
+
+    def test_score_report_validator_requires_gate_check_for_each_scoring_gate_threshold(self) -> None:
+        report = score("small", "false-positive-trap")
+        report["gate_checks"] = [
+            check for check in report["gate_checks"] if check["name"] != "false_positive_rate_max"
+        ]
+        report["gate_pass"] = all(check["passed"] for check in report["gate_checks"])
+        errors = validate_score_report(report)
+        self.assertIn("$.gate_checks: missing checks from scoring_gate: false_positive_rate_max", errors)
+
+    def test_score_report_validator_binds_gate_check_threshold_to_scoring_gate(self) -> None:
+        report = score("small", "false-positive-trap")
+        for check in report["gate_checks"]:
+            if check["name"] == "false_positive_rate_max":
+                check["threshold"] = 1.0
+                check["passed"] = True
+        report["gate_pass"] = True
+        errors = validate_score_report(report)
+        self.assertIn("$.gate_checks[1].threshold: must equal $.scoring_gate.false_positive_rate_max", errors)
+
     def test_fixture_context_must_match_before_scoring(self) -> None:
         expected = load_json(ROOT / "fixtures" / "small" / "expected-findings.json")
         actual = copy.deepcopy(load_json(ROOT / "fixtures" / "small" / "scoring-stubs" / "perfect.findings.verified.json"))

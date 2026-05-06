@@ -36,6 +36,21 @@ EXPECTED_FIXTURE_IDS = {
     "bear-sunday-pr143-medium",
     "bear-sunday-pr171-large",
 }
+EXPECTED_FIXTURE_SCORING_GATES = {
+    "bear-sunday-pr164-small": {
+        "acceptable_pass_rate_min": 0.8,
+        "false_positive_rate_max": 0.1,
+    },
+    "bear-sunday-pr143-medium": {
+        "exact_pass_rate_min": 0.5,
+        "acceptable_pass_rate_min": 0.8,
+        "false_positive_rate_max": 0.1,
+    },
+    "bear-sunday-pr171-large": {
+        "acceptable_pass_rate_min": 0.7,
+        "false_positive_rate_max": 0.15,
+    },
+}
 SCORE_GATE_METRICS = {
     "exact_pass_rate_min": ("exact_pass_rate", ">="),
     "acceptable_pass_rate_min": ("acceptable_pass_rate", ">="),
@@ -145,6 +160,8 @@ def status_fixture_scoring(score_reports: list[dict[str, Any]]) -> dict[str, Any
             "fixture_id": report.get("fixture_id"),
             "gate_pass": report.get("gate_pass"),
             "gate_consistent": score_report_gate_consistent(report),
+            "required_scoring_gate": EXPECTED_FIXTURE_SCORING_GATES.get(str(report.get("fixture_id")), {}),
+            "reported_scoring_gate": report.get("scoring_gate"),
             "acceptable_pass_rate": report.get("acceptable_pass_rate"),
             "false_positive_rate": report.get("false_positive_rate"),
             "recall_known_bug": report.get("recall_known_bug"),
@@ -164,8 +181,23 @@ def status_fixture_scoring(score_reports: list[dict[str, Any]]) -> dict[str, Any
 
 
 def score_report_gate_consistent(report: dict[str, Any]) -> bool:
+    fixture_id = report.get("fixture_id")
+    if not isinstance(fixture_id, str) or fixture_id not in EXPECTED_FIXTURE_SCORING_GATES:
+        return False
+    required_gate = EXPECTED_FIXTURE_SCORING_GATES[fixture_id]
+    raw_reported_gate = report.get("scoring_gate")
+    if not isinstance(raw_reported_gate, dict) or set(raw_reported_gate) != set(required_gate):
+        return False
+    reported_gate = normalized_scoring_gate(report.get("scoring_gate"))
+    if reported_gate != required_gate:
+        return False
     gate_checks = report.get("gate_checks")
     if report.get("gate_pass") is not True or not isinstance(gate_checks, list) or not gate_checks:
+        return False
+    check_names = [check.get("name") for check in gate_checks if isinstance(check, dict)]
+    if len(check_names) != len(set(check_names)):
+        return False
+    if set(check_names) != set(required_gate):
         return False
     for check in gate_checks:
         if not isinstance(check, dict):
@@ -179,12 +211,25 @@ def score_report_gate_consistent(report: dict[str, Any]) -> bool:
         passed = check.get("passed")
         if not is_number(actual) or not is_number(threshold) or not is_number(report.get(metric_name)):
             return False
+        if float(threshold) != required_gate[name]:
+            return False
         if actual != report.get(metric_name):
             return False
         expected_passed = actual <= threshold if operator == "<=" else actual >= threshold
         if passed is not expected_passed or passed is not True:
             return False
     return True
+
+
+def normalized_scoring_gate(value: Any) -> dict[str, float]:
+    if not isinstance(value, dict):
+        return {}
+    gate: dict[str, float] = {}
+    for name in SCORE_GATE_METRICS:
+        threshold = value.get(name)
+        if is_rate(threshold):
+            gate[name] = round(float(threshold), 4)
+    return gate
 
 
 def overall(criteria: list[dict[str, Any]]) -> str:

@@ -25,6 +25,7 @@ TOP_KEYS = {
     "false_positive_rate",
     "recall_known_bug",
     "gate_pass",
+    "scoring_gate",
     "gate_checks",
     "counts",
     "unmatched_actuals",
@@ -60,6 +61,7 @@ GATE_CHECK_METRICS = {
     "false_positive_rate_max": ("false_positive_rate", "<="),
     "recall_known_bug_min": ("recall_known_bug", ">="),
 }
+SCORING_GATE_KEYS = set(GATE_CHECK_METRICS)
 
 
 def load_json(path: Path) -> Any:
@@ -122,6 +124,7 @@ def validate_gate_checks(errors: list[str], value: Any) -> None:
     if not isinstance(value, list):
         errors.append("$.gate_checks: must be an array")
         return
+    names: list[str] = []
     for index, item in enumerate(value):
         path = f"$.gate_checks[{index}]"
         if not isinstance(item, dict):
@@ -133,11 +136,28 @@ def validate_gate_checks(errors: list[str], value: Any) -> None:
             errors.append(f"{path}.name: must be a non-empty string")
         elif item.get("name") not in GATE_CHECK_METRICS:
             errors.append(f"{path}.name: unknown gate check name")
+        else:
+            names.append(item["name"])
         for key in ("actual", "threshold"):
             if not isinstance(item.get(key), (int, float)) or isinstance(item.get(key), bool):
                 errors.append(f"{path}.{key}: must be a number")
         if not isinstance(item.get("passed"), bool):
             errors.append(f"{path}.passed: must be boolean")
+    duplicates = sorted({name for name in names if names.count(name) > 1})
+    if duplicates:
+        errors.append(f"$.gate_checks: duplicate checks: {', '.join(duplicates)}")
+
+
+def validate_scoring_gate(errors: list[str], value: Any) -> None:
+    if not isinstance(value, dict):
+        errors.append("$.scoring_gate: must be an object")
+        return
+    add_unexpected(errors, "$.scoring_gate", value, SCORING_GATE_KEYS)
+    if not value:
+        errors.append("$.scoring_gate: must define at least one gate check")
+    for key in SCORING_GATE_KEYS:
+        if key in value and not number_0_1(value[key]):
+            errors.append(f"$.scoring_gate.{key}: must be a number between 0 and 1")
 
 
 def validate_counts(errors: list[str], value: Any) -> None:
@@ -263,6 +283,7 @@ def validate_score_report(data: Any) -> list[str]:
             errors.append(f"$.{key}: must be a number between 0 and 1")
     if "gate_pass" in data and not isinstance(data["gate_pass"], bool):
         errors.append("$.gate_pass: must be boolean")
+    validate_scoring_gate(errors, data.get("scoring_gate"))
     validate_gate_checks(errors, data.get("gate_checks"))
     validate_counts(errors, data.get("counts"))
     validate_unmatched_actuals(errors, data.get("unmatched_actuals"))
@@ -274,6 +295,7 @@ def validate_score_report(data: Any) -> list[str]:
 def validate_internal_consistency(errors: list[str], data: dict[str, Any]) -> None:
     counts = data.get("counts")
     breakdown = data.get("breakdown")
+    scoring_gate = data.get("scoring_gate")
     gate_checks = data.get("gate_checks")
     if isinstance(counts, dict):
         expected_rates = {
@@ -318,6 +340,24 @@ def validate_internal_consistency(errors: list[str], data: dict[str, Any]) -> No
         expected_gate_pass = all(item.get("passed") is True for item in gate_checks)
         if isinstance(data.get("gate_pass"), bool) and data.get("gate_pass") is not expected_gate_pass:
             errors.append("$.gate_pass: must equal all(gate_checks[].passed)")
+        valid_gate_thresholds: dict[str, float] = {}
+        if isinstance(scoring_gate, dict):
+            valid_gate_thresholds = {
+                key: round(float(scoring_gate[key]), 4)
+                for key in SCORING_GATE_KEYS
+                if key in scoring_gate and number_0_1(scoring_gate[key])
+            }
+            check_names = [
+                item.get("name")
+                for item in gate_checks
+                if isinstance(item.get("name"), str) and item.get("name") in GATE_CHECK_METRICS
+            ]
+            missing = sorted(set(valid_gate_thresholds) - set(check_names))
+            unexpected = sorted(set(check_names) - set(valid_gate_thresholds))
+            if missing:
+                errors.append(f"$.gate_checks: missing checks from scoring_gate: {', '.join(missing)}")
+            if unexpected:
+                errors.append(f"$.gate_checks: unexpected checks not present in scoring_gate: {', '.join(unexpected)}")
         for index, item in enumerate(gate_checks):
             name = item.get("name")
             actual = item.get("actual")
@@ -330,6 +370,8 @@ def validate_internal_consistency(errors: list[str], data: dict[str, Any]) -> No
             metric_name, operator = GATE_CHECK_METRICS[name]
             if number_0_1(data.get(metric_name)) and actual != data.get(metric_name):
                 errors.append(f"$.gate_checks[{index}].actual: must equal $.{metric_name}")
+            if name in valid_gate_thresholds and threshold != valid_gate_thresholds[name]:
+                errors.append(f"$.gate_checks[{index}].threshold: must equal $.scoring_gate.{name}")
             expected_passed = actual <= threshold if name.endswith("_max") else actual >= threshold
             if operator == "<=":
                 expected_passed = actual <= threshold

@@ -13,6 +13,7 @@
     "false_positive_rate",
     "recall_known_bug",
     "gate_pass",
+    "scoring_gate",
     "gate_checks",
     "counts",
     "unmatched_actuals",
@@ -27,6 +28,7 @@
     "false_positive_rate": {"type": "number", "minimum": 0, "maximum": 1},
     "recall_known_bug": {"type": "number", "minimum": 0, "maximum": 1},
     "gate_pass": {"type": "boolean"},
+    "scoring_gate": {"$ref": "#/$defs/scoring_gate"},
     "gate_checks": {
       "type": "array",
       "items": {"$ref": "#/$defs/gate_check"}
@@ -45,6 +47,17 @@
     "severity": {"enum": ["must_fix", "should_fix", "nit", "note"]},
     "axis_value": {"enum": ["yes", "no", "unknown"]},
     "match_status": {"enum": ["matched", "missed", "false_positive_promoted"]},
+    "scoring_gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "exact_pass_rate_min": {"type": "number", "minimum": 0, "maximum": 1},
+        "acceptable_pass_rate_min": {"type": "number", "minimum": 0, "maximum": 1},
+        "false_positive_rate_max": {"type": "number", "minimum": 0, "maximum": 1},
+        "recall_known_bug_min": {"type": "number", "minimum": 0, "maximum": 1}
+      }
+    },
     "gate_check": {
       "type": "object",
       "additionalProperties": false,

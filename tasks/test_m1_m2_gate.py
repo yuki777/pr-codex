@@ -15,7 +15,7 @@ TASKS = ROOT / "tasks"
 GATE_PATH = TASKS / "m1_m2_gate.py"
 sys.path.insert(0, str(TASKS))
 
-from m1_m2_gate import build_report, score_report_gate_consistent  # noqa: E402
+from m1_m2_gate import EXPECTED_FIXTURE_SCORING_GATES, build_report, score_report_gate_consistent  # noqa: E402
 from score_fixture import load_json, score_fixture  # noqa: E402
 from validate_m1_m2_gate import validate_m1_m2_gate  # noqa: E402
 
@@ -44,6 +44,13 @@ def passing_inputs() -> dict[str, object]:
 class M1M2GateTest(unittest.TestCase):
     def criteria_by_name(self, report: dict[str, object]) -> dict[str, dict[str, object]]:
         return {item["name"]: item for item in report["criteria"]}
+
+    def test_fixture_gate_threshold_table_matches_fixture_oracles(self) -> None:
+        actual = {}
+        for size in ("small", "medium", "large"):
+            expected = load_json(ROOT / "fixtures" / size / "expected-findings.json")
+            actual[expected["fixture_id"]] = expected["scoring_gate"]
+        self.assertEqual(actual, EXPECTED_FIXTURE_SCORING_GATES)
 
     def test_all_pass_when_operational_inputs_and_fixture_scores_pass(self) -> None:
         report = build_report([perfect_score("small"), perfect_score("medium"), perfect_score("large")], passing_inputs(), EVALUATED_AT)
@@ -95,6 +102,36 @@ class M1M2GateTest(unittest.TestCase):
         for check in edited["gate_checks"]:
             if check["name"] == "false_positive_rate_max":
                 check["actual"] = 0.0
+                check["passed"] = True
+        edited["gate_pass"] = True
+        self.assertFalse(score_report_gate_consistent(edited))
+        report = build_report([edited, perfect_score("medium"), perfect_score("large")], passing_inputs(), EVALUATED_AT)
+        by_name = self.criteria_by_name(report)
+        self.assertEqual(by_name["fixture_scoring_gate"]["status"], "fail")
+        self.assertEqual(report["overall_status"], "fail")
+
+    def test_fixture_gate_requires_oracle_gate_checks(self) -> None:
+        expected = load_json(ROOT / "fixtures" / "small" / "expected-findings.json")
+        actual = load_json(ROOT / "fixtures" / "small" / "scoring-stubs" / "false-positive-trap.findings.verified.json")
+        edited = score_fixture(expected, actual, EVALUATED_AT)
+        edited["gate_checks"] = [
+            check for check in edited["gate_checks"] if check["name"] != "false_positive_rate_max"
+        ]
+        edited["gate_pass"] = True
+        self.assertFalse(score_report_gate_consistent(edited))
+        report = build_report([edited, perfect_score("medium"), perfect_score("large")], passing_inputs(), EVALUATED_AT)
+        by_name = self.criteria_by_name(report)
+        self.assertEqual(by_name["fixture_scoring_gate"]["status"], "fail")
+        self.assertEqual(report["overall_status"], "fail")
+
+    def test_fixture_gate_requires_oracle_thresholds(self) -> None:
+        expected = load_json(ROOT / "fixtures" / "small" / "expected-findings.json")
+        actual = load_json(ROOT / "fixtures" / "small" / "scoring-stubs" / "false-positive-trap.findings.verified.json")
+        edited = score_fixture(expected, actual, EVALUATED_AT)
+        edited["scoring_gate"]["false_positive_rate_max"] = 1.0
+        for check in edited["gate_checks"]:
+            if check["name"] == "false_positive_rate_max":
+                check["threshold"] = 1.0
                 check["passed"] = True
         edited["gate_pass"] = True
         self.assertFalse(score_report_gate_consistent(edited))

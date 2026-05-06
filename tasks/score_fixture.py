@@ -371,6 +371,23 @@ def gate_checks(scoring_gate: Any, metrics: dict[str, float]) -> list[dict[str, 
     return checks
 
 
+def report_scoring_gate(scoring_gate: Any) -> dict[str, float]:
+    """Return a deterministic, report-safe copy of the fixture scoring gate."""
+    if not isinstance(scoring_gate, dict):
+        return {}
+    mapping = {
+        "exact_pass_rate_min": "exact_pass_rate_min",
+        "acceptable_pass_rate_min": "acceptable_pass_rate_min",
+        "false_positive_rate_max": "false_positive_rate_max",
+        "recall_known_bug_min": "recall_known_bug_min",
+    }
+    copied: dict[str, float] = {}
+    for key in mapping:
+        if key in scoring_gate and isinstance(scoring_gate[key], (int, float)) and not isinstance(scoring_gate[key], bool):
+            copied[key] = round(float(scoring_gate[key]), 4)
+    return copied
+
+
 def validate_fixture_context(expected: dict[str, Any], actual: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     source = expected.get("source")
@@ -412,6 +429,7 @@ def score_fixture(expected: dict[str, Any], actual: dict[str, Any], evaluated_at
         "evaluated_at": evaluated_at,
         **metrics,
         "gate_pass": all(check["passed"] for check in checks),
+        "scoring_gate": report_scoring_gate(expected.get("scoring_gate")),
         "gate_checks": checks,
         "counts": counts,
         "unmatched_actuals": summarize_unmatched_actuals(actuals, matches),
