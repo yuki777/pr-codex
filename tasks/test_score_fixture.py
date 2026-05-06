@@ -90,6 +90,27 @@ class ScoreFixtureTest(unittest.TestCase):
         self.assertEqual(report["acceptable_pass_rate"], 0.0)
         self.assertFalse(report["breakdown"][0]["evidence_level_ok"])
 
+    def test_acceptable_risk_overpromotion_without_location_fails_gate(self) -> None:
+        expected = load_json(ROOT / "fixtures" / "small" / "expected-findings.json")
+        actual = copy.deepcopy(load_json(ROOT / "fixtures" / "small" / "scoring-stubs" / "perfect.findings.verified.json"))
+        overpromotion = copy.deepcopy(actual["findings"][0])
+        overpromotion["location"]["path"] = "src/Extension/Application/AbstractAppDocs.php"
+        overpromotion["severity"] = "should_fix"
+        overpromotion["category"] = "code_quality"
+        overpromotion["title"] = "Reviewer suggests adding @since / @removed-in tags"
+        overpromotion["problem"] = "Reviewer suggests adding @since / @removed-in tags"
+        overpromotion["evidence_level"] = "corroborated"
+        overpromotion["axes"] = {"real": "yes", "triggerable": "no", "impactful": "no", "general": "yes"}
+        overpromotion["fingerprint"] = "1" * 64
+        overpromotion["id"] = "1" * 64
+        actual["findings"].append(overpromotion)
+        report = score_fixture(expected, actual, EVALUATED_AT)
+        self.assertFalse(report["gate_pass"])
+        self.assertEqual(report["acceptable_pass_rate"], 0.5)
+        risk_rows = [row for row in report["breakdown"] if row["expected_id"] == "missing-since-removed-in-tag-trap"]
+        self.assertEqual(risk_rows[0]["match_status"], "matched")
+        self.assertFalse(risk_rows[0]["severity_diff"]["acceptable"])
+
     def test_score_report_validator_rejects_contradictory_report(self) -> None:
         report = score("small", "perfect")
         report["counts"]["acceptable_pass"] = 0
@@ -103,6 +124,16 @@ class ScoreFixtureTest(unittest.TestCase):
         report["gate_pass"] = True
         errors = validate_score_report(report)
         self.assertIn("$.gate_pass: must equal all(gate_checks[].passed)", errors)
+
+    def test_score_report_validator_binds_gate_check_actual_to_top_level_metric(self) -> None:
+        report = score("small", "false-positive-trap")
+        for check in report["gate_checks"]:
+            if check["name"] == "false_positive_rate_max":
+                check["actual"] = 0.0
+                check["passed"] = True
+        report["gate_pass"] = True
+        errors = validate_score_report(report)
+        self.assertIn("$.gate_checks[1].actual: must equal $.false_positive_rate", errors)
 
     def test_fixture_context_must_match_before_scoring(self) -> None:
         expected = load_json(ROOT / "fixtures" / "small" / "expected-findings.json")

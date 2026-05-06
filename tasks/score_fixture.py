@@ -113,6 +113,17 @@ def choose_best_actual(expected: dict[str, Any], actuals: list[dict[str, Any]], 
     return available[0]
 
 
+def keyword_candidate_indexes(expected: dict[str, Any], actuals: list[dict[str, Any]]) -> list[int]:
+    category = expected.get("category")
+    if not isinstance(category, str):
+        return []
+    return [
+        index
+        for index, actual in enumerate(actuals)
+        if actual.get("category") == category and title_keyword_match(expected.get("title"), actual.get("title"))
+    ]
+
+
 def tokenize(text: Any) -> set[str]:
     if not isinstance(text, str):
         return set()
@@ -236,9 +247,10 @@ def match_expected_to_actuals(expected_findings: list[dict[str, Any]], actuals: 
         if expected.get("expected_outcome") == "known_false_positive_trap":
             continue
         key = expected_key(expected)
-        if key is None:
-            continue
-        best = choose_best_actual(expected, actuals, groups.get(key, []), used)
+        candidate_indexes = groups.get(key, []) if key is not None else []
+        if key is None and expected.get("expected_outcome") == "acceptable_risk":
+            candidate_indexes = keyword_candidate_indexes(expected, actuals)
+        best = choose_best_actual(expected, actuals, candidate_indexes, used)
         if best is not None:
             matches[expected_index] = best
             used.add(best)

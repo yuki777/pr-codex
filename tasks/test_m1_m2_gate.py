@@ -15,7 +15,7 @@ TASKS = ROOT / "tasks"
 GATE_PATH = TASKS / "m1_m2_gate.py"
 sys.path.insert(0, str(TASKS))
 
-from m1_m2_gate import build_report  # noqa: E402
+from m1_m2_gate import build_report, score_report_gate_consistent  # noqa: E402
 from score_fixture import load_json, score_fixture  # noqa: E402
 from validate_m1_m2_gate import validate_m1_m2_gate  # noqa: E402
 
@@ -84,6 +84,21 @@ class M1M2GateTest(unittest.TestCase):
         actual = load_json(ROOT / "fixtures" / "small" / "scoring-stubs" / "missed-known-bug.findings.verified.json")
         failing_score = score_fixture(expected, actual, EVALUATED_AT)
         report = build_report([failing_score, perfect_score("medium"), perfect_score("large")], passing_inputs(), EVALUATED_AT)
+        by_name = self.criteria_by_name(report)
+        self.assertEqual(by_name["fixture_scoring_gate"]["status"], "fail")
+        self.assertEqual(report["overall_status"], "fail")
+
+    def test_fixture_gate_recomputes_serialized_score_gate_consistency(self) -> None:
+        expected = load_json(ROOT / "fixtures" / "small" / "expected-findings.json")
+        actual = load_json(ROOT / "fixtures" / "small" / "scoring-stubs" / "false-positive-trap.findings.verified.json")
+        edited = score_fixture(expected, actual, EVALUATED_AT)
+        for check in edited["gate_checks"]:
+            if check["name"] == "false_positive_rate_max":
+                check["actual"] = 0.0
+                check["passed"] = True
+        edited["gate_pass"] = True
+        self.assertFalse(score_report_gate_consistent(edited))
+        report = build_report([edited, perfect_score("medium"), perfect_score("large")], passing_inputs(), EVALUATED_AT)
         by_name = self.criteria_by_name(report)
         self.assertEqual(by_name["fixture_scoring_gate"]["status"], "fail")
         self.assertEqual(report["overall_status"], "fail")

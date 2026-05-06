@@ -54,6 +54,12 @@ AXIS_DIFF_KEYS = {"expected", "actual", "acceptable"}
 SEVERITY_DIFF_KEYS = {"expected", "actual", "acceptable"}
 GATE_CHECK_KEYS = {"name", "actual", "threshold", "passed"}
 UNMATCHED_ACTUAL_KEYS = {"fingerprint", "severity", "category", "path", "title"}
+GATE_CHECK_METRICS = {
+    "exact_pass_rate_min": ("exact_pass_rate", ">="),
+    "acceptable_pass_rate_min": ("acceptable_pass_rate", ">="),
+    "false_positive_rate_max": ("false_positive_rate", "<="),
+    "recall_known_bug_min": ("recall_known_bug", ">="),
+}
 
 
 def load_json(path: Path) -> Any:
@@ -125,6 +131,8 @@ def validate_gate_checks(errors: list[str], value: Any) -> None:
         require(errors, path, item, GATE_CHECK_KEYS)
         if not non_empty_string(item.get("name")):
             errors.append(f"{path}.name: must be a non-empty string")
+        elif item.get("name") not in GATE_CHECK_METRICS:
+            errors.append(f"{path}.name: unknown gate check name")
         for key in ("actual", "threshold"):
             if not isinstance(item.get(key), (int, float)) or isinstance(item.get(key), bool):
                 errors.append(f"{path}.{key}: must be a number")
@@ -317,7 +325,16 @@ def validate_internal_consistency(errors: list[str], data: dict[str, Any]) -> No
             passed = item.get("passed")
             if not isinstance(name, str) or not isinstance(actual, (int, float)) or not isinstance(threshold, (int, float)) or not isinstance(passed, bool):
                 continue
+            if name not in GATE_CHECK_METRICS:
+                continue
+            metric_name, operator = GATE_CHECK_METRICS[name]
+            if number_0_1(data.get(metric_name)) and actual != data.get(metric_name):
+                errors.append(f"$.gate_checks[{index}].actual: must equal $.{metric_name}")
             expected_passed = actual <= threshold if name.endswith("_max") else actual >= threshold
+            if operator == "<=":
+                expected_passed = actual <= threshold
+            elif operator == ">=":
+                expected_passed = actual >= threshold
             if passed is not expected_passed:
                 errors.append(f"$.gate_checks[{index}].passed: must match actual/threshold comparison")
 

@@ -36,6 +36,12 @@ EXPECTED_FIXTURE_IDS = {
     "bear-sunday-pr143-medium",
     "bear-sunday-pr171-large",
 }
+SCORE_GATE_METRICS = {
+    "exact_pass_rate_min": ("exact_pass_rate", ">="),
+    "acceptable_pass_rate_min": ("acceptable_pass_rate", ">="),
+    "false_positive_rate_max": ("false_positive_rate", "<="),
+    "recall_known_bug_min": ("recall_known_bug", ">="),
+}
 
 
 def load_json(path: Path) -> Any:
@@ -138,6 +144,7 @@ def status_fixture_scoring(score_reports: list[dict[str, Any]]) -> dict[str, Any
         {
             "fixture_id": report.get("fixture_id"),
             "gate_pass": report.get("gate_pass"),
+            "gate_consistent": score_report_gate_consistent(report),
             "acceptable_pass_rate": report.get("acceptable_pass_rate"),
             "false_positive_rate": report.get("false_positive_rate"),
             "recall_known_bug": report.get("recall_known_bug"),
@@ -145,7 +152,7 @@ def status_fixture_scoring(score_reports: list[dict[str, Any]]) -> dict[str, Any
         for report in score_reports
     ]
     structure_ok = not duplicate_ids and not missing_ids and not unknown_ids
-    passed = structure_ok and all(report.get("gate_pass") is True for report in score_reports)
+    passed = structure_ok and all(score_report_gate_consistent(report) for report in score_reports)
     evidence = {"records": records}
     if missing_ids:
         evidence["missing_fixture_ids"] = missing_ids
@@ -154,6 +161,30 @@ def status_fixture_scoring(score_reports: list[dict[str, Any]]) -> dict[str, Any
     if unknown_ids:
         evidence["unknown_fixture_ids"] = unknown_ids
     return criterion("fixture_scoring_gate", "pass" if passed else "fail", evidence)
+
+
+def score_report_gate_consistent(report: dict[str, Any]) -> bool:
+    gate_checks = report.get("gate_checks")
+    if report.get("gate_pass") is not True or not isinstance(gate_checks, list) or not gate_checks:
+        return False
+    for check in gate_checks:
+        if not isinstance(check, dict):
+            return False
+        name = check.get("name")
+        if name not in SCORE_GATE_METRICS:
+            return False
+        metric_name, operator = SCORE_GATE_METRICS[name]
+        actual = check.get("actual")
+        threshold = check.get("threshold")
+        passed = check.get("passed")
+        if not is_number(actual) or not is_number(threshold) or not is_number(report.get(metric_name)):
+            return False
+        if actual != report.get(metric_name):
+            return False
+        expected_passed = actual <= threshold if operator == "<=" else actual >= threshold
+        if passed is not expected_passed or passed is not True:
+            return False
+    return True
 
 
 def overall(criteria: list[dict[str, Any]]) -> str:
