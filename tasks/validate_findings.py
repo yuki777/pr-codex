@@ -5,7 +5,7 @@ This is intentionally stdlib-only so review/send gates do not depend on npm,
 network access, or user-global caches. It validates the runtime contract encoded
 by schemas/findings.v1.json plus cross-field rules JSON Schema Draft 2020-12
 cannot express portably (id == fingerprint, recomputed fingerprint, end_line >=
-start_line, and practical format checks).
+start_line, metadata PR context consistency, and practical format checks).
 """
 
 from __future__ import annotations
@@ -67,8 +67,18 @@ def load_json(path: Path) -> Any:
         raise ValueError(f"{path}: cannot read/parse JSON: {exc}") from exc
 
 
+def is_safe_json_string(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        value.encode("utf-8", errors="strict")
+    except UnicodeEncodeError:
+        return False
+    return all(unicodedata.category(char) not in {"Cc", "Cs"} for char in value)
+
+
 def non_empty_string(value: Any) -> bool:
-    return isinstance(value, str) and len(value) >= 1
+    return isinstance(value, str) and len(value) >= 1 and is_safe_json_string(value)
 
 
 def is_positive_int(value: Any) -> bool:
@@ -76,7 +86,7 @@ def is_positive_int(value: Any) -> bool:
 
 
 def is_rfc3339_datetime(value: str) -> bool:
-    if not isinstance(value, str) or not value or not RFC3339_RE.match(value):
+    if not isinstance(value, str) or not value or not is_safe_json_string(value) or not RFC3339_RE.match(value):
         return False
     candidate = value[:-1] + "+00:00" if value.endswith("Z") else value
     try:
@@ -87,7 +97,7 @@ def is_rfc3339_datetime(value: str) -> bool:
 
 
 def is_uri(value: str) -> bool:
-    if not isinstance(value, str) or not value:
+    if not isinstance(value, str) or not value or not is_safe_json_string(value):
         return False
     try:
         parsed = urlparse(value)
@@ -125,7 +135,7 @@ def compute_fingerprint(finding: dict[str, Any]) -> str:
     normalized_title = normalize_title(title)
     symbol = primary_symbol(title)
     material = "\x1f".join([path, category, normalized_title, symbol])
-    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+    return hashlib.sha256(material.encode("utf-8", errors="strict")).hexdigest()
 
 
 def enum_from_schema(schema: dict[str, Any], name: str, fallback: set[str]) -> set[str]:
@@ -157,7 +167,7 @@ def require_keys(errors: list[str], path: str, obj: dict[str, Any], required: se
 
 def validate_string_field(errors: list[str], path: str, obj: dict[str, Any], key: str) -> None:
     if key in obj and not non_empty_string(obj[key]):
-        errors.append(f"{path}.{key}: must be a non-empty string")
+        errors.append(f"{path}.{key}: must be a non-empty UTF-8 string without surrogate/control characters")
 
 
 def validate_enum_value(errors: list[str], path: str, value: Any, allowed: set[str], message: str = "invalid value") -> bool:
@@ -224,7 +234,55 @@ def validate_m1_posting_contract(
         errors.append(f"{fpath}.posting.post_policy: only must_fix findings may use post_policy=inline")
 
 
-def validate_artifact(schema: dict[str, Any], data: Any) -> list[str]:
+def validate_pr_metadata_context(errors: list[str], data: dict[str, Any], metadata: Any) -> None:
+    if metadata is None:
+        return
+    if not isinstance(metadata, dict):
+        errors.append("$metadata: must be an object")
+        return
+
+    required_metadata = {
+        "repository_full_name": str,
+        "org": str,
+        "repository": str,
+        "pr_number": int,
+        "head_sha": str,
+        "base_sha": str,
+    }
+    for key, expected_type in required_metadata.items():
+        value = metadata.get(key)
+        if expected_type is int:
+            if not is_positive_int(value):
+                errors.append(f"$metadata.{key}: must be an integer >= 1")
+        elif not non_empty_string(value):
+            errors.append(f"$metadata.{key}: must be a non-empty UTF-8 string without surrogate/control characters")
+
+    repository_full_name = metadata.get("repository_full_name")
+    org = metadata.get("org")
+    repository = metadata.get("repository")
+    if isinstance(repository_full_name, str) and not REPOSITORY_RE.match(repository_full_name):
+        errors.append("$metadata.repository_full_name: must be owner/repo")
+    if isinstance(repository_full_name, str) and isinstance(org, str) and isinstance(repository, str):
+        posting_repository = f"{org}/{repository}"
+        if repository_full_name != posting_repository:
+            errors.append("$.pr.repository: metadata.repository_full_name must equal metadata org/repository posting target")
+
+    pr = data.get("pr")
+    if not isinstance(pr, dict):
+        return
+
+    comparisons = [
+        ("repository", "repository_full_name", "$.pr.repository"),
+        ("number", "pr_number", "$.pr.number"),
+        ("head_sha", "head_sha", "$.pr.head_sha"),
+        ("base_sha", "base_sha", "$.pr.base_sha"),
+    ]
+    for pr_key, metadata_key, path in comparisons:
+        if metadata_key in metadata and pr.get(pr_key) != metadata.get(metadata_key):
+            errors.append(f"{path}: must match metadata.{metadata_key}")
+
+
+def validate_artifact(schema: dict[str, Any], data: Any, metadata: Any | None = None) -> list[str]:
     severity = enum_from_schema(schema, "severity", {"must_fix", "should_fix", "nit", "note"})
     axis_value = enum_from_schema(schema, "axis_value", {"yes", "no", "unknown"})
     evidence_level = enum_from_schema(
@@ -277,7 +335,7 @@ def validate_artifact(schema: dict[str, Any], data: Any) -> list[str]:
         add_unexpected(errors, "$.pr", pr, PR_KEYS)
         require_keys(errors, "$.pr", pr, {"repository", "number", "base_sha", "head_sha"})
         repository = pr.get("repository")
-        if not isinstance(repository, str) or not REPOSITORY_RE.match(repository):
+        if not isinstance(repository, str) or not is_safe_json_string(repository) or not REPOSITORY_RE.match(repository):
             errors.append("$.pr.repository: must be owner/repo")
         if not is_positive_int(pr.get("number")):
             errors.append("$.pr.number: must be an integer >= 1")
@@ -288,6 +346,8 @@ def validate_artifact(schema: dict[str, Any], data: Any) -> list[str]:
         merge_commit_sha = pr.get("merge_commit_sha")
         if merge_commit_sha is not None and (not isinstance(merge_commit_sha, str) or not SHA_RE.match(merge_commit_sha)):
             errors.append("$.pr.merge_commit_sha: must be null or 7-64 hex characters")
+
+    validate_pr_metadata_context(errors, data, metadata)
 
     findings = data.get("findings")
     if not isinstance(findings, list):
@@ -335,9 +395,13 @@ def validate_artifact(schema: dict[str, Any], data: Any) -> list[str]:
             errors.append(f"{fpath}: id must equal fingerprint")
         validate_unique_finding_identity(errors, fpath, index, identifier, fingerprint, seen_ids, seen_fingerprints)
         if isinstance(fingerprint, str) and FINGERPRINT_RE.match(fingerprint):
-            expected = compute_fingerprint(finding)
-            if fingerprint != expected:
-                errors.append(f"{fpath}.fingerprint: expected {expected} from canonical path/category/title/primary_symbol inputs")
+            try:
+                expected = compute_fingerprint(finding)
+            except UnicodeEncodeError as exc:
+                errors.append(f"{fpath}.fingerprint: cannot compute canonical fingerprint from non-UTF-8-safe inputs: {exc}")
+            else:
+                if fingerprint != expected:
+                    errors.append(f"{fpath}.fingerprint: expected {expected} from canonical path/category/title/primary_symbol inputs")
 
         source_agents = finding.get("source_agents")
         if not isinstance(source_agents, list) or not source_agents or any(not non_empty_string(v) for v in source_agents):
@@ -394,6 +458,10 @@ def validate_artifact(schema: dict[str, Any], data: Any) -> list[str]:
                 errors.append(f"{fpath}.posting.explanation_postable: must be boolean")
             if "not_postable_reason" in posting:
                 validate_enum_value(errors, f"{fpath}.posting.not_postable_reason", posting.get("not_postable_reason"), not_postable_reason)
+                if posting.get("explanation_postable") is not False:
+                    errors.append(f"{fpath}.posting.not_postable_reason: only allowed when explanation_postable=false")
+                if posting.get("post_policy") == "inline":
+                    errors.append(f"{fpath}.posting.not_postable_reason: must not be present when post_policy=inline")
             if "audience" in posting:
                 validate_enum_value(errors, f"{fpath}.posting.audience", posting.get("audience"), audience)
             if posting.get("explanation_postable") is False and "not_postable_reason" not in posting:
@@ -461,16 +529,18 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Validate pr-codex findings.verified.json")
     parser.add_argument("--schema", required=True, type=Path, help="schemas/findings.v1.json path")
     parser.add_argument("--data", required=True, type=Path, help="findings.verified.json path")
+    parser.add_argument("--metadata", type=Path, help="metadata.json path for PR posting target consistency checks")
     args = parser.parse_args()
 
     try:
         schema = load_json(args.schema)
         data = load_json(args.data)
+        metadata = load_json(args.metadata) if args.metadata else None
     except ValueError as exc:
         print(f"INVALID: {exc}", file=sys.stderr)
         return 1
 
-    errors = validate_artifact(schema, data)
+    errors = validate_artifact(schema, data, metadata)
     if errors:
         print("INVALID findings artifact", file=sys.stderr)
         for error in errors:

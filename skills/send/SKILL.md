@@ -70,11 +70,11 @@ test -f ~/claude-loop-pr-codex/$candidate/review.md
 ### Step 2: メタデータとレビューの読み込み
 
 - いつ使うか: `$dir_name` が確定した直後に実行する
-- 判定条件: 標準出力に `org=` / `repository=` / `pr_number=` / `pr_url=` / `head_sha=` / `title=` の 6 行が返る
-- 次アクション: 各値をそれぞれ `$org`, `$repository`, `$pr_number`, `$pr_url`, `$head_sha`, `$title` として保持し、`review.md` の Read へ進む
+- 判定条件: 標準出力に `org=` / `repository=` / `repository_full_name=` / `pr_number=` / `pr_url=` / `head_sha=` / `base_sha=` / `title=` の 8 行が返る
+- 次アクション: 各値をそれぞれ `$org`, `$repository`, `$repository_full_name`, `$pr_number`, `$pr_url`, `$head_sha`, `$base_sha`, `$title` として保持し、`review.md` の Read へ進む
 
 ```bash
-jq -r '"org=\(.org)\nrepository=\(.repository)\npr_number=\(.pr_number)\npr_url=\(.pr_url)\nhead_sha=\(.head_sha)\ntitle=\(.title)"' ~/claude-loop-pr-codex/$dir_name/metadata.json
+jq -r '"org=\(.org)\nrepository=\(.repository)\nrepository_full_name=\(.repository_full_name)\npr_number=\(.pr_number)\npr_url=\(.pr_url)\nhead_sha=\(.head_sha)\nbase_sha=\(.base_sha)\ntitle=\(.title)"' ~/claude-loop-pr-codex/$dir_name/metadata.json
 ```
 
 続いて `review.md` を Read ツールで取得する。`file_path` は `~` を `$HOME` の実値に展開した絶対パスで渡す（例: `/Users/adachi/claude-loop-pr-codex/$dir_name/review.md` の `$dir_name` と `/Users/adachi` をいずれも実値に置換してから呼び出す）。
@@ -108,7 +108,7 @@ primary / fallback のどちらへ進む場合も、Step 4.5 の Codex セルフ
 - `$CLAUDE_PLUGIN_ROOT` が shell 環境で未設定の場合は、Step 2.5 で保持した `validator_path` / `schema_path` の実値へ置換してから Bash ツールへ渡す。Step 4.5 のプロンプトにも同じ絶対パスを埋め込む
 
 ```bash
-python3 $validator_path --schema $schema_path --data ~/claude-loop-pr-codex/$dir_name/findings.verified.json
+python3 $validator_path --schema $schema_path --data ~/claude-loop-pr-codex/$dir_name/findings.verified.json --metadata ~/claude-loop-pr-codex/$dir_name/metadata.json
 ```
 
 Claude 側でメモリ上に以下を抽出する:
@@ -122,6 +122,7 @@ Claude 側でメモリ上に以下を抽出する:
   - top-level `schema_version` が **`findings.v1`** であること
   - top-level `findings` フィールドが存在し、array であること
   - 上記同梱 validator による `schemas/findings.v1.json` validation を通ること
+  - top-level `pr.repository` / `pr.number` / `pr.head_sha` / `pr.base_sha` が `metadata.json.repository_full_name` / `metadata.json.pr_number` / `metadata.json.head_sha` / `metadata.json.base_sha` と一致し、`metadata.json.repository_full_name == "$org/$repository"` で投稿先 repo と一致すること
   - すべての finding で `id == fingerprint` が成り立ち、同梱 validator が正準アルゴリズムで再計算した fingerprint と一致すること
   - `findings[]` のうち `severity == "must_fix"` の要素を `$must_fix` 配列として抽出する
   - M1 の投稿 contract として、`severity != "must_fix"` の finding に `posting.post_policy == "inline"` が含まれないことを確認する
@@ -144,6 +145,7 @@ Claude 側でメモリ上に以下を抽出する:
 #### primary path の必須ガード
 
 - `findings.verified.json` が空 / JSON parse 失敗 / top-level object でない / `findings[]` 不在または非配列 / 同梱 validator による `schemas/findings.v1.json` validation / fingerprint 再計算 / format / range validation 失敗 / `id != fingerprint` のいずれかなら、ユーザーに通知して **中断** する（fallback へは切り替えない）
+- `findings.verified.json.pr.repository != metadata.json.repository_full_name`、`findings.verified.json.pr.number != metadata.json.pr_number`、`findings.verified.json.pr.head_sha != metadata.json.head_sha`、`findings.verified.json.pr.base_sha != metadata.json.base_sha`、または `metadata.json.repository_full_name != "$org/$repository"` のいずれかなら、canonical artifact が投稿先 PR と一致しないため **中断** する（fallback へは切り替えない）
 - `severity == "must_fix"` の finding は、M1 では **`posting.post_policy == "inline"` かつ `posting.explanation_postable == true`** のものだけを自動投稿対象として扱う
 - `severity != "must_fix"` の finding に `posting.post_policy == "inline"` が 1 件でもあれば、review 側の M1 posting contract 違反として **中断** する（fallback へは切り替えない）。M1 では `should_fix` / `nit` / `note` は inline 自動投稿対象外であり、`body_summary` / `local_only` / `suppress` のいずれかで表現する
 - `severity == "must_fix"` の finding で `location.side != "RIGHT"` が 1 件でもあれば、現 workflow の `pr.diff.ranges.txt` が head/new 側前提のため **中断** する（fallback へは切り替えない）
@@ -345,8 +347,9 @@ codex --ask-for-approval never exec \
 5. payload.body の冒頭が review.md の '## 総評' セクション本文と一致すること（先頭・末尾の空白を除く）
 6. payload.body 中の '## 良い点' セクションがある場合、review.md の '## 良い点' 本文と一致すること
 7. findings.verified.json が存在する場合、そこにある Must Fix 件数と review.md の Must Fix 見出し件数が一致すること
-8. findings.verified.json が存在する場合、絶対パス {SCHEMA_PATH} の schema 実体と {VALIDATOR_PATH} の validator 実体を読み、可能なら python3 {VALIDATOR_PATH} --schema {SCHEMA_PATH} --data findings.verified.json を実行して適合していることを確認する。実行できない場合も同梱 validator と同じ条件（required / enum / additionalProperties / allOf / if/then / format / range / fingerprint 再計算）で手動検証し、Must Fix finding の location.side がすべて RIGHT であることを確認する。schema または validator 実体を読めない場合は PASS ではなく FAIL とする
-9. findings.verified.json が存在する場合、全 finding で id == fingerprint が成り立ち、同梱 validator と同じ正準アルゴリズムで再計算した fingerprint と一致すること
+8. findings.verified.json が存在する場合、top-level pr.repository / pr.number / pr.head_sha / pr.base_sha が metadata.json の repository_full_name / pr_number / head_sha / base_sha と一致し、metadata.json.repository_full_name が投稿先 org/repository と一致すること
+9. findings.verified.json が存在する場合、絶対パス {SCHEMA_PATH} の schema 実体と {VALIDATOR_PATH} の validator 実体を読み、可能なら python3 {VALIDATOR_PATH} --schema {SCHEMA_PATH} --data findings.verified.json --metadata metadata.json を実行して適合していることを確認する。実行できない場合も同梱 validator と同じ条件（required / enum / additionalProperties / allOf / if/then / format / range / fingerprint 再計算 / metadata.json との PR context 一致）で手動検証し、Must Fix finding の location.side がすべて RIGHT であることを確認する。schema または validator 実体を読めない場合は PASS ではなく FAIL とする
+10. findings.verified.json が存在する場合、全 finding で id == fingerprint が成り立ち、同梱 validator と同じ正準アルゴリズムで再計算した fingerprint と一致すること
 
 ## 出力フォーマット
 最初に各観点の検証結果を箇条書きで列挙し、最終行に必ず以下のいずれかを単独で出力してください:
@@ -469,6 +472,7 @@ mv ~/claude-loop-pr-codex/$dir_name ~/claude-loop-pr-codex/sent/$dir_name
 - `findings.verified.json` が空 / JSON parse 失敗 / top-level object でない / `findings[]` 不在または非配列 → ユーザーに通知して処理中断（fallback へは切り替えない、`sent/` 移動もしない）
 - `findings.verified.json` が存在するのに `schema_version != findings.v1` → ユーザーに通知して処理中断
 - `findings.verified.json` の schema / fingerprint validation が同梱 validator + `schemas/findings.v1.json` で失敗 → ユーザーに通知して処理中断（fallback へは切り替えない）
+- `findings.verified.json.pr.*` が `metadata.json` の投稿先 repo / PR number / head/base SHA と一致しない → ユーザーに通知して処理中断（fallback へは切り替えない）
 - `findings.verified.json` の Must Fix 件数と `review.md` の Must Fix 見出し件数が不一致 → ユーザーに通知して処理中断（fallback へは切り替えない）
 - `findings.verified.json` の Must Fix に `location.side != RIGHT` が含まれる → ユーザーに通知して処理中断（M1 では old-side 投稿を扱わない）
 - `findings.verified.json` の Must Fix に `posting.post_policy != inline` または `explanation_postable != true` が含まれる → ユーザーに通知して処理中断（M1 では安全に自動投稿しない）

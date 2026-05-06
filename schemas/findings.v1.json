@@ -40,7 +40,9 @@
     },
     "non_empty_string": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F\\uD800-\\uDFFF]+$",
+      "description": "Non-empty UTF-8-safe string. Lone surrogate code points and C0/C1 control characters are invalid in canonical artifacts."
     },
     "severity": {
       "enum": [
@@ -139,7 +141,8 @@
       "properties": {
         "repository": {
           "type": "string",
-          "pattern": "^[^/\\s]+/[^/\\s]+$"
+          "pattern": "^[^/\\s]+/[^/\\s]+$",
+          "description": "Base repository in owner/repo form; this must match the GitHub PR repository that /pr-codex:send posts to, not a fork head repository."
         },
         "number": {
           "type": "integer",
@@ -240,7 +243,47 @@
         "audience": {
           "$ref": "#/$defs/audience"
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "explanation_postable": {
+                "const": true
+              }
+            },
+            "required": [
+              "explanation_postable"
+            ]
+          },
+          "then": {
+            "not": {
+              "required": [
+                "not_postable_reason"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "post_policy": {
+                "const": "inline"
+              }
+            },
+            "required": [
+              "post_policy"
+            ]
+          },
+          "then": {
+            "not": {
+              "required": [
+                "not_postable_reason"
+              ]
+            }
+          }
+        }
+      ]
     },
     "severity_by_source": {
       "type": "object",

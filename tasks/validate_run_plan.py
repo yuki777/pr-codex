@@ -398,11 +398,11 @@ def validate_completed_head_check_before_files() -> None:
     text = SKILL_PATH.read_text()
     head_index = text.index('gh api repos/$org/$repository/pulls/$pr_number --jq')
     head_block = extract_bash_block("gh api repos/$org/$repository/pulls/$pr_number --jq")
-    forbidden_snippets = ["gh pr view", "headRefOid", "baseRefOid"]
+    forbidden_snippets = ["gh pr view", "headRefOid", "baseRefOid", ".head.repo.full_name"]
     for snippet in forbidden_snippets:
         if snippet in head_block:
             raise AssertionError(f"Step 2b metadata template must not depend on unsupported gh pr view field: {snippet}")
-    required_snippets = [".head.repo.full_name", ".head.sha", ".base.sha", ".head.ref", ".base.ref", ".merge_commit_sha"]
+    required_snippets = [".base.repo.full_name", ".head.sha", ".base.sha", ".head.ref", ".base.ref", ".merge_commit_sha"]
     for snippet in required_snippets:
         if snippet not in head_block:
             raise AssertionError(f"Step 2b metadata template missing required gh api field: {snippet}")

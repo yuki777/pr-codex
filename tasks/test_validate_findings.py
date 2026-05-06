@@ -72,17 +72,44 @@ def valid_artifact() -> dict[str, object]:
     }
 
 
+def valid_metadata() -> dict[str, object]:
+    return {
+        "org": "yuki777",
+        "repository": "pr-codex",
+        "repository_full_name": "yuki777/pr-codex",
+        "pr_number": 25,
+        "pr_url": "https://github.com/yuki777/pr-codex/pull/25",
+        "head_sha": "e8763f5edddeca5be7334ac9131066be09f19a6d",
+        "base_sha": "2499605587c910c1911729e90d4c96b61210c628",
+        "branch": "feat/16",
+        "base_branch": "main",
+        "merge_commit_sha": None,
+        "title": "Canonical findings",
+        "files": ["skills/send/SKILL.md"],
+    }
+
+
 class ValidateFindingsTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
 
-    def assert_invalid_without_crash(self, artifact: dict[str, object], expected_fragment: str) -> None:
+    def assert_invalid_without_crash(
+        self,
+        artifact: dict[str, object],
+        expected_fragment: str,
+        metadata: dict[str, object] | None = None,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             data_path = Path(tmp) / "findings.verified.json"
-            data_path.write_text(json.dumps(artifact, ensure_ascii=False), encoding="utf-8")
+            data_path.write_text(json.dumps(artifact, ensure_ascii=True), encoding="utf-8")
+            command = [sys.executable, str(VALIDATOR_PATH), "--schema", str(SCHEMA_PATH), "--data", str(data_path)]
+            if metadata is not None:
+                metadata_path = Path(tmp) / "metadata.json"
+                metadata_path.write_text(json.dumps(metadata, ensure_ascii=True), encoding="utf-8")
+                command.extend(["--metadata", str(metadata_path)])
             result = subprocess.run(
-                [sys.executable, str(VALIDATOR_PATH), "--schema", str(SCHEMA_PATH), "--data", str(data_path)],
+                command,
                 check=False,
                 capture_output=True,
                 text=True,
@@ -94,6 +121,7 @@ class ValidateFindingsTest(unittest.TestCase):
 
     def test_minimal_valid_artifact_passes(self) -> None:
         self.assertEqual(validate_artifact(self.schema, valid_artifact()), [])
+        self.assertEqual(validate_artifact(self.schema, valid_artifact(), valid_metadata()), [])
 
     def test_compute_fingerprint_defends_against_invalid_input_types(self) -> None:
         mutations = {
@@ -183,6 +211,10 @@ class ValidateFindingsTest(unittest.TestCase):
                 lambda f: f["location"].update(side="LEFT"),
                 "must_fix findings must target location.side=RIGHT",
             ),
+            "must-fix-inline-with-not-postable-reason": (
+                lambda f: f["posting"].update(not_postable_reason="security_detail"),
+                "not_postable_reason: only allowed when explanation_postable=false",
+            ),
         }
         for name, (mutate, expected_fragment) in mutations.items():
             with self.subTest(name=name):
@@ -194,6 +226,47 @@ class ValidateFindingsTest(unittest.TestCase):
         artifact = copy.deepcopy(valid_artifact())
         artifact["findings"].append(copy.deepcopy(artifact["findings"][0]))
         self.assert_invalid_without_crash(artifact, "duplicate id/fingerprint")
+
+    def test_pr_context_must_match_metadata(self) -> None:
+        cases = {
+            "canonical-fork-repository": (
+                lambda artifact, metadata: artifact["pr"].update(repository="fork/pr-codex"),
+                "$.pr.repository: must match metadata.repository_full_name",
+            ),
+            "metadata-fork-repository": (
+                lambda artifact, metadata: metadata.update(repository_full_name="fork/pr-codex"),
+                "metadata.repository_full_name must equal metadata org/repository posting target",
+            ),
+            "pr-number": (
+                lambda artifact, metadata: artifact["pr"].update(number=26),
+                "$.pr.number: must match metadata.pr_number",
+            ),
+            "head-sha": (
+                lambda artifact, metadata: artifact["pr"].update(head_sha="a" * 40),
+                "$.pr.head_sha: must match metadata.head_sha",
+            ),
+            "base-sha": (
+                lambda artifact, metadata: artifact["pr"].update(base_sha="b" * 40),
+                "$.pr.base_sha: must match metadata.base_sha",
+            ),
+        }
+        for name, (mutate, expected_fragment) in cases.items():
+            with self.subTest(name=name):
+                artifact = copy.deepcopy(valid_artifact())
+                metadata = copy.deepcopy(valid_metadata())
+                mutate(artifact, metadata)
+                self.assert_invalid_without_crash(artifact, expected_fragment, metadata)
+
+    def test_lone_surrogate_strings_are_invalid_without_crash(self) -> None:
+        cases = {
+            "title": "fingerprint: cannot compute canonical fingerprint",
+            "problem": ".problem: must be a non-empty UTF-8 string without surrogate/control characters",
+        }
+        for field, expected_fragment in cases.items():
+            with self.subTest(field=field):
+                artifact = copy.deepcopy(valid_artifact())
+                artifact["findings"][0][field] = "\ud800"
+                self.assert_invalid_without_crash(artifact, expected_fragment)
 
     def test_fingerprint_golden_vector(self) -> None:
         self.assertEqual(
