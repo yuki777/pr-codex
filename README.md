@@ -85,7 +85,7 @@ cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
 2. `findings.verified.json` を一次入力として `Must Fix` を抽出し、`review.md` から `## 総評` / `## 良い点` を body に使う（移行期間は Markdown parser を fallback として残すが、`findings.verified.json` が存在するのに Must Fix 件数が `review.md` と一致しない場合は中断する）
 3. GitHub Reviews API への payload サマリをユーザーに提示し、明示的な承認を得る
 4. 承認後、`gh api --method POST .../reviews` で投稿（`event` は Must Fix ありなら `REQUEST_CHANGES`、なければ `COMMENT`。`APPROVE` は自動では出さない）
-5. 投稿成功後、対象ディレクトリを `~/claude-loop-pr-codex/sent/` に移動する
+5. 投稿成功後、対象ディレクトリを `~/claude-loop-pr-codex/sent/$org-$repo-$pr-$head_sha_short/` に移動する（同一 PR でも HEAD 更新後の再投稿履歴が衝突しないよう、`head_sha` の先頭 7 文字を suffix に付ける）
 
 `/loop` には載せず、対話実行で使う。1回の実行で1件のみ処理する。
 
@@ -108,12 +108,23 @@ cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
   │     ├── claude.log
   │     └── codex.log
   └── sent/                       # /pr-codex:send で投稿済み
-        └── $org-$repo-$pr/       # 投稿後にここへ移動される
+        └── $org-$repo-$pr-$head_sha_short/ # 投稿後にここへ移動される
               ├── findings.verified.json
               ├── review.md
               ├── review-payload.json   # 投稿した GitHub Reviews API の payload
               ├── review-response.json  # gh api のレスポンス（.html_url 等）
               └── ... (他ファイルも一緒に保管される)
+```
+
+### 旧形式の `sent/$org-$repo-$pr/` が残っている場合
+
+SHA suffix なしの旧形式ディレクトリがある場合は、`metadata.json` または `status.json` の `head_sha` を確認し、先頭 7 文字を付けて手動でリネームする。
+
+```bash
+# 旧形式: sent/yuki777-pr-codex-24/
+# head_sha は status.json または metadata.json から確認
+mv ~/claude-loop-pr-codex/sent/yuki777-pr-codex-24 \
+   ~/claude-loop-pr-codex/sent/yuki777-pr-codex-24-d8e4ae5
 ```
 
 ## Schema

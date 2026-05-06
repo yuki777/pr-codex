@@ -29,7 +29,7 @@ allowed-tools: ["Bash", "Read", "Write", "Glob", "Grep"]
 
 ## フロー
 
-各テンプレートはコードブロックの内容をそのまま 1 回のシェル実行単位として使う。変数（`$candidate`, `$dir_name`, `$org`, `$repository`, `$pr_number`, `$pr_url`, `$head_sha`, `$title`, `$review_url` など）の置換以外の改変は不可。
+各テンプレートはコードブロックの内容をそのまま 1 回のシェル実行単位として使う。変数（`$candidate`, `$dir_name`, `$org`, `$repository`, `$pr_number`, `$pr_url`, `$head_sha`, `$head_sha_short`, `$title`, `$review_url` など）の置換以外の改変は不可。
 
 ### Step 1: 対象ディレクトリの選定
 
@@ -70,11 +70,11 @@ test -f ~/claude-loop-pr-codex/$candidate/review.md
 ### Step 2: メタデータとレビューの読み込み
 
 - いつ使うか: `$dir_name` が確定した直後に実行する
-- 判定条件: 標準出力に `org=` / `repository=` / `repository_full_name=` / `pr_number=` / `pr_url=` / `head_sha=` / `base_sha=` / `title=` の 8 行が返る
-- 次アクション: 各値をそれぞれ `$org`, `$repository`, `$repository_full_name`, `$pr_number`, `$pr_url`, `$head_sha`, `$base_sha`, `$title` として保持し、`review.md` の Read へ進む
+- 判定条件: 標準出力に `org=` / `repository=` / `repository_full_name=` / `pr_number=` / `pr_url=` / `head_sha=` / `head_sha_short=` / `base_sha=` / `title=` の 9 行が返る
+- 次アクション: 各値をそれぞれ `$org`, `$repository`, `$repository_full_name`, `$pr_number`, `$pr_url`, `$head_sha`, `$head_sha_short`, `$base_sha`, `$title` として保持し、`review.md` の Read へ進む
 
 ```bash
-jq -r '"org=\(.org)\nrepository=\(.repository)\nrepository_full_name=\(.repository_full_name)\npr_number=\(.pr_number)\npr_url=\(.pr_url)\nhead_sha=\(.head_sha)\nbase_sha=\(.base_sha)\ntitle=\(.title)"' ~/claude-loop-pr-codex/$dir_name/metadata.json
+jq -r '"org=\(.org)\nrepository=\(.repository)\nrepository_full_name=\(.repository_full_name)\npr_number=\(.pr_number)\npr_url=\(.pr_url)\nhead_sha=\(.head_sha)\nhead_sha_short=\(.head_sha[0:7])\nbase_sha=\(.base_sha)\ntitle=\(.title)"' ~/claude-loop-pr-codex/$dir_name/metadata.json
 ```
 
 続いて `review.md` を Read ツールで取得する。`file_path` は `~` を `$HOME` の実値に展開した絶対パスで渡す（例: `/Users/adachi/claude-loop-pr-codex/$dir_name/review.md` の `$dir_name` と `/Users/adachi` をいずれも実値に置換してから呼び出す）。
@@ -392,6 +392,7 @@ body プレビュー:
 行範囲外で除外したインラインコメント (Must Fix のみ): K 件
   - <path>:L<line> (本文末尾の「行コメント不可」セクションに移動)
 payload: ~/claude-loop-pr-codex/<$dir_name>/review-payload.json
+移動先 (投稿後): ~/claude-loop-pr-codex/sent/<$dir_name>-<$head_sha_short>
 
 この内容で投稿してよろしいですか？ (yes/no)
 ```
@@ -428,21 +429,38 @@ jq -r '.html_url' ~/claude-loop-pr-codex/$dir_name/review-response.json
 
 - いつ使うか: Step 6 で投稿に成功した直後に実行する
 - 判定条件: `sent/` ディレクトリが存在する
-- 次アクション: `mv` テンプレートへ進む
+- 次アクション: 移動先の事前衝突チェックへ進む
 
 ```bash
 install -d ~/claude-loop-pr-codex/sent
 ```
 
-- いつ使うか: `sent/` を作成した直後に実行する
-- 判定条件: `mv` が成功し、元ディレクトリが消え `sent/$dir_name` に移動している
-- 次アクション: Step 8 の結果報告へ進む
+- いつ使うか: `sent/` を作成した直後、`mv` の直前に実行する
+- 判定条件: 終了コード 0（移動先の `sent/$dir_name-$head_sha_short` がまだ存在しない）
+- 次アクション: 0 なら `mv` テンプレートへ進む。非 0 なら同一 `head_sha` に対する再投稿などによる degenerate 衝突として Step 8 の失敗報告へ進み、`mv` は実行しない
 
 ```bash
-mv ~/claude-loop-pr-codex/$dir_name ~/claude-loop-pr-codex/sent/$dir_name
+test ! -e ~/claude-loop-pr-codex/sent/$dir_name-$head_sha_short
+```
+
+- いつ使うか: 移動先が存在しないことを確認した直後に実行する
+- 判定条件: 終了コード 0
+- 次アクション: 終了コード 0 でも `mv -n` は silent skip し得るため、続けて移動完了検証テンプレートへ進む。非 0 なら Step 8 の失敗報告へ進む
+
+```bash
+mv -n ~/claude-loop-pr-codex/$dir_name ~/claude-loop-pr-codex/sent/$dir_name-$head_sha_short
+```
+
+- いつ使うか: `mv -n` の直後に必ず実行する
+- 判定条件: 終了コード 0（元ディレクトリが消え、かつ `sent/$dir_name-$head_sha_short` が存在する）
+- 次アクション: 0 なら Step 8 の成功報告へ進む。非 0 なら `mv` が silent に失敗した可能性として Step 8 の失敗報告へ進む
+
+```bash
+test ! -d ~/claude-loop-pr-codex/$dir_name && test -d ~/claude-loop-pr-codex/sent/$dir_name-$head_sha_short
 ```
 
 移動後、`review-payload.json` / `review-response.json` も一緒に保管され、投稿履歴として残る。
+同一 `head_sha` に対する再投稿などで移動先が既に存在する場合は、事前の存在確認と `mv -n` で衝突として扱い、ユーザーに `sent/$dir_name-$head_sha_short` の調査を促す。`mv -n` は TOCTOU 競合でも誤上書きを防ぐ防衛線として残す。
 
 ### Step 8: 結果報告
 
@@ -455,16 +473,19 @@ mv ~/claude-loop-pr-codex/$dir_name ~/claude-loop-pr-codex/sent/$dir_name
 - 選択した `event`
 - インラインコメント件数 (Must Fix のみ)
 - 行範囲外で除外したインラインコメント件数
-- 移動先: `~/claude-loop-pr-codex/sent/$dir_name`
+- 移動先: `~/claude-loop-pr-codex/sent/$dir_name-$head_sha_short`
 
-失敗時（Step 6 が非ゼロ終了した場合）:
+失敗時（Step 6 が非ゼロ終了、Step 7 の移動先衝突、または Step 7 の移動完了検証が失敗した場合）:
 
-- エラー内容 (`gh api` の stderr)
+- エラー内容または状況 (`gh api` の stderr、Step 7 の移動先衝突、または Step 7 の移動完了検証失敗)
 - 推定原因:
   - 422 → Step 3.5 で PR diff 範囲外のインラインコメントは除外済みのため、残ったコメントの `path` / `line` / `start_line` が GitHub 側で解決不能になっている可能性がある。`review-payload.json` の `comments` と `pr.diff.ranges.txt` / `pr.diff` を照合し、必要なら payload から該当コメントを除外するようユーザーに案内
   - 403 → 権限不足。`gh auth status` の確認と、PR リポジトリへのコメント権限を案内
   - 404 → PR が見つからない。`$org` / `$repository` / `$pr_number` の値確認を案内
-- `~/claude-loop-pr-codex/$dir_name/` は**移動しない**。payload と response を残した状態で終了するので、ユーザーは payload 修正後に再度 `/pr-codex:send` を叩くか、手動で `gh api` を実行できる
+  - Step 7 の移動先衝突 → `~/claude-loop-pr-codex/sent/$dir_name-$head_sha_short/` がすでに存在する。同一 `head_sha` (`$head_sha_short`) への重複投稿の可能性があるため、既存の投稿履歴 (`metadata.json` / `review-response.json`) を確認するようユーザーに案内。本当に再投稿が必要なら、既存の `sent/` ディレクトリを手動でリネームまたは退避してから再実行する
+  - Step 7 の移動完了検証失敗 → `mv` が silent に失敗した可能性がある。`~/claude-loop-pr-codex/$dir_name/` と `~/claude-loop-pr-codex/sent/$dir_name-$head_sha_short/` の両方を手動確認するようユーザーに案内
+- Step 6 失敗時は `~/claude-loop-pr-codex/$dir_name/` を**移動しない**。payload と response を残した状態で終了するので、ユーザーは payload 修正後に再度 `/pr-codex:send` を叩くか、手動で `gh api` を実行できる
+- Step 7 失敗時は投稿自体は完了している点に注意する。`~/claude-loop-pr-codex/$dir_name/` は移動せず、`review-response.json` も残す
 
 ## エラーハンドリング
 
@@ -480,6 +501,8 @@ mv ~/claude-loop-pr-codex/$dir_name ~/claude-loop-pr-codex/sent/$dir_name
 - `review.md` の `## 総評` セクションが空 or 見つからない → ユーザーに通知して処理中断。`sent/` 移動は行わない
 - Step 3.5 で `pr.diff.ranges.txt` が空 → インラインコメント候補はすべて body 末尾の `## 行コメント不可 (diff 範囲外)` に移動し、`comments` 配列には含めない
 - `gh api` 422/403/404 → Step 8 の失敗報告で分岐し、`sent/` 移動は行わない
+- Step 7 で `sent/$dir_name-$head_sha_short/` がすでに存在 → ユーザーに通知して処理中断（投稿はすでに完了している点に注意）。`sent/` 移動は行わず、`review-response.json` を残した状態で終了する
+- Step 7 の移動完了検証が失敗 → `mv` が silent に失敗した可能性があるため Step 8 の失敗報告で手動確認を促し、`review-response.json` を残した状態で終了する
 - ユーザーが Step 5 で承認を拒否 → 何もせず終了。payload ファイルは残す
 
 ## 実装上の制約
@@ -535,7 +558,7 @@ $CLAUDE_PLUGIN_ROOT/tasks/
 ```
 ~/claude-loop-pr-codex/
   └── sent/
-        └── $org-$repository-$pr_number/
+        └── $org-$repository-$pr_number-$head_sha_short/
               ├── status.json
               ├── metadata.json
               ├── findings.verified.json
