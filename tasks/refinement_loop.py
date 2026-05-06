@@ -588,6 +588,8 @@ def validate_review_rounds_artifact(data: dict[str, Any], schema: dict[str, Any]
         should_halt = halting.get("should_halt")
         if not isinstance(should_halt, bool):
             errors.append("$.halting.should_halt: must be a boolean")
+        elif should_halt is not True:
+            errors.append("$.halting.should_halt: final review rounds artifact must halt before publication")
         elapsed_ms = halting.get("elapsed_ms")
         if not isinstance(elapsed_ms, int) or isinstance(elapsed_ms, bool) or elapsed_ms < 0:
             errors.append("$.halting.elapsed_ms: invalid integer")

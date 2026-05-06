@@ -55,7 +55,7 @@ class RefinementLoopTest(unittest.TestCase):
                 {
                     "input_candidates_count": 2,
                     "output_candidates_count": 1,
-                    "new_evidence_count": 1,
+                    "new_evidence_count": 0,
                     "verifier_pass_count": 1,
                     "verifier_fail_count": 1,
                     "rejected_candidates": [
@@ -275,6 +275,20 @@ class RefinementLoopTest(unittest.TestCase):
         artifact = self.valid_review_rounds_artifact()
         artifact["metrics"]["posted_candidate_count"] = 0
         self.assert_review_rounds_cli_invalid(artifact, "$.metrics.posted_candidate_count: expected 1 from rounds")
+
+    def test_review_rounds_validator_requires_final_artifact_to_halt(self) -> None:
+        artifact = build_review_rounds_artifact(
+            policy=policy(),
+            rounds=[{"output_candidates_count": 1, "new_evidence_count": 1}],
+            elapsed_ms=100,
+            active_candidates_count=1,
+            generated_at="2026-05-06T00:00:00Z",
+        )
+        self.assertFalse(artifact["halting"]["should_halt"])
+        self.assert_review_rounds_cli_invalid(
+            artifact,
+            "$.halting.should_halt: final review rounds artifact must halt before publication",
+        )
 
     def test_review_rounds_validator_recomputes_halting_decision(self) -> None:
         artifact = build_review_rounds_artifact(
