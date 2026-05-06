@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "repo": "yuki777/pr-codex",
+  "phase": "0-read-only-observer",
+  "board": {
+    "slug": "pr-codex",
+    "name": "pr-codex automation",
+    "tenant": "yuki777/pr-codex"
+  },
+  "state_path": "~/.hermes/automation/pr-codex/state.json",
+  "outbox_path": "~/.hermes/automation/pr-codex/tasks.jsonl",
+  "github_auto_marker_prefix": "<!-- hermes-auto:",
+  "profiles": [
+    "issue-triager",
+    "pr-reviewer",
+    "review-triager",
+    "developer",
+    "sheriff"
+  ],
+  "cron": [
+    {
+      "name": "pr-codex-watch-github",
+      "schedule": "every 10m",
+      "profile": "sheriff",
+      "command": "python3 ~/.hermes/scripts/pr_codex_watch.py --repo yuki777/pr-codex --board pr-codex --tenant yuki777/pr-codex --sink hermes --json"
+    },
+    {
+      "name": "pr-codex-kanban-health",
+      "schedule": "every 30m",
+      "profile": "sheriff",
+      "command": "python3 ~/.hermes/scripts/pr_codex_kanban_health.py --repo yuki777/pr-codex --board pr-codex --tenant yuki777/pr-codex --sink hermes --json"
+    },
+    {
+      "name": "pr-codex-daily-digest",
+      "schedule": "0 9 * * *",
+      "profile": "sheriff",
+      "command": "python3 ~/.hermes/scripts/pr_codex_daily_digest.py --repo yuki777/pr-codex --board pr-codex --tenant yuki777/pr-codex --sink hermes --json"
+    }
+  ],
+  "safety": {
+    "github_writes": false,
+    "push_commits": false,
+    "auto_label": false,
+    "auto_assign": false,
+    "auto_approve": false,
+    "auto_merge": false
+  }
+}
