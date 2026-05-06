@@ -613,7 +613,7 @@ MCP について:
    - `refine`: 同一原因・同一箇所・同一影響の候補を fingerprint 入力 (`path` / `category` / 正規化 title / primary_symbol) で寄せ、重複候補は `review-rounds.json.rounds[].rejected_candidates[]` に `reason="duplicate"` / `local_only=true` で残す。
    - `challenge`: 各候補について「この指摘が誤りである可能性」を 1 つだけ探索し、反証が成立した場合は `reason="verifier_fail"` で local artifact に残し、`findings.verified.json` / `review.md` / GitHub 投稿対象には含めない。
    - `verify`: `metadata.json.files[]`、`pr.diff.ranges.txt`、4軸 gate、`evidence_level`、投稿ポリシーを確認し、根拠不足は `reason="insufficient_evidence"` で `local_only=true` として抑止する。`verifier FAIL` 候補は local artifact に残すだけで GitHub へ投稿してはならない。
-   - `review-rounds.json` には raw log / secret / token / authorization / private key など sensitive な生ログを残さず、candidate id・title・path・line・reason・短い detail だけを保存する。
+   - `review-rounds.json` には raw log / secret / token / authorization / private key など sensitive な生ログを残さず、candidate id・title・path・line・reason・短い detail だけを保存する。許可済み string 値でも raw-log marker、`Authorization: Bearer ...`、token/API-key 代入、private-key header 形式を含む場合は redaction または validator rejection の対象にする。
    - 最終 round の `metrics` から `$rounds_completed` / `$halt_reason` / `$verifier_fail_candidates` / `$suppressed_candidate_count` / `$no_new_evidence_rounds` / `$repeated_contradiction_events` / `$insufficient_evidence_events` / `$oscillation_detected` を保持し、Step 5 の `run-plan.json.review_loop.round_metrics` に反映する。
 4. ループ通過後の候補から **`findings.verified.json` をメモリ上で先に構築する**。`review.md` も同じくメモリ上でこの canonical artifact から派生生成し、ID / fingerprint 再計算 / 件数 gate と temp file への同梱 validator 検証を通すまで final path へは書き出さない。`findings.verified.json` は `schemas/findings.v1.json` に従い、最低限以下を満たす:
    - top-level: `schema_version = "findings.v1"`, `producer`, `pr`, `generated_at`, `findings[]`

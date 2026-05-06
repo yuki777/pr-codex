@@ -20,6 +20,7 @@ sys.path.insert(0, str(TASKS))
 
 from refinement_loop import (  # noqa: E402
     HaltingPolicy,
+    REDACTED_SENSITIVE_VALUE,
     build_review_rounds_artifact,
     evaluate_halting,
     filter_postable_findings,
@@ -147,6 +148,36 @@ class RefinementLoopTest(unittest.TestCase):
             {"id": "passing-id", "fingerprint": "passing-fingerprint", "title": "can post"},
         ]
         self.assertEqual([item["id"] for item in filter_postable_findings(findings, artifact)], ["passing-id"])
+
+    def test_sensitive_candidate_values_are_redacted_before_artifact_write(self) -> None:
+        raw_candidate = {
+            "finding_id": "failing-id",
+            "title": "Authorization: Bearer abc123",
+            "reason": "verifier_fail",
+            "detail": "RAW_LOG: SECRET_TOKEN=abc123 should not persist",
+        }
+        sanitized = sanitize_local_candidate(raw_candidate)
+        self.assertEqual(sanitized["title"], REDACTED_SENSITIVE_VALUE)
+        self.assertEqual(sanitized["detail"], REDACTED_SENSITIVE_VALUE)
+
+        artifact = build_review_rounds_artifact(
+            policy=policy(),
+            rounds=[
+                {
+                    "new_evidence_count": 1,
+                    "verifier_fail_count": 1,
+                    "rejected_candidates": [raw_candidate],
+                }
+            ],
+            elapsed_ms=100,
+            active_candidates_count=0,
+            generated_at="2026-05-06T00:00:00Z",
+        )
+        rejected = artifact["rounds"][0]["rejected_candidates"][0]
+        self.assertEqual(rejected["title"], REDACTED_SENSITIVE_VALUE)
+        self.assertEqual(rejected["detail"], REDACTED_SENSITIVE_VALUE)
+        self.assertNotIn("abc123", json.dumps(artifact))
+        self.assertEqual(validate_review_rounds_artifact(artifact), [])
 
     def test_review_rounds_artifact_validates_with_cli(self) -> None:
         artifact = self.valid_review_rounds_artifact()
@@ -330,6 +361,35 @@ class RefinementLoopTest(unittest.TestCase):
         mutated["rounds"][0]["rejected_candidates"][0]["raw_log"] = "secret"
         errors = validate_review_rounds_artifact(mutated)
         self.assertTrue(any("sensitive/raw key" in error for error in errors))
+
+    def test_review_rounds_validator_rejects_sensitive_rejected_candidate_values(self) -> None:
+        cases = {
+            "detail-raw-log": lambda artifact: artifact["rounds"][0]["rejected_candidates"][0].update(
+                detail="RAW_LOG: captured debug payload"
+            ),
+            "detail-authorization": lambda artifact: artifact["rounds"][0]["rejected_candidates"][0].update(
+                detail="Authorization: Bearer abc.def.ghi"
+            ),
+            "title-token-assignment": lambda artifact: artifact["rounds"][0]["rejected_candidates"][0].update(
+                title="SECRET_TOKEN=abc123 leaked"
+            ),
+            "title-api-key-assignment": lambda artifact: artifact["rounds"][0]["rejected_candidates"][0].update(
+                title="api_key = abc123 leaked"
+            ),
+            "detail-private-key": lambda artifact: artifact["rounds"][0]["rejected_candidates"][0].update(
+                detail="-----BEGIN PRIVATE KEY----- MIIEvQIBADAN"
+            ),
+        }
+        for name, mutate in cases.items():
+            with self.subTest(name=name):
+                artifact = self.valid_review_rounds_artifact()
+                mutate(artifact)
+                self.assert_review_rounds_cli_invalid(artifact, "sensitive/raw value is not allowed")
+
+    def test_review_rounds_validator_rejects_sensitive_contradiction_signatures(self) -> None:
+        artifact = self.valid_review_rounds_artifact()
+        artifact["rounds"][0]["contradiction_signatures"] = ["Authorization: Bearer abc123"]
+        self.assert_review_rounds_cli_invalid(artifact, "sensitive/raw value is not allowed")
 
     def test_docs_and_schemas_expose_round_metrics_for_f11(self) -> None:
         readme = (ROOT / "fixtures" / "README.md").read_text(encoding="utf-8")

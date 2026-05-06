@@ -46,6 +46,22 @@ SENSITIVE_KEY_FRAGMENTS = (
     "api_key",
     "private_key",
 )
+REDACTED_SENSITIVE_VALUE = "[redacted sensitive review-round content]"
+SENSITIVE_VALUE_PATTERNS = (
+    ("raw-log marker", re.compile(r"\braw[\s_-]?logs?\s*[:=]", re.IGNORECASE)),
+    (
+        "authorization header",
+        re.compile(r"\bauthorization\s*[:=]\s*(?:bearer|basic)\s+\S+", re.IGNORECASE),
+    ),
+    (
+        "credential assignment",
+        re.compile(
+            r"\b[a-z0-9_-]*(?:api[_-]?key|token|secret|password)[a-z0-9_-]*\s*[:=]\s*['\"]?\S+",
+            re.IGNORECASE,
+        ),
+    ),
+    ("private key header", re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----", re.IGNORECASE)),
+)
 
 
 @dataclass(frozen=True)
@@ -227,6 +243,17 @@ def _is_sensitive_key(key: str) -> bool:
     return any(fragment in lowered for fragment in SENSITIVE_KEY_FRAGMENTS)
 
 
+def _sensitive_value_reason(value: str) -> str | None:
+    return next((reason for reason, pattern in SENSITIVE_VALUE_PATTERNS if pattern.search(value)), None)
+
+
+def _redact_sensitive_value(value: str) -> str:
+    normalized = " ".join(value.split())[:500]
+    if _sensitive_value_reason(normalized) is not None:
+        return REDACTED_SENSITIVE_VALUE
+    return normalized
+
+
 def sanitize_local_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
     """Return a sanitized local-only rejected-candidate record.
 
@@ -241,7 +268,7 @@ def sanitize_local_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
             continue
         value = candidate[key]
         if isinstance(value, str):
-            value = " ".join(value.split())[:500]
+            value = _redact_sensitive_value(value)
         sanitized[key] = value
     if "finding_id" not in sanitized and isinstance(sanitized.get("fingerprint"), str) and sanitized["fingerprint"]:
         sanitized["finding_id"] = sanitized["fingerprint"]
@@ -270,7 +297,7 @@ def sanitize_round_result(round_result: dict[str, Any], *, round_index: int) -> 
         "verifier_fail_count": max(0, _as_int(round_result.get("verifier_fail_count"))),
         "insufficient_evidence_count": max(0, _as_int(round_result.get("insufficient_evidence_count"))),
         "contradiction_signatures": [
-            signature
+            _redact_sensitive_value(signature)
             for signature in (_normalise_signature(item) for item in round_result.get("contradiction_signatures", []))
             if signature
         ],
@@ -555,6 +582,14 @@ def validate_review_rounds_artifact(data: dict[str, Any], schema: dict[str, Any]
             value = round_result.get(key)
             if not isinstance(value, int) or isinstance(value, bool) or value < (1 if key == "round_index" else 0):
                 errors.append(f"{path}.{key}: invalid integer")
+        for signature_index, signature in enumerate(round_result.get("contradiction_signatures", [])):
+            if isinstance(signature, str):
+                sensitive_reason = _sensitive_value_reason(signature)
+                if sensitive_reason is not None:
+                    errors.append(
+                        f"{path}.contradiction_signatures[{signature_index}]: "
+                        f"sensitive/raw value is not allowed ({sensitive_reason})"
+                    )
         for candidate_index, candidate in enumerate(round_result.get("rejected_candidates", [])):
             cpath = f"{path}.rejected_candidates[{candidate_index}]"
             if not isinstance(candidate, dict):
@@ -575,6 +610,13 @@ def validate_review_rounds_artifact(data: dict[str, Any], schema: dict[str, Any]
             for key in candidate:
                 if _is_sensitive_key(key):
                     errors.append(f"{cpath}: sensitive/raw key is not allowed: {key}")
+                value = candidate.get(key)
+                if isinstance(value, str):
+                    sensitive_reason = _sensitive_value_reason(value)
+                    if sensitive_reason is not None:
+                        errors.append(
+                            f"{cpath}.{key}: sensitive/raw value is not allowed ({sensitive_reason})"
+                        )
     expected_posted = 0
     if rounds and isinstance(rounds[-1], dict):
         expected_posted = max(0, _as_int(rounds[-1].get("output_candidates_count")))
@@ -593,6 +635,11 @@ def validate_review_rounds_artifact(data: dict[str, Any], schema: dict[str, Any]
         elapsed_ms = halting.get("elapsed_ms")
         if not isinstance(elapsed_ms, int) or isinstance(elapsed_ms, bool) or elapsed_ms < 0:
             errors.append("$.halting.elapsed_ms: invalid integer")
+        detail = halting.get("detail")
+        if isinstance(detail, str):
+            sensitive_reason = _sensitive_value_reason(detail)
+            if sensitive_reason is not None:
+                errors.append(f"$.halting.detail: sensitive/raw value is not allowed ({sensitive_reason})")
         triggered_at_round = halting.get("triggered_at_round")
         if not isinstance(triggered_at_round, int) or isinstance(triggered_at_round, bool) or triggered_at_round < 0:
             errors.append("$.halting.triggered_at_round: invalid integer")
