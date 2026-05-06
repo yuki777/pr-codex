@@ -60,6 +60,8 @@ VIOLATION_KEYS = {
 RULE_CLASSIFICATION: dict[str, tuple[str, bool, bool]] = {
     "schema_version_mismatch": ("schema_validation", False, True),
     "findings_validator_failed": ("schema_validation", False, True),
+    "sarif_schema_invalid": ("schema_validation", False, True),
+    "must_fix_count_mismatch": ("schema_validation", False, True),
     "id_fingerprint_mismatch": ("schema_validation", False, True),
     "pr_context_mismatch": ("schema_validation", False, True),
     "path_not_in_files": ("range_validation", True, False),

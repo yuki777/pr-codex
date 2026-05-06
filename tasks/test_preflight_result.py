@@ -66,6 +66,17 @@ def human_semantic_violation() -> dict[str, object]:
     }
 
 
+def sarif_count_mismatch_violation() -> dict[str, object]:
+    return {
+        "stage": "schema_validation",
+        "rule": "must_fix_count_mismatch",
+        "detail": "canonical=2 markdown=2 payload=1 sarif=2",
+        "severity": "error",
+        "auto_fixable": False,
+        "requires_review_regeneration": True,
+    }
+
+
 class ValidatePreflightResultTest(unittest.TestCase):
     def assert_invalid_without_crash(self, result: dict[str, object], expected_fragment: str) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -116,6 +127,24 @@ class ValidatePreflightResultTest(unittest.TestCase):
         result["auto_fixable_count"] = 1
         result["requires_human_count"] = 1
         self.assertEqual(validate_preflight_result(result), [])
+
+    def test_sarif_must_fix_count_mismatch_is_schema_validation_fail(self) -> None:
+        result = valid_result()
+        result["verdict"] = "FAIL"
+        result["stages"]["schema_validation"]["status"] = "FAIL"
+        result["violations"] = [sarif_count_mismatch_violation()]
+        result["requires_human_count"] = 1
+        self.assertEqual(validate_preflight_result(result), [])
+
+    def test_sarif_count_mismatch_cannot_be_auto_fixed(self) -> None:
+        result = valid_result()
+        result["verdict"] = "FAIL"
+        result["stages"]["schema_validation"]["status"] = "FAIL"
+        violation = sarif_count_mismatch_violation()
+        violation["auto_fixable"] = True
+        result["violations"] = [violation]
+        result["auto_fixable_count"] = 1
+        self.assert_invalid_without_crash(result, "rule must_fix_count_mismatch must use auto_fixable=false")
 
     def test_count_mismatch_is_invalid(self) -> None:
         result = valid_result()

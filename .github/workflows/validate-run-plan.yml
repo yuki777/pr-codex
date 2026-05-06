@@ -24,5 +24,7 @@ jobs:
         run: python3 tasks/validate_run_plan.py
       - name: Run findings validator unit tests
         run: python3 -m unittest tasks.test_validate_findings
+      - name: Run local SARIF generation and validation tests
+        run: python3 -m unittest tasks.test_findings_sarif
       - name: Run repository unit tests
         run: python3 -m unittest discover -s tasks -p 'test_*.py'
