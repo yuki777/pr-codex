@@ -126,6 +126,15 @@ def scrub_for_public(text: str | None, *, max_chars: int = 800) -> tuple[str, li
         ),
         (
             re.compile(
+                r"\b[A-Z][A-Z0-9_]*(?:TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL|PAT)[A-Z0-9_]*"
+                r"\s*[:=]\s*(?:\"[^\"]*\"|'[^']*'|[^\s,;]+)",
+                re.I,
+            ),
+            "[REDACTED_ENV_SECRET]",
+            "env_secret",
+        ),
+        (
+            re.compile(
                 r"(?i)\b(?:api[_-]?key|access[_-]?token|token|secret|password|credential|client_secret)"
                 r"(\s*[:=]\s*)([\"']?)[^\s,;\"']+([\"']?)"
             ),

@@ -282,6 +282,31 @@ class IssueTriagerPublishTests(unittest.TestCase):
             report["policy_omissions"],
         )
 
+    def test_env_style_token_assignments_are_redacted_from_next_action(self):
+        state = self.empty_state()
+        client = FakeIssueCommentClient()
+
+        report = publisher.publish_issue_triage(
+            self.base_payload("Rotate GITHUB_TOKEN=ghp_example and ACTIONS_RUNTIME_TOKEN='runtime-secret'."),
+            state=state,
+            client=client,
+            dry_run=False,
+            sink="github",
+            env=self.enabled_env(),
+        )
+
+        self.assertEqual(report["action"], "published")
+        body = client.posted[0]["body"]
+        self.assertNotIn("GITHUB_TOKEN", body)
+        self.assertNotIn("ACTIONS_RUNTIME_TOKEN", body)
+        self.assertNotIn("ghp_example", body)
+        self.assertNotIn("runtime-secret", body)
+        self.assertIn("env_secret", report["redactions"])
+        self.assertIn(
+            {"field": "recommended_next_action", "reason": "redacted_content"},
+            report["policy_omissions"],
+        )
+
     def test_cross_repo_issue_refs_are_omitted_before_publication(self):
         state = self.empty_state()
         client = FakeIssueCommentClient()
