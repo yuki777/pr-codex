@@ -276,6 +276,34 @@ class RefinementLoopTest(unittest.TestCase):
         artifact["metrics"]["posted_candidate_count"] = 0
         self.assert_review_rounds_cli_invalid(artifact, "$.metrics.posted_candidate_count: expected 1 from rounds")
 
+    def test_review_rounds_validator_recomputes_halting_decision(self) -> None:
+        artifact = build_review_rounds_artifact(
+            policy=HaltingPolicy(max_rounds=1, time_budget_ms=1_000, no_new_evidence_rounds=1, repeated_contradiction_limit=2),
+            rounds=[{"output_candidates_count": 1, "new_evidence_count": 1}],
+            elapsed_ms=100,
+            active_candidates_count=1,
+            generated_at="2026-05-06T00:00:00Z",
+        )
+        cases = {
+            "should-halt": (
+                lambda mutated: mutated["halting"].update(should_halt=False),
+                "$.halting.should_halt: expected True from policy/rounds",
+            ),
+            "reason": (
+                lambda mutated: mutated["halting"].update(reason=None),
+                "$.halting.reason: expected 'max_rounds' from policy/rounds",
+            ),
+            "triggered-at-round": (
+                lambda mutated: mutated["halting"].update(triggered_at_round=0),
+                "$.halting.triggered_at_round: expected 1 from rounds",
+            ),
+        }
+        for name, (mutate, expected_fragment) in cases.items():
+            with self.subTest(name=name):
+                mutated = copy.deepcopy(artifact)
+                mutate(mutated)
+                self.assert_review_rounds_cli_invalid(mutated, expected_fragment)
+
     def test_review_rounds_validator_rejects_sensitive_rejected_candidate_fields(self) -> None:
         artifact = build_review_rounds_artifact(
             policy=policy(),

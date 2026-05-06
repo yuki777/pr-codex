@@ -575,6 +575,9 @@ def validate_review_rounds_artifact(data: dict[str, Any], schema: dict[str, Any]
             for key in candidate:
                 if _is_sensitive_key(key):
                     errors.append(f"{cpath}: sensitive/raw key is not allowed: {key}")
+    expected_posted = 0
+    if rounds and isinstance(rounds[-1], dict):
+        expected_posted = max(0, _as_int(rounds[-1].get("output_candidates_count")))
     halting = data.get("halting")
     if not isinstance(halting, dict):
         errors.append("$.halting: must be an object")
@@ -582,17 +585,54 @@ def validate_review_rounds_artifact(data: dict[str, Any], schema: dict[str, Any]
         reason = halting.get("reason")
         if reason not in HALT_REASONS:
             errors.append("$.halting.reason: invalid halt reason")
-        if not isinstance(halting.get("should_halt"), bool):
+        should_halt = halting.get("should_halt")
+        if not isinstance(should_halt, bool):
             errors.append("$.halting.should_halt: must be a boolean")
+        elapsed_ms = halting.get("elapsed_ms")
+        if not isinstance(elapsed_ms, int) or isinstance(elapsed_ms, bool) or elapsed_ms < 0:
+            errors.append("$.halting.elapsed_ms: invalid integer")
+        triggered_at_round = halting.get("triggered_at_round")
+        if not isinstance(triggered_at_round, int) or isinstance(triggered_at_round, bool) or triggered_at_round < 0:
+            errors.append("$.halting.triggered_at_round: invalid integer")
+        if (
+            isinstance(policy_raw, dict)
+            and isinstance(should_halt, bool)
+            and isinstance(elapsed_ms, int)
+            and not isinstance(elapsed_ms, bool)
+            and all(isinstance(round_result, dict) for round_result in rounds)
+        ):
+            try:
+                expected_decision = evaluate_halting(
+                    HaltingPolicy.from_mapping(policy_raw),
+                    rounds,
+                    elapsed_ms=elapsed_ms,
+                    active_candidates_count=expected_posted,
+                )
+            except (TypeError, ValueError) as exc:
+                errors.append(f"$.halting: cannot recompute halting decision: {exc}")
+            else:
+                if should_halt != expected_decision.should_halt:
+                    errors.append(
+                        "$.halting.should_halt: "
+                        f"expected {expected_decision.should_halt!r} from policy/rounds, got {should_halt!r}"
+                    )
+                if reason != expected_decision.reason:
+                    errors.append(
+                        "$.halting.reason: "
+                        f"expected {expected_decision.reason!r} from policy/rounds, got {reason!r}"
+                    )
+                expected_triggered_at_round = len(rounds)
+                if triggered_at_round != expected_triggered_at_round:
+                    errors.append(
+                        "$.halting.triggered_at_round: "
+                        f"expected {expected_triggered_at_round} from rounds, got {triggered_at_round!r}"
+                    )
     metrics = data.get("metrics")
     if not isinstance(metrics, dict):
         errors.append("$.metrics: must be an object")
     else:
         if metrics.get("total_rounds") != len(rounds):
             errors.append("$.metrics.total_rounds: must equal len(rounds)")
-        expected_posted = 0
-        if rounds and isinstance(rounds[-1], dict):
-            expected_posted = max(0, _as_int(rounds[-1].get("output_candidates_count")))
         expected_metrics = round_metrics(rounds, active_candidates_count=expected_posted)
         for key, expected_value in expected_metrics.items():
             if metrics.get(key) != expected_value:
