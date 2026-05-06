@@ -407,8 +407,25 @@ def normalize_issue_number(payload: dict[str, Any], explicit_issue: int | None =
     return int(raw)
 
 
-def normalize_repo(payload: dict[str, Any], default_repo: str) -> str:
-    return str(_first_present(payload, ("repo", "repository", "repository_full_name")) or default_repo)
+def payload_repo(payload: dict[str, Any]) -> str | None:
+    raw = _first_present(payload, ("repo", "repository", "repository_full_name"))
+    return str(raw) if raw not in (None, "") else None
+
+
+def repo_mismatch_report(*, configured_repo: str, payload_repo_value: str, issue: int, enabled: bool, dry_run: bool, sink: str) -> dict[str, Any]:
+    return {
+        "phase": POLICY_PHASE,
+        "policy_version": ISSUE_TRIAGE_SENTINEL_VERSION,
+        "repo": configured_repo,
+        "payload_repo": payload_repo_value,
+        "issue_number": issue,
+        "action": "skip",
+        "skip_reason": "repo-mismatch",
+        "reason": "triage payload repository does not match trusted --repo configuration",
+        "github_writes_enabled": enabled,
+        "dry_run": dry_run,
+        "sink": sink,
+    }
 
 
 def existing_issue_triage_comment(
@@ -503,9 +520,20 @@ def publish_issue_triage(
 ) -> dict[str, Any]:
     """Evaluate and optionally append an issue-triager GitHub comment."""
 
-    effective_repo = normalize_repo(payload, repo)
+    effective_repo = repo
     effective_issue = normalize_issue_number(payload, issue)
     effective_env = os.environ if env is None else env
+    enabled = effective_env.get(PUBLISH_ENV_FLAG) == "1"
+    payload_repo_value = payload_repo(payload)
+    if payload_repo_value and payload_repo_value != effective_repo:
+        return repo_mismatch_report(
+            configured_repo=effective_repo,
+            payload_repo_value=payload_repo_value,
+            issue=effective_issue,
+            enabled=enabled,
+            dry_run=dry_run,
+            sink=sink,
+        )
     effective_client = client or GitHubIssueCommentClient()
     fetched_comments = list(comments) if comments is not None else effective_client.list_issue_comments(effective_repo, effective_issue)
     plan = build_publication_plan(
@@ -515,7 +543,6 @@ def publish_issue_triage(
         comments=fetched_comments,
         state=state,
     )
-    enabled = effective_env.get(PUBLISH_ENV_FLAG) == "1"
     plan = {**plan, "dry_run": dry_run, "sink": sink, "github_writes_enabled": enabled}
 
     if plan["action"] == "skip":
@@ -603,9 +630,10 @@ def main() -> int:
     if args.comments:
         comments = load_comments(args.comments)
     elif args.fetch_comments or (not args.dry_run and args.sink == "github"):
-        repo = normalize_repo(payload, args.repo)
+        repo = args.repo
         issue = normalize_issue_number(payload, args.issue)
-        comments = client.list_issue_comments(repo, issue)
+        payload_repo_value = payload_repo(payload)
+        comments = [] if payload_repo_value and payload_repo_value != repo else client.list_issue_comments(repo, issue)
     else:
         comments = []
     report = publish_issue_triage(

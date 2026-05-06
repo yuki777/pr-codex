@@ -31,6 +31,7 @@ class FakeIssueCommentClient:
     def __init__(self, comments=None):
         self.comments = list(comments or [])
         self.posted: list[dict[str, object]] = []
+        self.list_calls: list[dict[str, object]] = []
         self.edit_issue_calls = 0
         self.label_calls = 0
         self.milestone_calls = 0
@@ -39,6 +40,7 @@ class FakeIssueCommentClient:
         self.lock_calls = 0
 
     def list_issue_comments(self, repo: str, issue: int):
+        self.list_calls.append({"repo": repo, "issue": issue})
         return list(self.comments)
 
     def add_issue_comment(self, repo: str, issue: int, body: str):
@@ -368,6 +370,47 @@ class IssueTriagerPublishTests(unittest.TestCase):
         self.assertEqual(report["skip_reason"], "disabled")
         self.assertFalse(report["github_writes_enabled"])
         self.assertEqual(len(client.posted), 0)
+
+    def test_payload_repo_cannot_redirect_github_publish_target(self):
+        state = self.empty_state()
+        client = FakeIssueCommentClient()
+        payload = {**self.base_payload(), "repo": "attacker/other-repo"}
+
+        report = publisher.publish_issue_triage(
+            payload,
+            state=state,
+            repo="yuki777/pr-codex",
+            client=client,
+            dry_run=False,
+            sink="github",
+            env=self.enabled_env(),
+        )
+
+        self.assertEqual(report["action"], "skip")
+        self.assertEqual(report["skip_reason"], "repo-mismatch")
+        self.assertEqual(report["repo"], "yuki777/pr-codex")
+        self.assertEqual(report["payload_repo"], "attacker/other-repo")
+        self.assertEqual(client.list_calls, [])
+        self.assertEqual(client.posted, [])
+
+    def test_matching_payload_repo_uses_configured_repo(self):
+        state = self.empty_state()
+        client = FakeIssueCommentClient()
+        payload = {**self.base_payload(), "repo": "yuki777/pr-codex"}
+
+        report = publisher.publish_issue_triage(
+            payload,
+            state=state,
+            repo="yuki777/pr-codex",
+            client=client,
+            dry_run=False,
+            sink="github",
+            env=self.enabled_env(),
+        )
+
+        self.assertEqual(report["action"], "published")
+        self.assertEqual(client.list_calls, [{"repo": "yuki777/pr-codex", "issue": 43}])
+        self.assertEqual(client.posted[0]["repo"], "yuki777/pr-codex")
 
     def test_forbidden_issue_edit_side_effects_are_not_called(self):
         state = self.empty_state()
