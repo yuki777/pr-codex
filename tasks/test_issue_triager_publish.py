@@ -307,6 +307,52 @@ class IssueTriagerPublishTests(unittest.TestCase):
             report["policy_omissions"],
         )
 
+    def test_leading_underscore_and_space_delimited_token_guidance_is_omitted(self):
+        state = self.empty_state()
+        client = FakeIssueCommentClient()
+
+        report = publisher.publish_issue_triage(
+            self.base_payload("_GITHUB_TOKEN=leading-secret then run with GITHUB_TOKEN ghp_example."),
+            state=state,
+            client=client,
+            dry_run=False,
+            sink="github",
+            env=self.enabled_env(),
+        )
+
+        self.assertEqual(report["action"], "published")
+        body = client.posted[0]["body"]
+        self.assertNotIn("_GITHUB_TOKEN", body)
+        self.assertNotIn("GITHUB_TOKEN", body)
+        self.assertNotIn("leading-secret", body)
+        self.assertNotIn("ghp_example", body)
+        self.assertIn("env_secret", report["redactions"])
+        self.assertIn(
+            {"field": "recommended_next_action", "reason": "redacted_content"},
+            report["policy_omissions"],
+        )
+
+    def test_sensitive_env_identifier_without_value_is_forbidden_public_text(self):
+        state = self.empty_state()
+        client = FakeIssueCommentClient()
+
+        report = publisher.publish_issue_triage(
+            self.base_payload("Rotate GITHUB_TOKEN."),
+            state=state,
+            client=client,
+            dry_run=False,
+            sink="github",
+            env=self.enabled_env(),
+        )
+
+        self.assertEqual(report["action"], "published")
+        body = client.posted[0]["body"]
+        self.assertNotIn("GITHUB_TOKEN", body)
+        self.assertIn(
+            {"field": "recommended_next_action", "reason": "forbidden_public_terms"},
+            report["policy_omissions"],
+        )
+
     def test_cross_repo_issue_refs_are_omitted_before_publication(self):
         state = self.empty_state()
         client = FakeIssueCommentClient()

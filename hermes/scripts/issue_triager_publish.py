@@ -49,7 +49,8 @@ SAFE_PUBLIC_TEXT_FORBIDDEN_TERMS_RE = re.compile(
     r"api[_ -]?key|authorization|bearer|credential|password|private[_ -]?path|raw[_ -]?(?:log|payload)|"
     r"secret|stack[_ -]?trace|token|graphql|rest[_ -]?payload|"
     r"hermes[_ -]?task|profile[_ -]?session"
-    r")\b|/Users/|/home/|~/.hermes|\.agent-orchestrator|t_[0-9a-f]{8,}|pc-\d+"
+    r")\b|(?<![A-Za-z0-9])_*[A-Z][A-Z0-9_]*(?:TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL|PAT)[A-Z0-9_]*"
+    r"|/Users/|/home/|~/.hermes|\.agent-orchestrator|t_[0-9a-f]{8,}|pc-\d+"
 )
 
 
