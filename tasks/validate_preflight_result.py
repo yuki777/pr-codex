@@ -78,6 +78,7 @@ RULE_CLASSIFICATION: dict[str, tuple[str, bool, bool]] = {
 
 RESULT_JSON_HEADING_RE = re.compile(r"^###\s+RESULT_JSON\s*$", re.MULTILINE)
 JSON_FENCE_RE = re.compile(r"```json\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
+FINAL_VERDICT_RE = re.compile(r"^VERDICT:\s*(PASS|FAIL)\s*$")
 
 
 def load_json(path: Path) -> Any:
@@ -116,15 +117,34 @@ def add_unexpected(errors: list[str], path: str, obj: Any, allowed: set[str]) ->
             errors.append(f"{path}: unexpected properties: {', '.join(unexpected)}")
 
 
+def extract_final_verdict(markdown: str) -> str:
+    """Return the final VERDICT line, requiring it to be the last non-empty line."""
+    non_empty_lines = [line.strip() for line in markdown.splitlines() if line.strip()]
+    if not non_empty_lines:
+        raise ValueError("final VERDICT line not found")
+    match = FINAL_VERDICT_RE.match(non_empty_lines[-1])
+    if not match:
+        raise ValueError("final VERDICT line must be the last non-empty line")
+    return match.group(1)
+
+
 def extract_result_json(markdown: str) -> dict[str, Any]:
-    """Extract the last fenced JSON block after a RESULT_JSON heading."""
+    """Extract the fenced JSON block after the final RESULT_JSON heading.
+
+    A RESULT_JSON heading is mandatory. If the final heading is dangling, do not
+    fall back to an earlier JSON block because that could turn a malformed or
+    failing verifier output into a false PASS. The final VERDICT line must also
+    match the extracted JSON verdict.
+    """
     matches = list(RESULT_JSON_HEADING_RE.finditer(markdown))
-    search_area = markdown[matches[-1].end() :] if matches else markdown
+    if not matches:
+        raise ValueError("RESULT_JSON heading not found")
+
+    final_verdict = extract_final_verdict(markdown)
+    search_area = markdown[matches[-1].end() :]
     json_blocks = JSON_FENCE_RE.findall(search_area)
-    if not json_blocks and matches:
-        json_blocks = JSON_FENCE_RE.findall(markdown)
     if not json_blocks:
-        raise ValueError("RESULT_JSON fenced json block not found")
+        raise ValueError("RESULT_JSON fenced json block not found after final RESULT_JSON heading")
     raw_json = json_blocks[-1]
     try:
         data = json.loads(raw_json)
@@ -132,6 +152,8 @@ def extract_result_json(markdown: str) -> dict[str, Any]:
         raise ValueError(f"RESULT_JSON is not valid JSON: {exc}") from exc
     if not isinstance(data, dict):
         raise ValueError("RESULT_JSON must be a JSON object")
+    if data.get("verdict") != final_verdict:
+        raise ValueError("RESULT_JSON verdict must match final VERDICT line")
     return data
 
 

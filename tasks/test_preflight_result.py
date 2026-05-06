@@ -161,6 +161,39 @@ class ValidatePreflightResultTest(unittest.TestCase):
         )
         self.assertEqual(extract_result_json(markdown), second)
 
+
+    def test_extract_result_json_rejects_dangling_final_result_heading(self) -> None:
+        markdown = (
+            "### RESULT_JSON\n```json\n"
+            + json.dumps(valid_result())
+            + "\n```\n"
+            "### RESULT_JSON\n"
+            "VERDICT: FAIL\n"
+        )
+        with self.assertRaisesRegex(ValueError, "after final RESULT_JSON heading"):
+            extract_result_json(markdown)
+
+    def test_extract_result_json_requires_matching_final_verdict(self) -> None:
+        markdown = (
+            "### RESULT_JSON\n```json\n"
+            + json.dumps(valid_result())
+            + "\n```\n"
+            "VERDICT: FAIL\n"
+        )
+        with self.assertRaisesRegex(ValueError, "verdict must match final VERDICT"):
+            extract_result_json(markdown)
+
+    def test_extract_result_json_requires_final_verdict_as_last_line(self) -> None:
+        markdown = (
+            "### RESULT_JSON\n```json\n"
+            + json.dumps(valid_result())
+            + "\n```\n"
+            "VERDICT: PASS\n"
+            "trailing text\n"
+        )
+        with self.assertRaisesRegex(ValueError, "final VERDICT line"):
+            extract_result_json(markdown)
+
     def test_cli_extracts_and_validates_markdown(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             md_path = Path(tmp) / "preflight-codex.md"
@@ -186,6 +219,33 @@ class ValidatePreflightResultTest(unittest.TestCase):
             )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(json.loads(completed.stdout)["verdict"], "PASS")
+
+
+    def test_cli_rejects_markdown_verdict_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            md_path = Path(tmp) / "preflight-codex.md"
+            md_path.write_text(
+                "### RESULT_JSON\n```json\n"
+                + json.dumps(valid_result(), ensure_ascii=True)
+                + "\n```\nVERDICT: FAIL\n",
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(VALIDATOR_PATH),
+                    "--schema",
+                    str(SCHEMA_PATH),
+                    "--from-markdown",
+                    str(md_path),
+                    "--emit-json",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("verdict must match final VERDICT", completed.stderr)
 
     def test_auto_fixable_classification_counts_only_error_violations(self) -> None:
         errors = [auto_fixable_range_violation(), human_semantic_violation()]
@@ -243,6 +303,8 @@ class ValidatePreflightResultTest(unittest.TestCase):
             "Markdown fallback は使わない",
             "shell で prompt 本文を展開してはならない",
             "<  ~/claude-loop-pr-codex/$dir_name/preflight-prompt.md",
+            "final `VERDICT:` line",
+            "一致しなければ",
         ):
             self.assertIn(snippet, skill)
         self.assertIn('top-level `verdict` は `PASS` / `FAIL` のみ', skill)
