@@ -23,8 +23,21 @@ from _pr_codex_common import (  # type: ignore[import-not-found]
 )
 
 
-def parse_time(value: str | None) -> datetime | None:
+def parse_time(value: object) -> datetime | None:
     if not value:
+        return None
+    if isinstance(value, (int, float)):
+        # Live Hermes Kanban JSON can expose epoch timestamps.  Accept both
+        # seconds and millisecond precision so health checks never crash before
+        # they can report stale/blocked/retry state.
+        seconds = float(value)
+        if seconds > 10_000_000_000:
+            seconds /= 1000
+        try:
+            return datetime.fromtimestamp(seconds, tz=timezone.utc)
+        except (OSError, OverflowError, ValueError):
+            return None
+    if not isinstance(value, str):
         return None
     normalized = value.replace("Z", "+00:00")
     try:

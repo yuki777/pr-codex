@@ -207,6 +207,18 @@ class HealthTests(unittest.TestCase):
         self.assertEqual([item["id"] for item in report["high_retry"]], ["t3"])
         self.assertEqual([item["id"] for item in report["stale_ready"]], ["t3"])
 
+    def test_health_accepts_numeric_epoch_timestamps(self):
+        now = datetime(2026, 5, 6, 2, 0, tzinfo=timezone.utc)
+        old = int((now - timedelta(minutes=120)).timestamp())
+        old_ms = old * 1000
+        tasks = [
+            {"id": "t1", "title": "running", "status": "running", "started_at": old},
+            {"id": "t2", "title": "ready", "status": "ready", "created_at": old_ms},
+        ]
+        report = health.evaluate_health(tasks, now=now, running_minutes=90, ready_minutes=60, retry_threshold=3)
+        self.assertEqual([item["id"] for item in report["stale_running"]], ["t1"])
+        self.assertEqual([item["id"] for item in report["stale_ready"]], ["t2"])
+
 
 if __name__ == "__main__":
     unittest.main()
