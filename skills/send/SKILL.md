@@ -308,6 +308,7 @@ Codex は以下の観点で payload を確認する:
 8. `findings.verified.json` が存在する場合、そこにある Must Fix 件数と `review.md` の Must Fix 見出し件数が一致するか
 9. `findings.verified.json` が存在する場合、`schema_path` / `validator_path` の実体を読んで同梱 validator validation を通っており、Must Fix に `location.side != RIGHT` が混入していないか
 10. `findings.verified.json` が存在する場合、全 finding で `id == fingerprint` が成り立ち、正準 fingerprint 再計算値とも一致するか
+11. `findings.verified.json` が存在する場合、`severity == "must_fix"` の各 finding が 4 軸 gate（`axes.real == "yes"` / `axes.triggerable == "yes"` / `axes.impactful == "yes"` / (`axes.general == "yes"` または `evidence_level in {"impact_explained", "verified"}`) / `evidence_level != "suspicion"`）を満たしているか
 
 #### コマンド
 
@@ -348,8 +349,9 @@ codex --ask-for-approval never exec \
 6. payload.body 中の '## 良い点' セクションがある場合、review.md の '## 良い点' 本文と一致すること
 7. findings.verified.json が存在する場合、そこにある Must Fix 件数と review.md の Must Fix 見出し件数が一致すること
 8. findings.verified.json が存在する場合、top-level pr.repository / pr.number / pr.head_sha / pr.base_sha が metadata.json の repository_full_name / pr_number / head_sha / base_sha と一致し、metadata.json.repository_full_name が投稿先 org/repository と一致すること
-9. findings.verified.json が存在する場合、絶対パス {SCHEMA_PATH} の schema 実体と {VALIDATOR_PATH} の validator 実体を読み、可能なら python3 {VALIDATOR_PATH} --schema {SCHEMA_PATH} --data findings.verified.json --metadata metadata.json を実行して適合していることを確認する。実行できない場合も同梱 validator と同じ条件（required / enum / additionalProperties / allOf / if/then / format / range / fingerprint 再計算 / metadata.json との PR context 一致）で手動検証し、Must Fix finding の location.side がすべて RIGHT であることを確認する。schema または validator 実体を読めない場合は PASS ではなく FAIL とする
+9. findings.verified.json が存在する場合、絶対パス {SCHEMA_PATH} の schema 実体と {VALIDATOR_PATH} の validator 実体を読み、可能なら python3 {VALIDATOR_PATH} --schema {SCHEMA_PATH} --data findings.verified.json --metadata metadata.json を実行して適合していることを確認する。実行できない場合も同梱 validator と同じ条件（required / enum / additionalProperties / allOf / if/then / format / range / fingerprint 再計算 / metadata.json との PR context 一致 / 4 軸 gate）で手動検証し、Must Fix finding の location.side がすべて RIGHT であることを確認する。schema または validator 実体を読めない場合は PASS ではなく FAIL とする
 10. findings.verified.json が存在する場合、全 finding で id == fingerprint が成り立ち、同梱 validator と同じ正準アルゴリズムで再計算した fingerprint と一致すること
+11. findings.verified.json が存在する場合、severity == 'must_fix' の各 finding が以下を全部満たすことを確認する: axes.real == 'yes' / axes.triggerable == 'yes' / axes.impactful == 'yes' / (axes.general == 'yes' または evidence_level in {'impact_explained', 'verified'}) / evidence_level != 'suspicion'。1 件でも違反していれば FAIL とする。python3 {VALIDATOR_PATH} の再実行に成功している場合も、この観点を明示的に PASS / FAIL として報告する
 
 ## 出力フォーマット
 最初に各観点の検証結果を箇条書きで列挙し、最終行に必ず以下のいずれかを単独で出力してください:
