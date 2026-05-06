@@ -211,16 +211,24 @@ def validate_m1_posting_contract(
     location: Any,
     posting: dict[str, Any],
     valid_severity: set[str],
+    valid_evidence_level: set[str],
     valid_post_policy: set[str],
 ) -> None:
     severity_value = finding.get("severity")
+    evidence_level_value = finding.get("evidence_level")
     post_policy_value = posting.get("post_policy")
-    if (
-        not isinstance(severity_value, str)
-        or severity_value not in valid_severity
-        or not isinstance(post_policy_value, str)
-        or post_policy_value not in valid_post_policy
-    ):
+
+    severity_is_valid = isinstance(severity_value, str) and severity_value in valid_severity
+    evidence_level_is_valid = isinstance(evidence_level_value, str) and evidence_level_value in valid_evidence_level
+    post_policy_is_valid = isinstance(post_policy_value, str) and post_policy_value in valid_post_policy
+
+    if severity_is_valid and evidence_level_is_valid:
+        if severity_value == "must_fix" and evidence_level_value != "verified":
+            errors.append(f"{fpath}.evidence_level: must_fix findings must use evidence_level=verified")
+        if severity_value == "should_fix" and evidence_level_value == "suspicion":
+            errors.append(f"{fpath}.evidence_level: should_fix findings require evidence_level=corroborated or higher")
+
+    if not (severity_is_valid and post_policy_is_valid):
         return
 
     if severity_value == "must_fix":
@@ -470,7 +478,7 @@ def validate_artifact(schema: dict[str, Any], data: Any, metadata: Any | None = 
                 errors.append(f"{fpath}.posting.explanation_postable: must be false when evidence_level=suspicion")
             if posting.get("post_policy") == "local_only" and "audience" not in posting:
                 errors.append(f"{fpath}.posting.audience: required when post_policy=local_only")
-            validate_m1_posting_contract(errors, fpath, finding, location, posting, severity, post_policy)
+            validate_m1_posting_contract(errors, fpath, finding, location, posting, severity, evidence_level, post_policy)
 
         if "severity_disputed" in finding and not isinstance(finding["severity_disputed"], bool):
             errors.append(f"{fpath}.severity_disputed: must be boolean")

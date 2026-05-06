@@ -599,7 +599,7 @@ MCP について:
    - `category` は schema enum の `bug` / `security` / `performance` / `tests` / `design` / `code_quality` / `consistency` / `runtime_error` のいずれかだけを使う。`bugs` や `security_issue` のような自由ラベルは禁止。人間向けの細分類が必要な場合だけ、`fingerprint` 入力外の `category_label` に入れる
    - `title` は短い見出し、`problem` / `reason` / `suggestion` は review.md の 3 点組にそのまま再利用できる粒度で書く
    - `axes` は `{real, triggerable, impactful, general}` の 4 軸を必ず埋める。各軸は、2 者が同じ事実を肯定している、または verifier / テスト / CI / 静的解析で肯定できた場合は `yes`、1 者のみの主張または根拠不足なら `unknown`、生レビューまたは根拠が明示的に否定している場合は `no` とする。severity だけから `yes` を推測してはならない
-   - `evidence_level` は根拠の強さに応じて 5 段から 1 つだけ決定論的に選ぶ。複数段に該当する場合は最も低い段階に揃える:
+   - `evidence_level` は根拠の強さに応じて 5 段から 1 つだけ決定論的に選ぶ。1 つの finding で複数段の条件を満たす場合は最も高い到達段階に揃える:
      - `suspicion`: hunter が候補として挙げただけ。具体的根拠なし
      - `corroborated`: 静的解析・型・lint・他箇所のパターン・2 者の同一指摘で裏付け
      - `trigger_path_identified`: head diff 上で発火条件が特定できる
