@@ -17,7 +17,15 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from generate_findings_sarif import CATEGORY_RULES, SEVERITY_TO_LEVEL, parse_ranges, range_contains
+from generate_findings_sarif import (
+    CATEGORY_RULES,
+    SEVERITY_TO_LEVEL,
+    contains_host_absolute_path,
+    deterministic_guid,
+    is_disallowed_repository_path,
+    parse_ranges,
+    range_contains,
+)
 
 try:  # jsonschema is intentionally only required for SARIF, not canonical JSON.
     import jsonschema
@@ -209,7 +217,7 @@ def validate_sarif_shape(data: Any) -> list[str]:
         message = result.get("message")
         if not isinstance(message, dict) or not is_non_empty_string(message.get("text")):
             errors.append(f"{rpath}.message.text: must be a non-empty string")
-        elif "<absolute-path>" not in message.get("text", "") and re.search(r"/Users/|/home/|/private/var/", message.get("text", "")):
+        elif contains_host_absolute_path(message.get("text", "")):
             errors.append(f"{rpath}.message.text: must not leak host absolute paths")
         partial = result.get("partialFingerprints")
         if not isinstance(partial, dict) or not isinstance(partial.get("canonical"), str) or not FINGERPRINT_RE.match(partial.get("canonical", "")):
@@ -254,8 +262,8 @@ def validate_result_location(errors: list[str], rpath: str, result: dict[str, An
     artifact = physical.get("artifactLocation")
     if not isinstance(artifact, dict) or not is_non_empty_string(artifact.get("uri")):
         errors.append(f"{rpath}.locations[0].physicalLocation.artifactLocation.uri: must be a non-empty repository path")
-    elif str(artifact.get("uri")).startswith("/"):
-        errors.append(f"{rpath}.locations[0].physicalLocation.artifactLocation.uri: must not be an absolute path")
+    elif is_disallowed_repository_path(artifact.get("uri")):
+        errors.append(f"{rpath}.locations[0].physicalLocation.artifactLocation.uri: must be a repository-relative URI path")
     region = physical.get("region")
     if not isinstance(region, dict):
         errors.append(f"{rpath}.locations[0].physicalLocation.region: must be an object")
@@ -309,6 +317,40 @@ def validate_against_findings(sarif: dict[str, Any], findings_artifact: Any) -> 
             errors.append(f"{rpath}.properties.source_finding_id: not found in findings.verified.json")
             continue
         actual_ids.add(identifier)
+        expected_severity = finding.get("severity")
+        expected_category = finding.get("category")
+        expected_posting = finding.get("posting") if isinstance(finding.get("posting"), dict) else {}
+        expected_post_policy = expected_posting.get("post_policy")
+        expected_rule_id = f"pr-codex/{expected_category}"
+        if result.get("guid") != deterministic_guid(identifier):
+            errors.append(f"{rpath}.guid: must equal deterministic UUIDv5 for canonical finding id")
+        if properties.get("severity") != expected_severity:
+            errors.append(f"{rpath}.properties.severity: must match canonical severity")
+        if result.get("level") != SEVERITY_TO_LEVEL.get(expected_severity):
+            errors.append(f"{rpath}.level: must map from canonical severity {expected_severity}")
+        if properties.get("category") != expected_category:
+            errors.append(f"{rpath}.properties.category: must match canonical category")
+        if result.get("ruleId") != expected_rule_id:
+            errors.append(f"{rpath}.ruleId: must match canonical category")
+        if expected_category in CATEGORY_RULES and result.get("ruleIndex") != CATEGORY_RULES.index(expected_category):
+            errors.append(f"{rpath}.ruleIndex: must match canonical category rule order")
+        if properties.get("post_policy") != expected_post_policy:
+            errors.append(f"{rpath}.properties.post_policy: must match canonical posting.post_policy")
+        if properties.get("explanation_postable") != expected_posting.get("explanation_postable"):
+            errors.append(f"{rpath}.properties.explanation_postable: must match canonical posting.explanation_postable")
+        for posting_field in ("audience", "not_postable_reason"):
+            if properties.get(posting_field) != expected_posting.get(posting_field):
+                errors.append(f"{rpath}.properties.{posting_field}: must match canonical posting.{posting_field}")
+        if properties.get("evidence_level") != finding.get("evidence_level"):
+            errors.append(f"{rpath}.properties.evidence_level: must match canonical evidence_level")
+        if properties.get("axes") != finding.get("axes"):
+            errors.append(f"{rpath}.properties.axes: must match canonical axes")
+        if expected_category == "security" and expected_severity == "must_fix" and properties.get("security_severity_label") != "high":
+            errors.append(f"{rpath}.properties.security_severity_label: canonical security must_fix must be labelled high")
+        if expected_post_policy == "local_only" and not result.get("suppressions"):
+            errors.append(f"{rpath}.suppressions: canonical local_only findings must use SARIF suppression")
+        if expected_severity == "nit" and not result.get("suppressions"):
+            errors.append(f"{rpath}.suppressions: canonical nit findings must be suppressed to avoid SARIF noise")
         location = finding.get("location") if isinstance(finding.get("location"), dict) else {}
         region = result["locations"][0]["physicalLocation"]["region"]
         artifact = result["locations"][0]["physicalLocation"]["artifactLocation"]

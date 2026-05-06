@@ -15,7 +15,7 @@ import json
 import re
 import sys
 import uuid
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 EXPECTED_FINDINGS_SCHEMA_VERSION = "findings.v1"
@@ -36,7 +36,16 @@ SEVERITY_TO_LEVEL = {
     "note": "none",
 }
 FINGERPRINT_RE = re.compile(r"^[0-9a-f]{64}$")
-ABSOLUTE_PATH_RE = re.compile(r"(?<![\w:])(?:/Users/[^\s:`)]+|/home/[^\s:`)]+|/private/var/[^\s:`)]+)")
+POSIX_ABSOLUTE_PATH_RE = re.compile(r"(?<![\w:])(?:/Users/[^\s:`)]+|/home/[^\s:`)]+|/private/var/[^\s:`)]+)")
+WINDOWS_DRIVE_ABSOLUTE_PATH_RE = re.compile(r"(?<![\w/])(?:[A-Za-z]:[\\/][^\s:`)]+)")
+WINDOWS_UNC_ABSOLUTE_PATH_RE = re.compile(r"\\\\[^\s\\/:*?\"<>|]+\\[^\s\\/:*?\"<>|]+(?:\\[^\s:`)]+)*")
+FILE_URI_RE = re.compile(r"\bfile://[^\s:`)]+|\bfile:/[^\s:`)]+")
+ABSOLUTE_PATH_PATTERNS = (
+    FILE_URI_RE,
+    WINDOWS_UNC_ABSOLUTE_PATH_RE,
+    WINDOWS_DRIVE_ABSOLUTE_PATH_RE,
+    POSIX_ABSOLUTE_PATH_RE,
+)
 TOKEN_RE = re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,})\b")
 CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
 
@@ -61,9 +70,37 @@ def scrub_text(value: Any) -> str:
     control characters so it does not weaken the GitHub-posting scrub policy.
     """
     text = value if isinstance(value, str) else ""
-    text = ABSOLUTE_PATH_RE.sub("<absolute-path>", text)
+    for pattern in ABSOLUTE_PATH_PATTERNS:
+        text = pattern.sub("<absolute-path>", text)
     text = TOKEN_RE.sub("<redacted-token>", text)
     return CONTROL_RE.sub("", text)
+
+
+def contains_host_absolute_path(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    return any(pattern.search(value) for pattern in ABSOLUTE_PATH_PATTERNS)
+
+
+def is_disallowed_repository_path(value: Any) -> bool:
+    """Return true for host-absolute or non-URI-safe paths.
+
+    SARIF artifact locations are repository-relative URI paths.  Reject POSIX
+    absolute paths, Windows drive/UNC paths, file:// URIs, parent traversal, and
+    backslash separators so local host paths cannot leak through locations even
+    on non-Windows runners.
+    """
+    if not isinstance(value, str) or not value:
+        return True
+    return (
+        value.startswith("/")
+        or value.startswith("\\")
+        or "\\" in value
+        or value.lower().startswith("file:")
+        or re.match(r"^[A-Za-z]:", value) is not None
+        or contains_host_absolute_path(value)
+        or ".." in PurePosixPath(value).parts
+    )
 
 
 def collapse_line(value: Any) -> str:
@@ -127,7 +164,7 @@ def finding_location(finding: dict[str, Any], path: str, ranges: dict[str, list[
     file_path = location.get("path")
     if not isinstance(file_path, str) or not file_path:
         raise SarifGenerationError(f"{path}.location.path: must be a non-empty repository-relative path")
-    if file_path.startswith("/") or ".." in Path(file_path).parts:
+    if is_disallowed_repository_path(file_path):
         raise SarifGenerationError(f"{path}.location.path: SARIF output requires repository-relative paths")
     if location.get("side") != "RIGHT":
         raise SarifGenerationError(f"{path}.location.side: SARIF output currently supports RIGHT side only")

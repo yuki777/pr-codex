@@ -26,6 +26,7 @@ class Issue37DocsTest(unittest.TestCase):
             "canonical_must_fix != markdown_must_fix != payload_must_fix != sarif_must_fix",
             "result.partialFingerprints.canonical",
             "deterministic UUIDv5",
+            "Windows drive",
         ):
             self.assertIn(snippet, text)
 

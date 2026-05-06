@@ -18,7 +18,7 @@ GENERATOR_PATH = TASKS / "generate_findings_sarif.py"
 VALIDATOR_PATH = TASKS / "validate_findings_sarif.py"
 sys.path.insert(0, str(TASKS))
 
-from generate_findings_sarif import build_sarif, must_fix_count  # noqa: E402
+from generate_findings_sarif import SarifGenerationError, build_sarif, must_fix_count  # noqa: E402
 from validate_findings import compute_fingerprint  # noqa: E402
 from validate_findings_sarif import validate_findings_sarif  # noqa: E402
 
@@ -128,6 +128,15 @@ def range_text(path: str = "src/App.php", start: int = 1, end: int = 20) -> str:
     return f"{path}\tL{start}-L{end}\n"
 
 
+def refresh_fingerprint(finding: dict[str, object]) -> dict[str, object]:
+    finding["id"] = ""
+    finding["fingerprint"] = ""
+    fingerprint = compute_fingerprint(finding)
+    finding["id"] = fingerprint
+    finding["fingerprint"] = fingerprint
+    return finding
+
+
 class FindingsSarifTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -152,6 +161,31 @@ class FindingsSarifTest(unittest.TestCase):
         self.assertNotIn("/Users/adachi", results[0]["message"]["text"])
         self.assertNotIn("fixes", results[0])
         self.assertEqual(must_fix_count(sarif), 1)
+
+    def test_windows_absolute_paths_are_scrubbed_from_messages_and_rejected_as_locations(self) -> None:
+        finding = make_finding(
+            severity="should_fix",
+            category="bug",
+            title=r"`path` exposes C:\Users\alice\repo\secret.txt",
+            path="src/App.php",
+            line=10,
+            post_policy="body_summary",
+        )
+        finding["problem"] = r"Drive path C:\Users\alice\repo\secret.txt leaked into the review."
+        finding["reason"] = r"UNC path \\buildbox\share\repo\secret.txt is host-local context."
+        finding["suggestion"] = "Do not emit file:///C:/Users/alice/repo/secret.txt in derived artifacts."
+        refresh_fingerprint(finding)
+        sarif = build_sarif(canonical_artifact([finding]), metadata=metadata(), ranges={"src/App.php": [(1, 20)]})
+        message = sarif["runs"][0]["results"][0]["message"]["text"]
+        self.assertIn("<absolute-path>", message)
+        self.assertNotIn(r"C:\Users\alice", message)
+        self.assertNotIn(r"\\buildbox\share", message)
+        self.assertNotIn("file:///C:/Users/alice", message)
+
+        invalid_location = copy.deepcopy(finding)
+        invalid_location["location"] = {"path": r"C:\Users\alice\repo\src\App.php", "start_line": 10, "side": "RIGHT"}
+        with self.assertRaisesRegex(SarifGenerationError, "repository-relative paths"):
+            build_sarif(canonical_artifact([invalid_location]), metadata=metadata(), ranges=None)
 
     def test_empty_findings_still_emit_valid_empty_results(self) -> None:
         artifact = canonical_artifact([])
@@ -390,6 +424,65 @@ class FindingsSarifTest(unittest.TestCase):
                 text=True,
             )
         self.assert_cli_invalid(completed, "outside pr.diff.ranges.txt")
+
+    def test_validator_rejects_windows_absolute_paths_in_messages_and_locations(self) -> None:
+        artifact = canonical_artifact()
+        sarif = build_sarif(artifact, metadata=metadata(), ranges={"src/App.php": [(1, 20)]})
+        sarif["runs"][0]["results"][0]["message"]["text"] = r"Leaked C:\Users\alice\repo\secret.txt"
+        sarif["runs"][0]["results"][1]["locations"][0]["physicalLocation"]["artifactLocation"]["uri"] = r"C:\Users\alice\repo\src\App.php"
+        errors = validate_findings_sarif(self.schema, sarif, findings=artifact)
+        self.assertTrue(any("message.text: must not leak host absolute paths" in error for error in errors), errors)
+        self.assertTrue(any("artifactLocation.uri: must be a repository-relative URI path" in error for error in errors), errors)
+
+    def test_validator_rederives_guid_severity_and_post_policy_from_canonical(self) -> None:
+        local_only = make_finding(
+            severity="should_fix",
+            category="design",
+            title="`helper` should remain reviewer-only",
+            path="src/App.php",
+            line=18,
+            post_policy="local_only",
+        )
+        artifact = canonical_artifact([local_only])
+        sarif = build_sarif(artifact, metadata=metadata(), ranges={"src/App.php": [(1, 20)]})
+        result = sarif["runs"][0]["results"][0]
+        result["guid"] = "00000000-0000-4000-8000-000000000000"
+        result["ruleId"] = "pr-codex/bug"
+        result["ruleIndex"] = 0
+        result["level"] = "none"
+        result["properties"]["severity"] = "note"
+        result["properties"]["category"] = "bug"
+        result["properties"]["post_policy"] = "body_summary"
+        result.pop("suppressions", None)
+        errors = validate_findings_sarif(self.schema, sarif, findings=artifact)
+        for expected in (
+            "guid: must equal deterministic UUIDv5",
+            "properties.severity: must match canonical severity",
+            "level: must map from canonical severity should_fix",
+            "properties.category: must match canonical category",
+            "properties.post_policy: must match canonical posting.post_policy",
+            "suppressions: canonical local_only findings must use SARIF suppression",
+        ):
+            self.assertTrue(any(expected in error for error in errors), errors)
+
+    def test_validator_requires_suppression_for_canonical_nit_even_if_sarif_local_severity_changes(self) -> None:
+        nit = make_finding(
+            severity="nit",
+            category="code_quality",
+            title="`name` can be clearer",
+            path="src/App.php",
+            line=14,
+            post_policy="body_summary",
+        )
+        artifact = canonical_artifact([nit])
+        sarif = build_sarif(artifact, metadata=metadata(), ranges={"src/App.php": [(1, 20)]})
+        result = sarif["runs"][0]["results"][0]
+        result["level"] = "warning"
+        result["properties"]["severity"] = "should_fix"
+        result.pop("suppressions", None)
+        errors = validate_findings_sarif(self.schema, sarif, findings=artifact)
+        self.assertTrue(any("properties.severity: must match canonical severity" in error for error in errors), errors)
+        self.assertTrue(any("suppressions: canonical nit findings must be suppressed" in error for error in errors), errors)
 
     def test_validator_reports_must_fix_count_mismatch(self) -> None:
         artifact = canonical_artifact()
