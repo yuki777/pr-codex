@@ -317,11 +317,12 @@ Codex は以下の観点で payload を確認する:
 - `{SCHEMA_PATH}` は Step 2.5 で保持した `schema_path`、`{VALIDATOR_PATH}` は `validator_path` の絶対パスに置換される。Bash ツールに渡す前に Claude 側で prompt 内の両プレースホルダを絶対パス文字列へ置換する
 
 ```bash
-codex --ask-for-approval never exec \
+codex \
+  --ask-for-approval never \
   -m gpt-5.5 \
-  --sandbox read-only \
-  --color never \
-  --ephemeral \
+  -c sandbox_mode=read-only \
+  exec \
+  --ignore-user-config \
   --skip-git-repo-check \
   --cd ~/claude-loop-pr-codex/$dir_name \
   "
@@ -362,6 +363,14 @@ FAIL の場合は VERDICT: FAIL の直前に '違反一覧' セクションを�
   >  ~/claude-loop-pr-codex/$dir_name/preflight-codex.md \
   2> ~/claude-loop-pr-codex/$dir_name/preflight-codex.log
 ```
+
+フラグの説明:
+
+- `--ask-for-approval never` / `-m gpt-5.5` / `-c ...` は global flag のため、すべて `exec` の前に置く
+- `-c sandbox_mode=read-only` — シェル実行を read-only サンドボックスに固定する。`--sandbox read-only` と等価だが、config override として明示するため `-c` に統一する
+- `--ignore-user-config` — 投稿前検証中のみ `$CODEX_HOME/config.toml` / `~/.codex/config.toml` を読み込まない。auth は引き続き `CODEX_HOME` を使うため、古い MCP 設定や無効な `model_reasoning_effort` による config 検証エラーから Step 4.5 preflight を切り離せる
+- `--skip-git-repo-check` / `-C, --cd` は `exec` サブコマンド側の option のため、`exec` の後ろ、かつ prompt の前に置く
+- `--color never` / `--ephemeral` はテンプレートを簡素化するため使わない。カラーは TTY 自動判定に任せ、セッション保存挙動は config 側に委ねる
 
 #### 失敗時の Claude 側の処理
 

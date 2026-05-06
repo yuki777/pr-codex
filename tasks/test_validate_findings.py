@@ -57,7 +57,7 @@ def valid_artifact() -> dict[str, object]:
         "schema_version": "findings.v1",
         "producer": {
             "name": "pr-codex",
-            "version": "1.4.4",
+            "version": "1.5.0",
             "run_id": "yuki777-pr-codex-25-e8763f5",
         },
         "pr": {
