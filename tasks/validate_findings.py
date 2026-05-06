@@ -242,6 +242,40 @@ def validate_m1_posting_contract(
         errors.append(f"{fpath}.posting.post_policy: only must_fix findings may use post_policy=inline")
 
 
+def validate_must_fix_four_axes_gate(
+    errors: list[str],
+    fpath: str,
+    finding: dict[str, Any],
+    axes: Any,
+    valid_axis_values: set[str],
+    valid_evidence_levels: set[str],
+) -> None:
+    """Enforce the F2 REAL/TRIGGERABLE/IMPACTFUL/GENERAL gate for Must Fix findings."""
+    if finding.get("severity") != "must_fix" or not isinstance(axes, dict):
+        return
+
+    axis_values = {key: axes.get(key) for key in AXES_KEYS}
+    evidence_level = finding.get("evidence_level")
+    if not all(isinstance(value, str) and value in valid_axis_values for value in axis_values.values()):
+        return
+    if not isinstance(evidence_level, str) or evidence_level not in valid_evidence_levels:
+        return
+
+    if evidence_level == "suspicion":
+        errors.append(f"{fpath}.evidence_level: must_fix findings must not use evidence_level=suspicion")
+
+    passes_gate = (
+        axis_values["real"] == "yes"
+        and axis_values["triggerable"] == "yes"
+        and axis_values["impactful"] == "yes"
+        and (axis_values["general"] == "yes" or evidence_level in {"impact_explained", "verified"})
+    )
+    if not passes_gate:
+        errors.append(
+            f"{fpath}.severity: must_fix requires axes={{real,triggerable,impactful}}=yes and (general=yes or evidence_level in {{impact_explained, verified}})"
+        )
+
+
 def validate_pr_metadata_context(errors: list[str], data: dict[str, Any], metadata: Any) -> None:
     if metadata is None:
         return
@@ -454,6 +488,7 @@ def validate_artifact(schema: dict[str, Any], data: Any, metadata: Any | None = 
             require_keys(errors, f"{fpath}.axes", axes, AXES_KEYS)
             for key in AXES_KEYS:
                 validate_enum_value(errors, f"{fpath}.axes.{key}", axes.get(key), axis_value)
+            validate_must_fix_four_axes_gate(errors, fpath, finding, axes, axis_value, evidence_level)
 
         posting = finding.get("posting")
         if not isinstance(posting, dict):
