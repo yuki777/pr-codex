@@ -56,6 +56,8 @@ cron jobs are created with `hermes cron create` / profile aliases.
 ./hermes/install_phase0.sh --with-cron
 ```
 
+Environment defaults can be overridden with `PR_CODEX_REPO`, `PR_CODEX_HERMES_BOARD`, `PR_CODEX_HERMES_TENANT`, and `PR_CODEX_HERMES_ROOT`. The installer deliberately ignores ambient `HERMES_HOME` because Hermes profile sessions may set it to `~/.hermes/profiles/<profile>`; installation targets the global Hermes root unless `PR_CODEX_HERMES_ROOT` says otherwise.
+
 The installer creates or updates:
 
 - profiles: `issue-triager`, `pr-reviewer`, `review-triager`, `developer`, `sheriff`

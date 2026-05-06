@@ -8,7 +8,7 @@ set -eu
 REPO="${PR_CODEX_REPO:-yuki777/pr-codex}"
 BOARD="${PR_CODEX_HERMES_BOARD:-pr-codex}"
 TENANT="${PR_CODEX_HERMES_TENANT:-yuki777/pr-codex}"
-HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
+HERMES_ROOT="${PR_CODEX_HERMES_ROOT:-$HOME/.hermes}"
 WITH_CRON=0
 FORCE=0
 
@@ -24,7 +24,7 @@ Environment:
   PR_CODEX_REPO=$REPO
   PR_CODEX_HERMES_BOARD=$BOARD
   PR_CODEX_HERMES_TENANT=$TENANT
-  HERMES_HOME=$HERMES_HOME
+  PR_CODEX_HERMES_ROOT=$HERMES_ROOT
 EOF
 }
 
@@ -54,14 +54,14 @@ fi
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 ROOT_DIR="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
 
-mkdir -p "$HERMES_HOME/scripts" "$HERMES_HOME/automation/pr-codex"
-install -m 0755 "$ROOT_DIR/hermes/scripts/_pr_codex_common.py" "$HERMES_HOME/scripts/_pr_codex_common.py"
-install -m 0755 "$ROOT_DIR/hermes/scripts/pr_codex_watch.py" "$HERMES_HOME/scripts/pr_codex_watch.py"
-install -m 0755 "$ROOT_DIR/hermes/scripts/pr_codex_daily_digest.py" "$HERMES_HOME/scripts/pr_codex_daily_digest.py"
-install -m 0755 "$ROOT_DIR/hermes/scripts/pr_codex_kanban_health.py" "$HERMES_HOME/scripts/pr_codex_kanban_health.py"
+mkdir -p "$HERMES_ROOT/scripts" "$HERMES_ROOT/automation/pr-codex"
+install -m 0755 "$ROOT_DIR/hermes/scripts/_pr_codex_common.py" "$HERMES_ROOT/scripts/_pr_codex_common.py"
+install -m 0755 "$ROOT_DIR/hermes/scripts/pr_codex_watch.py" "$HERMES_ROOT/scripts/pr_codex_watch.py"
+install -m 0755 "$ROOT_DIR/hermes/scripts/pr_codex_daily_digest.py" "$HERMES_ROOT/scripts/pr_codex_daily_digest.py"
+install -m 0755 "$ROOT_DIR/hermes/scripts/pr_codex_kanban_health.py" "$HERMES_ROOT/scripts/pr_codex_kanban_health.py"
 
 for profile in issue-triager pr-reviewer review-triager developer sheriff; do
-  profile_dir="$HERMES_HOME/profiles/$profile"
+  profile_dir="$HERMES_ROOT/profiles/$profile"
   if [ ! -d "$profile_dir" ]; then
     hermes profile create "$profile" --clone >/dev/null 2>&1 || hermes profile create "$profile"
   fi
@@ -81,7 +81,7 @@ hermes kanban boards create "$BOARD" \
   --description "Phase 0 GitHub watcher tasks for $REPO" \
   --switch >/dev/null 2>&1 || hermes kanban boards switch "$BOARD"
 
-python3 "$HERMES_HOME/scripts/pr_codex_watch.py" \
+python3 "$HERMES_ROOT/scripts/pr_codex_watch.py" \
   --repo "$REPO" \
   --board "$BOARD" \
   --tenant "$TENANT" \
@@ -89,9 +89,9 @@ python3 "$HERMES_HOME/scripts/pr_codex_watch.py" \
   --sink print \
   --json
 
-WATCH_PROMPT="Run the local Phase 0 watcher command and report a concise summary only: python3 $HERMES_HOME/scripts/pr_codex_watch.py --repo $REPO --board $BOARD --tenant $TENANT --sink hermes --json"
-HEALTH_PROMPT="Run the local Phase 0 Kanban health command and report only anomalies: python3 $HERMES_HOME/scripts/pr_codex_kanban_health.py --repo $REPO --board $BOARD --tenant $TENANT --sink hermes --json"
-DIGEST_PROMPT="Run the local Phase 0 daily digest command and deliver the summary: python3 $HERMES_HOME/scripts/pr_codex_daily_digest.py --repo $REPO --board $BOARD --tenant $TENANT --sink hermes --json"
+WATCH_PROMPT="Run the local Phase 0 watcher command and report a concise summary only: python3 $HERMES_ROOT/scripts/pr_codex_watch.py --repo $REPO --board $BOARD --tenant $TENANT --sink hermes --json"
+HEALTH_PROMPT="Run the local Phase 0 Kanban health command and report only anomalies: python3 $HERMES_ROOT/scripts/pr_codex_kanban_health.py --repo $REPO --board $BOARD --tenant $TENANT --sink hermes --json"
+DIGEST_PROMPT="Run the local Phase 0 daily digest command and deliver the summary: python3 $HERMES_ROOT/scripts/pr_codex_daily_digest.py --repo $REPO --board $BOARD --tenant $TENANT --sink hermes --json"
 
 cron_exists() {
   hermes -p sheriff cron list 2>/dev/null | grep -F -- "$1" >/dev/null 2>&1
