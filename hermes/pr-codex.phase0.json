@@ -7,8 +7,8 @@
     "name": "pr-codex automation",
     "tenant": "yuki777/pr-codex"
   },
-  "state_path": "~/.hermes/automation/pr-codex/state.json",
-  "outbox_path": "~/.hermes/automation/pr-codex/tasks.jsonl",
+  "state_path": "$PR_CODEX_HERMES_ROOT/automation/pr-codex/state.json",
+  "outbox_path": "$PR_CODEX_HERMES_ROOT/automation/pr-codex/tasks.jsonl",
   "github_auto_marker_prefix": "<!-- hermes-auto:",
   "profiles": [
     "issue-triager",
@@ -22,19 +22,19 @@
       "name": "pr-codex-watch-github",
       "schedule": "every 10m",
       "profile": "sheriff",
-      "command": "python3 ~/.hermes/scripts/pr_codex_watch.py --repo yuki777/pr-codex --board pr-codex --tenant yuki777/pr-codex --sink hermes --json"
+      "command": "test -n \"$PR_CODEX_HERMES_ROOT\" && python3 \"$PR_CODEX_HERMES_ROOT/scripts/pr_codex_watch.py\" --repo yuki777/pr-codex --board pr-codex --tenant yuki777/pr-codex --state \"$PR_CODEX_HERMES_ROOT/automation/pr-codex/state.json\" --outbox \"$PR_CODEX_HERMES_ROOT/automation/pr-codex/tasks.jsonl\" --sink hermes --json"
     },
     {
       "name": "pr-codex-kanban-health",
       "schedule": "every 30m",
       "profile": "sheriff",
-      "command": "python3 ~/.hermes/scripts/pr_codex_kanban_health.py --repo yuki777/pr-codex --board pr-codex --tenant yuki777/pr-codex --sink hermes --json"
+      "command": "test -n \"$PR_CODEX_HERMES_ROOT\" && python3 \"$PR_CODEX_HERMES_ROOT/scripts/pr_codex_kanban_health.py\" --repo yuki777/pr-codex --board pr-codex --tenant yuki777/pr-codex --outbox \"$PR_CODEX_HERMES_ROOT/automation/pr-codex/tasks.jsonl\" --sink hermes --json"
     },
     {
       "name": "pr-codex-daily-digest",
       "schedule": "0 9 * * *",
       "profile": "sheriff",
-      "command": "python3 ~/.hermes/scripts/pr_codex_daily_digest.py --repo yuki777/pr-codex --board pr-codex --tenant yuki777/pr-codex --sink hermes --json"
+      "command": "test -n \"$PR_CODEX_HERMES_ROOT\" && python3 \"$PR_CODEX_HERMES_ROOT/scripts/pr_codex_daily_digest.py\" --repo yuki777/pr-codex --board pr-codex --tenant yuki777/pr-codex --state \"$PR_CODEX_HERMES_ROOT/automation/pr-codex/state.json\" --outbox \"$PR_CODEX_HERMES_ROOT/automation/pr-codex/tasks.jsonl\" --sink hermes --json"
     }
   ],
   "safety": {
@@ -44,5 +44,6 @@
     "auto_assign": false,
     "auto_approve": false,
     "auto_merge": false
-  }
+  },
+  "hermes_root_env": "PR_CODEX_HERMES_ROOT"
 }

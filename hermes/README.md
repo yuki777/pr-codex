@@ -40,7 +40,7 @@ $PR_CODEX_HERMES_ROOT/automation/pr-codex/state.json
 $PR_CODEX_HERMES_ROOT/automation/pr-codex/tasks.jsonl   # outbox fallback when Hermes is absent
 ```
 
-The installer also passes absolute `--state` and `--outbox` paths into generated cron prompts so Hermes profile-specific `HOME` values do not split seeded watcher state from scheduled watcher state.
+The installer also passes absolute `--state` and `--outbox` paths into generated cron prompts so Hermes profile-specific `HOME` values do not split seeded watcher state from scheduled watcher state. Direct consumers of `pr-codex.phase0.json` should set `PR_CODEX_HERMES_ROOT` to the same global Hermes root before executing the JSON cron command templates; the templates intentionally avoid `~/.hermes` fallbacks.
 
 ## Bootstrap
 

@@ -277,6 +277,20 @@ class InstallerScriptTests(unittest.TestCase):
         self.assertIn("--state $STATE_PATH --outbox $OUTBOX_PATH --sink hermes", text)
         self.assertNotIn("pr_codex_kanban_health.py --repo $REPO --board $BOARD --tenant $TENANT --state", text)
 
+    def test_phase0_config_cron_commands_pin_state_and_outbox(self):
+        config = json.loads((ROOT / "hermes" / "pr-codex.phase0.json").read_text())
+        self.assertEqual(config["hermes_root_env"], "PR_CODEX_HERMES_ROOT")
+        self.assertEqual(config["state_path"], "$PR_CODEX_HERMES_ROOT/automation/pr-codex/state.json")
+        self.assertEqual(config["outbox_path"], "$PR_CODEX_HERMES_ROOT/automation/pr-codex/tasks.jsonl")
+        for job in config["cron"]:
+            command = job["command"]
+            self.assertIn('test -n "$PR_CODEX_HERMES_ROOT"', command)
+            self.assertIn('"$PR_CODEX_HERMES_ROOT/scripts/', command)
+            self.assertIn('--outbox "$PR_CODEX_HERMES_ROOT/automation/pr-codex/tasks.jsonl"', command)
+            self.assertNotIn("~/.hermes", command)
+            if job["name"] != "pr-codex-kanban-health":
+                self.assertIn('--state "$PR_CODEX_HERMES_ROOT/automation/pr-codex/state.json"', command)
+
 
 class HealthTests(unittest.TestCase):
     def test_health_detects_blocked_stale_and_retry_tasks(self):
