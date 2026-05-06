@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/yuki777/pr-codex/main/schemas/score-report.v1.json",
+  "title": "pr-codex fixture score report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "fixture_id",
+    "evaluated_at",
+    "exact_pass_rate",
+    "acceptable_pass_rate",
+    "false_positive_rate",
+    "recall_known_bug",
+    "gate_pass",
+    "gate_checks",
+    "counts",
+    "unmatched_actuals",
+    "breakdown"
+  ],
+  "properties": {
+    "schema_version": {"const": "score-report.v1"},
+    "fixture_id": {"type": "string", "minLength": 1},
+    "evaluated_at": {"type": "string", "format": "date-time"},
+    "exact_pass_rate": {"type": "number", "minimum": 0, "maximum": 1},
+    "acceptable_pass_rate": {"type": "number", "minimum": 0, "maximum": 1},
+    "false_positive_rate": {"type": "number", "minimum": 0, "maximum": 1},
+    "recall_known_bug": {"type": "number", "minimum": 0, "maximum": 1},
+    "gate_pass": {"type": "boolean"},
+    "gate_checks": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/gate_check"}
+    },
+    "counts": {"$ref": "#/$defs/counts"},
+    "unmatched_actuals": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/unmatched_actual"}
+    },
+    "breakdown": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/breakdown_item"}
+    }
+  },
+  "$defs": {
+    "severity": {"enum": ["must_fix", "should_fix", "nit", "note"]},
+    "axis_value": {"enum": ["yes", "no", "unknown"]},
+    "match_status": {"enum": ["matched", "missed", "false_positive_promoted"]},
+    "gate_check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "actual", "threshold", "passed"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "actual": {"type": "number"},
+        "threshold": {"type": "number"},
+        "passed": {"type": "boolean"}
+      }
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["axes_target", "exact_pass", "acceptable_pass", "known_bug", "known_bug_matched", "known_false_positive_trap", "false_positive_promoted"],
+      "properties": {
+        "axes_target": {"type": "integer", "minimum": 0},
+        "exact_pass": {"type": "integer", "minimum": 0},
+        "acceptable_pass": {"type": "integer", "minimum": 0},
+        "known_bug": {"type": "integer", "minimum": 0},
+        "known_bug_matched": {"type": "integer", "minimum": 0},
+        "known_false_positive_trap": {"type": "integer", "minimum": 0},
+        "false_positive_promoted": {"type": "integer", "minimum": 0}
+      }
+    },
+    "axis_diff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["expected", "actual", "acceptable"],
+      "properties": {
+        "expected": {"$ref": "#/$defs/axis_value"},
+        "actual": {"oneOf": [{"$ref": "#/$defs/axis_value"}, {"type": "null"}]},
+        "acceptable": {"type": "boolean"}
+      }
+    },
+    "severity_diff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["expected", "actual", "acceptable"],
+      "properties": {
+        "expected": {"type": "array", "items": {"$ref": "#/$defs/severity"}},
+        "actual": {"oneOf": [{"$ref": "#/$defs/severity"}, {"type": "null"}]},
+        "acceptable": {"type": "boolean"}
+      }
+    },
+    "breakdown_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["expected_id", "expected_outcome", "matched_actual_fingerprint", "match_status", "axes_diff", "severity_diff", "evidence_level_ok", "notes"],
+      "properties": {
+        "expected_id": {"type": "string", "minLength": 1},
+        "expected_outcome": {"type": "string", "minLength": 1},
+        "matched_actual_fingerprint": {"oneOf": [{"type": "string", "pattern": "^[0-9a-f]{64}$"}, {"type": "null"}]},
+        "match_status": {"$ref": "#/$defs/match_status"},
+        "axes_diff": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/axis_diff"}
+        },
+        "severity_diff": {"$ref": "#/$defs/severity_diff"},
+        "evidence_level_ok": {"type": "boolean"},
+        "notes": {"type": "string"}
+      }
+    },
+    "unmatched_actual": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fingerprint", "severity", "category", "path", "title"],
+      "properties": {
+        "fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "severity": {"$ref": "#/$defs/severity"},
+        "category": {"type": "string"},
+        "path": {"type": "string"},
+        "title": {"type": "string"}
+      }
+    }
+  }
+}

@@ -1,0 +1,281 @@
+#!/usr/bin/env python3
+"""Validate score-report.v1 artifacts emitted by score_fixture.py."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import sys
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+SCHEMA_VERSION = "score-report.v1"
+FINGERPRINT_RE = re.compile(r"^[0-9a-f]{64}$")
+SEVERITIES = {"must_fix", "should_fix", "nit", "note"}
+AXIS_VALUES = {"yes", "no", "unknown"}
+MATCH_STATUSES = {"matched", "missed", "false_positive_promoted"}
+TOP_KEYS = {
+    "schema_version",
+    "fixture_id",
+    "evaluated_at",
+    "exact_pass_rate",
+    "acceptable_pass_rate",
+    "false_positive_rate",
+    "recall_known_bug",
+    "gate_pass",
+    "gate_checks",
+    "counts",
+    "unmatched_actuals",
+    "breakdown",
+}
+RATE_KEYS = ("exact_pass_rate", "acceptable_pass_rate", "false_positive_rate", "recall_known_bug")
+COUNT_KEYS = {
+    "axes_target",
+    "exact_pass",
+    "acceptable_pass",
+    "known_bug",
+    "known_bug_matched",
+    "known_false_positive_trap",
+    "false_positive_promoted",
+}
+BREAKDOWN_KEYS = {
+    "expected_id",
+    "expected_outcome",
+    "matched_actual_fingerprint",
+    "match_status",
+    "axes_diff",
+    "severity_diff",
+    "evidence_level_ok",
+    "notes",
+}
+AXIS_DIFF_KEYS = {"expected", "actual", "acceptable"}
+SEVERITY_DIFF_KEYS = {"expected", "actual", "acceptable"}
+GATE_CHECK_KEYS = {"name", "actual", "threshold", "passed"}
+UNMATCHED_ACTUAL_KEYS = {"fingerprint", "severity", "category", "path", "title"}
+
+
+def load_json(path: Path) -> Any:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"{path}: cannot read/parse JSON: {exc}") from exc
+
+
+def non_empty_string(value: Any) -> bool:
+    return isinstance(value, str) and len(value) >= 1 and all(
+        not (ord(char) <= 0x1F or 0x7F <= ord(char) <= 0x9F or 0xD800 <= ord(char) <= 0xDFFF)
+        for char in value
+    )
+
+
+def non_negative_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def number_0_1(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= float(value) <= 1
+
+
+def is_rfc3339(value: Any) -> bool:
+    if not isinstance(value, str) or not value:
+        return False
+    candidate = value[:-1] + "+00:00" if value.endswith("Z") else value
+    try:
+        parsed = datetime.fromisoformat(candidate)
+    except ValueError:
+        return False
+    return parsed.tzinfo is not None
+
+
+def add_unexpected(errors: list[str], path: str, obj: Any, allowed: set[str]) -> None:
+    if isinstance(obj, dict):
+        extra = sorted(set(obj) - allowed)
+        if extra:
+            errors.append(f"{path}: unexpected properties: {', '.join(extra)}")
+
+
+def require(errors: list[str], path: str, obj: dict[str, Any], required: set[str]) -> None:
+    missing = sorted(required - set(obj))
+    if missing:
+        errors.append(f"{path}: missing required properties: {', '.join(missing)}")
+
+
+def validate_gate_checks(errors: list[str], value: Any) -> None:
+    if not isinstance(value, list):
+        errors.append("$.gate_checks: must be an array")
+        return
+    for index, item in enumerate(value):
+        path = f"$.gate_checks[{index}]"
+        if not isinstance(item, dict):
+            errors.append(f"{path}: must be an object")
+            continue
+        add_unexpected(errors, path, item, GATE_CHECK_KEYS)
+        require(errors, path, item, GATE_CHECK_KEYS)
+        if not non_empty_string(item.get("name")):
+            errors.append(f"{path}.name: must be a non-empty string")
+        for key in ("actual", "threshold"):
+            if not isinstance(item.get(key), (int, float)) or isinstance(item.get(key), bool):
+                errors.append(f"{path}.{key}: must be a number")
+        if not isinstance(item.get("passed"), bool):
+            errors.append(f"{path}.passed: must be boolean")
+
+
+def validate_counts(errors: list[str], value: Any) -> None:
+    if not isinstance(value, dict):
+        errors.append("$.counts: must be an object")
+        return
+    add_unexpected(errors, "$.counts", value, COUNT_KEYS)
+    require(errors, "$.counts", value, COUNT_KEYS)
+    for key in COUNT_KEYS:
+        if key in value and not non_negative_int(value[key]):
+            errors.append(f"$.counts.{key}: must be an integer >= 0")
+    if non_negative_int(value.get("exact_pass")) and non_negative_int(value.get("axes_target")) and value["exact_pass"] > value["axes_target"]:
+        errors.append("$.counts.exact_pass: must be <= axes_target")
+    if non_negative_int(value.get("acceptable_pass")) and non_negative_int(value.get("axes_target")) and value["acceptable_pass"] > value["axes_target"]:
+        errors.append("$.counts.acceptable_pass: must be <= axes_target")
+    if non_negative_int(value.get("known_bug_matched")) and non_negative_int(value.get("known_bug")) and value["known_bug_matched"] > value["known_bug"]:
+        errors.append("$.counts.known_bug_matched: must be <= known_bug")
+    if (
+        non_negative_int(value.get("false_positive_promoted"))
+        and non_negative_int(value.get("known_false_positive_trap"))
+        and value["false_positive_promoted"] > value["known_false_positive_trap"]
+    ):
+        errors.append("$.counts.false_positive_promoted: must be <= known_false_positive_trap")
+
+
+def validate_breakdown(errors: list[str], value: Any) -> None:
+    if not isinstance(value, list):
+        errors.append("$.breakdown: must be an array")
+        return
+    for index, item in enumerate(value):
+        path = f"$.breakdown[{index}]"
+        if not isinstance(item, dict):
+            errors.append(f"{path}: must be an object")
+            continue
+        add_unexpected(errors, path, item, BREAKDOWN_KEYS)
+        require(errors, path, item, BREAKDOWN_KEYS)
+        for key in ("expected_id", "expected_outcome", "notes"):
+            if not isinstance(item.get(key), str):
+                errors.append(f"{path}.{key}: must be a string")
+        fingerprint = item.get("matched_actual_fingerprint")
+        if fingerprint is not None and (not isinstance(fingerprint, str) or not FINGERPRINT_RE.match(fingerprint)):
+            errors.append(f"{path}.matched_actual_fingerprint: must be null or 64 lowercase hex")
+        if item.get("match_status") not in MATCH_STATUSES:
+            errors.append(f"{path}.match_status: invalid value")
+        if not isinstance(item.get("evidence_level_ok"), bool):
+            errors.append(f"{path}.evidence_level_ok: must be boolean")
+        validate_axes_diff(errors, f"{path}.axes_diff", item.get("axes_diff"))
+        validate_severity_diff(errors, f"{path}.severity_diff", item.get("severity_diff"))
+
+
+def validate_unmatched_actuals(errors: list[str], value: Any) -> None:
+    if not isinstance(value, list):
+        errors.append("$.unmatched_actuals: must be an array")
+        return
+    for index, item in enumerate(value):
+        path = f"$.unmatched_actuals[{index}]"
+        if not isinstance(item, dict):
+            errors.append(f"{path}: must be an object")
+            continue
+        add_unexpected(errors, path, item, UNMATCHED_ACTUAL_KEYS)
+        require(errors, path, item, UNMATCHED_ACTUAL_KEYS)
+        fingerprint = item.get("fingerprint")
+        if not isinstance(fingerprint, str) or not FINGERPRINT_RE.match(fingerprint):
+            errors.append(f"{path}.fingerprint: must be 64 lowercase hex")
+        if item.get("severity") not in SEVERITIES:
+            errors.append(f"{path}.severity: invalid value")
+        for key in ("category", "path", "title"):
+            if not isinstance(item.get(key), str):
+                errors.append(f"{path}.{key}: must be a string")
+
+
+def validate_axes_diff(errors: list[str], path: str, value: Any) -> None:
+    if not isinstance(value, dict):
+        errors.append(f"{path}: must be an object")
+        return
+    for axis, diff in value.items():
+        item_path = f"{path}.{axis}"
+        if axis not in {"real", "triggerable", "impactful", "general"}:
+            errors.append(f"{item_path}: invalid axis")
+        if not isinstance(diff, dict):
+            errors.append(f"{item_path}: must be an object")
+            continue
+        add_unexpected(errors, item_path, diff, AXIS_DIFF_KEYS)
+        require(errors, item_path, diff, AXIS_DIFF_KEYS)
+        if diff.get("expected") not in AXIS_VALUES:
+            errors.append(f"{item_path}.expected: invalid value")
+        if diff.get("actual") is not None and diff.get("actual") not in AXIS_VALUES:
+            errors.append(f"{item_path}.actual: invalid value")
+        if not isinstance(diff.get("acceptable"), bool):
+            errors.append(f"{item_path}.acceptable: must be boolean")
+
+
+def validate_severity_diff(errors: list[str], path: str, value: Any) -> None:
+    if not isinstance(value, dict):
+        errors.append(f"{path}: must be an object")
+        return
+    add_unexpected(errors, path, value, SEVERITY_DIFF_KEYS)
+    require(errors, path, value, SEVERITY_DIFF_KEYS)
+    expected = value.get("expected")
+    if not isinstance(expected, list) or any(item not in SEVERITIES for item in expected):
+        errors.append(f"{path}.expected: must be an array of severities")
+    actual = value.get("actual")
+    if actual is not None and actual not in SEVERITIES:
+        errors.append(f"{path}.actual: invalid value")
+    if not isinstance(value.get("acceptable"), bool):
+        errors.append(f"{path}.acceptable: must be boolean")
+
+
+def validate_score_report(data: Any) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(data, dict):
+        return ["$: must be an object"]
+    add_unexpected(errors, "$", data, TOP_KEYS)
+    require(errors, "$", data, TOP_KEYS)
+    if data.get("schema_version") != SCHEMA_VERSION:
+        errors.append(f"$.schema_version: must equal {SCHEMA_VERSION}")
+    if not non_empty_string(data.get("fixture_id")):
+        errors.append("$.fixture_id: must be a non-empty string")
+    if "evaluated_at" in data and not is_rfc3339(data["evaluated_at"]):
+        errors.append("$.evaluated_at: must be RFC3339 date-time with timezone")
+    for key in RATE_KEYS:
+        if key in data and not number_0_1(data[key]):
+            errors.append(f"$.{key}: must be a number between 0 and 1")
+    if "gate_pass" in data and not isinstance(data["gate_pass"], bool):
+        errors.append("$.gate_pass: must be boolean")
+    validate_gate_checks(errors, data.get("gate_checks"))
+    validate_counts(errors, data.get("counts"))
+    validate_unmatched_actuals(errors, data.get("unmatched_actuals"))
+    validate_breakdown(errors, data.get("breakdown"))
+    return errors
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Validate score-report.v1 artifact")
+    parser.add_argument("--schema", required=True, type=Path, help="schemas/score-report.v1.json path")
+    parser.add_argument("--data", required=True, type=Path, help="score-report.json path")
+    args = parser.parse_args()
+
+    try:
+        schema = load_json(args.schema)
+        data = load_json(args.data)
+    except ValueError as exc:
+        print(f"INVALID: {exc}", file=sys.stderr)
+        return 1
+    if not isinstance(schema, dict) or schema.get("$id") is None:
+        print(f"{args.schema}: invalid score-report schema file", file=sys.stderr)
+        return 2
+    errors = validate_score_report(data)
+    if errors:
+        print("INVALID score report", file=sys.stderr)
+        for error in errors:
+            print(f"- {error}", file=sys.stderr)
+        return 1
+    print("VALID score report")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

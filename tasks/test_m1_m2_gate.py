@@ -1,0 +1,125 @@
+#!/usr/bin/env python3
+"""Tests for M1→M2 gate report generation."""
+
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+TASKS = ROOT / "tasks"
+GATE_PATH = TASKS / "m1_m2_gate.py"
+sys.path.insert(0, str(TASKS))
+
+from m1_m2_gate import build_report  # noqa: E402
+from score_fixture import load_json, score_fixture  # noqa: E402
+from validate_m1_m2_gate import validate_m1_m2_gate  # noqa: E402
+
+EVALUATED_AT = "2026-05-06T00:00:00Z"
+
+
+def perfect_score(size: str = "small") -> dict[str, object]:
+    expected = load_json(ROOT / "fixtures" / size / "expected-findings.json")
+    actual = load_json(ROOT / "fixtures" / size / "scoring-stubs" / "perfect.findings.verified.json")
+    return score_fixture(expected, actual, EVALUATED_AT)
+
+
+def passing_inputs() -> dict[str, object]:
+    return {
+        "schema_version": "m1-m2-inputs.v1",
+        "payload_422_count": 0,
+        "must_fix_count_by_source": {"findings_verified": 2, "review_md": 2, "payload": 2},
+        "step_4_5_pass_rate_baseline": 0.78,
+        "step_4_5_pass_rate_current": 0.81,
+        "run_plan_emitted": True,
+        "loop_completion_rate_baseline": 0.92,
+        "loop_completion_rate_current": 0.95,
+    }
+
+
+class M1M2GateTest(unittest.TestCase):
+    def criteria_by_name(self, report: dict[str, object]) -> dict[str, dict[str, object]]:
+        return {item["name"]: item for item in report["criteria"]}
+
+    def test_all_pass_when_operational_inputs_and_fixture_scores_pass(self) -> None:
+        report = build_report([perfect_score("small"), perfect_score("medium"), perfect_score("large")], passing_inputs(), EVALUATED_AT)
+        self.assertEqual(validate_m1_m2_gate(report), [])
+        self.assertEqual(report["overall_status"], "pass")
+        self.assertTrue(all(item["status"] == "pass" for item in report["criteria"]))
+
+    def test_missing_operational_inputs_are_unknown_not_fail(self) -> None:
+        report = build_report([perfect_score()], {"schema_version": "m1-m2-inputs.v1"}, EVALUATED_AT)
+        by_name = self.criteria_by_name(report)
+        self.assertEqual(by_name["payload_compat_422"]["status"], "unknown")
+        self.assertEqual(by_name["fixture_scoring_gate"]["status"], "pass")
+        self.assertEqual(report["overall_status"], "blocked_by_unknowns")
+
+    def test_each_operational_gate_can_fail(self) -> None:
+        cases = {
+            "payload_compat_422": {"payload_422_count": 1},
+            "must_fix_count_consistency": {"must_fix_count_by_source": {"findings_verified": 2, "review_md": 1, "payload": 2}},
+            "step_4_5_pass_rate": {"step_4_5_pass_rate_baseline": 0.80, "step_4_5_pass_rate_current": 0.70},
+            "run_plan_emitted": {"run_plan_emitted": False},
+            "loop_completion_rate": {"loop_completion_rate_baseline": 0.95, "loop_completion_rate_current": 0.94},
+        }
+        for criterion, mutation in cases.items():
+            with self.subTest(criterion=criterion):
+                inputs = passing_inputs()
+                inputs.update(mutation)
+                report = build_report([perfect_score()], inputs, EVALUATED_AT)
+                by_name = self.criteria_by_name(report)
+                self.assertEqual(by_name[criterion]["status"], "fail")
+                self.assertEqual(report["overall_status"], "fail")
+
+    def test_fixture_score_failure_fails_overall_gate(self) -> None:
+        expected = load_json(ROOT / "fixtures" / "small" / "expected-findings.json")
+        actual = load_json(ROOT / "fixtures" / "small" / "scoring-stubs" / "missed-known-bug.findings.verified.json")
+        failing_score = score_fixture(expected, actual, EVALUATED_AT)
+        report = build_report([perfect_score(), failing_score], passing_inputs(), EVALUATED_AT)
+        by_name = self.criteria_by_name(report)
+        self.assertEqual(by_name["fixture_scoring_gate"]["status"], "fail")
+        self.assertEqual(report["overall_status"], "fail")
+
+    def test_no_score_reports_makes_fixture_scoring_unknown(self) -> None:
+        report = build_report([], passing_inputs(), EVALUATED_AT)
+        by_name = self.criteria_by_name(report)
+        self.assertEqual(by_name["fixture_scoring_gate"]["status"], "unknown")
+        self.assertEqual(report["overall_status"], "blocked_by_unknowns")
+
+    def test_cli_writes_valid_gate_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            score_path = tmp_path / "score-small.json"
+            score_path.write_text(json.dumps(perfect_score(), ensure_ascii=True), encoding="utf-8")
+            inputs_path = tmp_path / "m1-m2-inputs.json"
+            inputs_path.write_text(json.dumps(passing_inputs(), ensure_ascii=True), encoding="utf-8")
+            out = tmp_path / "m1-m2-gate.json"
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(GATE_PATH),
+                    "--score-reports",
+                    str(score_path),
+                    "--inputs",
+                    str(inputs_path),
+                    "--out",
+                    str(out),
+                    "--evaluated-at",
+                    EVALUATED_AT,
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            report = json.loads(out.read_text(encoding="utf-8"))
+        self.assertEqual(validate_m1_m2_gate(report), [])
+        self.assertEqual(report["overall_status"], "pass")
+
+
+if __name__ == "__main__":
+    unittest.main()

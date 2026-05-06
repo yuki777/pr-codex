@@ -16,7 +16,7 @@ GitHub PRを **Claude Code** と **Codex CLI** の2者レビュー方式で自�
 - Codex CLI (`codex-cli 0.128.0` 以上、`codex --ask-for-approval never -m gpt-5.5 ... exec` が使えること)
 - GitHub CLI (`gh`)
 - `jq`（SKILL.md 内の全テンプレートで利用する。macOS 標準では未インストール）
-- `python3`（同梱 validator `tasks/validate_findings.py` / `tasks/validate_preflight_result.py` で `findings.verified.json` と `preflight-result.json` を検証するため）
+- `python3`（同梱 validator / eval runner で `findings.verified.json` / `preflight-result.json` / fixture scoring artifact を検証するため）
 
 ## セットアップ
 
@@ -113,6 +113,69 @@ Issue #28 の Phase 0 実装として、`hermes/` 配下に pr-codex 専用の H
 
 Phase 0 は read-only observer です。GitHub への自動コメント、label/milestone/assignee 変更、push、approve、merge は行いません。詳細は [`hermes/README.md`](hermes/README.md) を参照してください。
 
+## Regression eval / fixture scoring (F11)
+
+CI では LLM を起動せず、固定 fixture と stub artifact だけで schema / runner の deterministic smoke test を行う。手動 deep eval では実レビューで生成した `findings.verified.json` を fixture oracle と比較し、M1→M2 gate report に集約する。
+
+### CI-safe smoke
+
+```bash
+python3 -m unittest discover -s tasks -p "test_*.py"
+```
+
+このテストは `fixtures/<size>/scoring-stubs/*.findings.verified.json` を使い、`expected-findings.v1` / `score-report.v1` / `m1-m2-gate.v1` の validation と scoring runner の分岐を確認する。実 LLM / `gh api` / GitHub write 操作は含めない。
+
+### Manual deep eval
+
+実レビューの出力を採点する場合は、fixture ごとに `findings.verified.json` を用意して `artifacts/`（gitignore 済み）へ score report を出す。
+
+```bash
+mkdir -p artifacts
+
+python3 tasks/score_fixture.py \
+  --expected fixtures/small/expected-findings.json \
+  --actual /path/to/small/findings.verified.json \
+  --out artifacts/score-small.json
+
+python3 tasks/score_fixture.py \
+  --expected fixtures/medium/expected-findings.json \
+  --actual /path/to/medium/findings.verified.json \
+  --out artifacts/score-medium.json
+
+python3 tasks/score_fixture.py \
+  --expected fixtures/large/expected-findings.json \
+  --actual /path/to/large/findings.verified.json \
+  --out artifacts/score-large.json
+```
+
+M1→M2 gate は運用実測値を `m1-m2-inputs.v1` として外部供給する。未計測項目は省略でき、省略された criteria は `unknown` として記録される（unknown は fail にはしない）。
+
+```json
+{
+  "schema_version": "m1-m2-inputs.v1",
+  "payload_422_count": 0,
+  "must_fix_count_by_source": {
+    "findings_verified": 2,
+    "review_md": 2,
+    "payload": 2
+  },
+  "step_4_5_pass_rate_baseline": 0.78,
+  "step_4_5_pass_rate_current": 0.81,
+  "run_plan_emitted": true,
+  "loop_completion_rate_baseline": 0.92,
+  "loop_completion_rate_current": 0.95
+}
+```
+
+```bash
+python3 tasks/m1_m2_gate.py \
+  --score-reports artifacts/score-small.json artifacts/score-medium.json artifacts/score-large.json \
+  --inputs artifacts/m1-m2-inputs.json \
+  --out artifacts/m1-m2-gate.json
+```
+
+`m1-m2-gate.json` は `payload_compat_422` / `must_fix_count_consistency` / `step_4_5_pass_rate` / `run_plan_emitted` / `loop_completion_rate` / `fixture_scoring_gate` を `pass` / `fail` / `unknown` で記録し、総合結果を `pass` / `fail` / `blocked_by_unknowns` に集約する。
+
 ## ファイル構成
 
 ```
@@ -163,6 +226,8 @@ mv ~/claude-loop-pr-codex/sent/yuki777-pr-codex-24 \
 ## Schema
 
 - canonical runtime artifact は `schemas/findings.v1.json` (JSON Schema Draft 2020-12) で定義する
+- fixture oracle は `schemas/expected-findings.v1.json` で定義する。runtime artifact とは分離し、`expected_outcome` / `acceptable_overrides` / `strictness_profile` / `minimum_evidence_level` など採点用メタデータを保持する
+- fixture scoring の出力は `schemas/score-report.v1.json`、M1→M2 gate report は `schemas/m1-m2-gate.v1.json` で定義する
 - `findings.verified.json` は top-level `generated_at` を持ち、per-finding `created_at` は持たない
 - `findings.verified.json.pr.repository` は **投稿先の base repo** (`owner/repo`) に固定する。fork PR でも head repo ではなく、`metadata.json.repository_full_name` および `/pr-codex:send` の投稿先 `$org/$repository` と一致させる
 - M1 の `finding.id` は **`fingerprint` と同値**に固定する（retry / send の `source_finding_id` / eval harness 比較で決定論的に追跡するため）
@@ -172,6 +237,7 @@ mv ~/claude-loop-pr-codex/sent/yuki777-pr-codex-24 \
 - review 側は `findings.verified.json` を completed 前に同梱 validator `tasks/validate_findings.py` で `schemas/findings.v1.json` へ検証し、send 側も同じ validator に失敗したら Markdown fallback せず中断する
 - schema 自体は `location.side` に `LEFT` も残すが、M1 の send workflow は `RIGHT` のみ受け付ける
 - `tasks/validate_findings.py` は JSON shape / enum / conditional rule / RFC3339 date-time / URI / `end_line >= start_line` / `id == fingerprint` / fingerprint 再計算 / `metadata.json` との PR context 一致を stdlib-only で検証する
+- `tasks/validate_expected_findings.py` / `tasks/validate_score_report.py` / `tasks/validate_m1_m2_gate.py` は eval artifact を stdlib-only で検証する
 
 
 ## Preflight result schema

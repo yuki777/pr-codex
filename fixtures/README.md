@@ -32,13 +32,30 @@ fixtures/
 
 ## scoring (M1 gate)
 
-oracle 評価結果は3指標を出す:
+F11 以降、oracle 評価結果は `tasks/score_fixture.py` で `score-report.v1` として出力する。`expected-findings.json` は `schemas/expected-findings.v1.json`、score report は `schemas/score-report.v1.json` で検証される。
+
+```bash
+python3 tasks/score_fixture.py \
+  --expected fixtures/small/expected-findings.json \
+  --actual fixtures/small/scoring-stubs/perfect.findings.verified.json \
+  --out artifacts/score-small.json
+```
+
+実行時 artifact は `artifacts/` に保存する（gitignore 済み）。CI では `fixtures/<size>/scoring-stubs/` の固定 `findings.verified.json` を使うため、LLM や `gh api` は呼ばない。
+
+oracle 評価結果は4指標を出す:
 
 - `exact_pass_rate` — `axes` が完全一致
-- `acceptable_pass_rate` — profile + acceptable_overrides 内に収まる
+- `acceptable_pass_rate` — `expected_axes ∪ acceptable_overrides` と `acceptable_severities` 内に収まる
 - `false_positive_rate` — `expected_outcome=known_false_positive_trap` を Must Fix にしてしまった率
+- `recall_known_bug` — `expected_outcome=known_bug` が location/category matching で検出された率
 
-**M1 gate**: `acceptable_pass_rate ≥ 0.8`, `false_positive_rate ≤ 0.1`
+matching は actual の `id` ではなく `(location_match.path, category)` で行う。同一 key に複数候補がある場合は `expected_axes` との Hamming 距離が最小の actual を貪欲に選ぶ。`known_false_positive_trap` は fixture 全体にかかる罠として扱い、title keyword または path/category で該当 actual を検出する。
+matching されなかった actual のうち `severity ∈ {must_fix, should_fix}` は `score-report.v1.unmatched_actuals[]` に残し、過検知候補として後から確認できるようにする。
+
+**M1 gate**: 各 fixture の `scoring_gate` に従う。現状は `acceptable_pass_rate` と `false_positive_rate` を主ゲートにし、medium だけ `exact_pass_rate_min` も固定している。
+
+M1→M2 gate report は `tasks/m1_m2_gate.py` で生成する。運用実測値 (`payload_422_count`, Step 4.5 PASS 率など) は外部の `m1-m2-inputs.v1` として渡し、欠落項目は `unknown` として記録する。
 
 ## 関連
 
