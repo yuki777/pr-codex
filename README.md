@@ -187,6 +187,7 @@ mv ~/claude-loop-pr-codex/sent/yuki777-pr-codex-24 \
 
 - `tasks/generate_findings_sarif.py` は `findings.verified.json` から SARIF v2.1.0 `findings.sarif` を一方向生成する。`schema_version == "findings.v1"` 専用で、canonical への逆変換はしない
 - `schemas/sarif-2.1.0.json` は OASIS SARIF v2.1.0 schema を同梱したもの。`tasks/validate_findings_sarif.py` は Python `jsonschema` でこの schema に対する official schema validation を行い、さらに pr-codex cross-artifact rule（side=RIGHT、fingerprint、post_policy、Must Fix count）をオフラインで検証する
+- `--ranges pr.diff.ranges.txt` を指定した場合、SARIF location は同一 path の RIGHT-side hunk 範囲内に必ず入る必要がある。`--ranges` 未指定は range gate 無効、指定したファイルが空の場合は「コメント可能範囲なし」として非空 finding の SARIF 生成/検証を失敗させる
 - rule は category enum 8 種（`pr-codex/bug` など）を固定列挙する。`severity` は `must_fix → error` / `should_fix → warning` / `nit → note` / `note → none` に写像する
 - `security` category の `must_fix` は `properties.security_severity_label = "high"` を付ける。F7 では label のみで、security high/critical の inline 抑制ロジックは変更しない
 - `result.partialFingerprints.canonical` は canonical `finding.id` と同じ安定 fingerprint。`result.guid` は SARIF 公式 schema の GUID 制約を満たすため、この fingerprint から導出した deterministic UUIDv5 を使う

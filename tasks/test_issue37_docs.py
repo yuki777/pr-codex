@@ -38,6 +38,7 @@ class Issue37DocsTest(unittest.TestCase):
             "schemas/sarif-2.1.0.json",
             "local-only SARIF",
             "Must Fix 件数",
+            "コメント可能範囲なし",
         ):
             self.assertIn(snippet, text)
 
@@ -51,6 +52,7 @@ class Issue37DocsTest(unittest.TestCase):
             "sarif_schema_invalid",
             "validate_findings_sarif.py",
             "Code Scanning upload なし",
+            "コメント可能範囲なし",
         ):
             self.assertIn(snippet, text)
 

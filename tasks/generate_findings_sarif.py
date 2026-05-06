@@ -88,9 +88,9 @@ def deterministic_guid(fingerprint: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"https://github.com/yuki777/pr-codex/findings/{fingerprint}"))
 
 
-def parse_ranges(path: Path | None) -> dict[str, list[tuple[int, int]]]:
+def parse_ranges(path: Path | None) -> dict[str, list[tuple[int, int]]] | None:
     if path is None:
-        return {}
+        return None
     ranges: dict[str, list[tuple[int, int]]] = {}
     try:
         text = path.read_text(encoding="utf-8")
@@ -114,13 +114,13 @@ def parse_ranges(path: Path | None) -> dict[str, list[tuple[int, int]]]:
     return ranges
 
 
-def range_contains(ranges: dict[str, list[tuple[int, int]]], file_path: str, start_line: int, end_line: int) -> bool:
-    if not ranges:
+def range_contains(ranges: dict[str, list[tuple[int, int]]] | None, file_path: str, start_line: int, end_line: int) -> bool:
+    if ranges is None:
         return True
     return any(start <= start_line <= end and start <= end_line <= end for start, end in ranges.get(file_path, []))
 
 
-def finding_location(finding: dict[str, Any], path: str, ranges: dict[str, list[tuple[int, int]]]) -> dict[str, Any]:
+def finding_location(finding: dict[str, Any], path: str, ranges: dict[str, list[tuple[int, int]]] | None) -> dict[str, Any]:
     location = finding.get("location")
     if not isinstance(location, dict):
         raise SarifGenerationError(f"{path}.location: must be an object")
@@ -207,7 +207,7 @@ def result_message(finding: dict[str, Any]) -> str:
     return "\n".join(parts).strip()
 
 
-def build_result(finding: dict[str, Any], index: int, ranges: dict[str, list[tuple[int, int]]]) -> dict[str, Any] | None:
+def build_result(finding: dict[str, Any], index: int, ranges: dict[str, list[tuple[int, int]]] | None) -> dict[str, Any] | None:
     path = f"$.findings[{index}]"
     severity = finding.get("severity")
     if severity not in SEVERITY_TO_LEVEL:
@@ -288,7 +288,7 @@ def build_sarif(findings_artifact: dict[str, Any], metadata: dict[str, Any] | No
     if not isinstance(raw_findings, list):
         raise SarifGenerationError("$.findings: must be an array")
 
-    effective_ranges = ranges or {}
+    effective_ranges = ranges
     results: list[dict[str, Any]] = []
     for index, finding in enumerate(raw_findings):
         if not isinstance(finding, dict):

@@ -655,7 +655,7 @@ temp file 書き出し後、final artifact へ反映する前に以下の同梱 
 python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings.py --schema $CLAUDE_PLUGIN_ROOT/schemas/findings.v1.json --data ~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.verified.json.tmp --metadata ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json
 ```
 
-続いて、canonical tmp から local-only SARIF を生成し、OASIS SARIF schema と pr-codex cross-artifact rule（RIGHT side、diff range、post_policy、Must Fix count）で検証する。`findings.sarif` は M2 では GitHub Code Scanning へ upload せず、`findings.verified.json` と同じディレクトリに保存するだけにする。
+続いて、canonical tmp から local-only SARIF を生成し、OASIS SARIF schema と pr-codex cross-artifact rule（RIGHT side、diff range、post_policy、Must Fix count）で検証する。`findings.sarif` は M2 では GitHub Code Scanning へ upload せず、`findings.verified.json` と同じディレクトリに保存するだけにする。`--ranges pr.diff.ranges.txt` を指定した生成/検証では、空の `pr.diff.ranges.txt` は「コメント可能範囲なし」として扱い、非空 finding / SARIF result を PASS させてはならない（`--ranges` 未指定時だけ range gate 無効）。
 
 ```bash
 python3 $CLAUDE_PLUGIN_ROOT/tasks/generate_findings_sarif.py --findings ~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.verified.json.tmp --metadata ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json --ranges ~/claude-loop-pr-codex/$org-$repository-$pr_number/pr.diff.ranges.txt --output ~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.sarif.tmp

@@ -188,6 +188,35 @@ class FindingsSarifTest(unittest.TestCase):
             )
         self.assert_cli_invalid(completed, "outside pr.diff.ranges.txt")
 
+    def test_generator_fails_when_ranges_file_is_provided_but_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            findings_path = tmp_path / "findings.verified.json"
+            metadata_path = tmp_path / "metadata.json"
+            ranges_path = tmp_path / "pr.diff.ranges.txt"
+            output_path = tmp_path / "findings.sarif"
+            findings_path.write_text(json.dumps(canonical_artifact(), ensure_ascii=True), encoding="utf-8")
+            metadata_path.write_text(json.dumps(metadata(), ensure_ascii=True), encoding="utf-8")
+            ranges_path.write_text("", encoding="utf-8")
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(GENERATOR_PATH),
+                    "--findings",
+                    str(findings_path),
+                    "--metadata",
+                    str(metadata_path),
+                    "--ranges",
+                    str(ranges_path),
+                    "--output",
+                    str(output_path),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assert_cli_invalid(completed, "outside pr.diff.ranges.txt")
+
     def test_post_policy_suppress_does_not_leak_to_sarif(self) -> None:
         suppressed = make_finding(
             severity="should_fix",
@@ -331,6 +360,36 @@ class FindingsSarifTest(unittest.TestCase):
             )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(json.loads(completed.stdout)["payload_must_fix"], 1)
+
+    def test_validator_fails_when_ranges_file_is_provided_but_empty(self) -> None:
+        artifact = canonical_artifact()
+        sarif = build_sarif(artifact, metadata=metadata(), ranges=None)
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            sarif_path = tmp_path / "findings.sarif"
+            findings_path = tmp_path / "findings.verified.json"
+            ranges_path = tmp_path / "pr.diff.ranges.txt"
+            sarif_path.write_text(json.dumps(sarif), encoding="utf-8")
+            findings_path.write_text(json.dumps(artifact), encoding="utf-8")
+            ranges_path.write_text("", encoding="utf-8")
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(VALIDATOR_PATH),
+                    "--schema",
+                    str(SCHEMA_PATH),
+                    "--data",
+                    str(sarif_path),
+                    "--findings",
+                    str(findings_path),
+                    "--ranges",
+                    str(ranges_path),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assert_cli_invalid(completed, "outside pr.diff.ranges.txt")
 
     def test_validator_reports_must_fix_count_mismatch(self) -> None:
         artifact = canonical_artifact()
