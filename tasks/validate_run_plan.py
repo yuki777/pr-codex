@@ -603,7 +603,8 @@ def validate_depth_argument_docs() -> None:
         "/pr-codex:review --deep",
         "/pr-codex:review --standard",
         "`depth_source=auto`",
-        "`depth_downgraded=true`, `depth_downgrade_reason`",
+        "`depth_source=argument`, `depth_requested=deep`, `depth_downgraded=true`, `depth_downgrade_reason`",
+        "`depth_source=default`, `depth_downgraded=false`, `depth_reason` に大規模ガード理由を記録",
         "`recommended_mode` (`standard` / `focused` / `skip`) は depth とは直交する別軸",
         "GitHub への自動投稿範囲は depth では拡大しない",
     ]
@@ -621,6 +622,7 @@ def validate_review_preflight_supplement_docs() -> None:
         'depth_actual != "standard"',
         'depth_source != "default"',
         "depth_downgraded == true",
+        "`changed lines > 5000`",
         'files_changed',
         'lines_added',
         'lines_removed',

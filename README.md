@@ -75,11 +75,12 @@ cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
 
 | 入力 / signal | selected depth | artifact |
 | --- | --- | --- |
-| `/pr-codex:review --deep` | `deep` | `depth_source=argument`, `depth_requested=deep` |
+| `/pr-codex:review --deep` かつ `lines_added + lines_removed <= 5000` | `deep` | `depth_source=argument`, `depth_requested=deep`, `depth_downgraded=false` |
+| `/pr-codex:review --deep` かつ `lines_added + lines_removed > 5000` | `standard` 強制 | `depth_source=argument`, `depth_requested=deep`, `depth_downgraded=true`, `depth_downgrade_reason` |
 | `/pr-codex:review --standard` | `standard` | `depth_source=argument`, `depth_requested=standard` |
 | 引数なし、`risk_tags` に `security` または `data_migration` を含み、`files_changed <= 20` かつ `lines_added + lines_removed <= 1500` | `deep` | `depth_source=auto` |
 | 引数なしで上記以外 | `standard` | `depth_source=default` |
-| `lines_added + lines_removed > 5000` | `standard` 強制。`--deep` 指定時も override しない | `depth_downgraded=true`, `depth_downgrade_reason` |
+| 引数なし、かつ `lines_added + lines_removed > 5000` | `standard` | `depth_source=default`, `depth_downgraded=false`, `depth_reason` に大規模ガード理由を記録 |
 
 `run-plan.json` には `depth_actual` / `depth_source` / `depth_reason` / `depth_requested` / `depth_downgraded` / `depth_downgrade_reason` を保存するため、standard/deep の選択は deterministic に追跡できる。
 
