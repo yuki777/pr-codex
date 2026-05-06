@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import re
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -357,17 +358,158 @@ def filter_postable_findings(findings: list[dict[str, Any]], artifact: dict[str,
     return postable
 
 
-def validate_review_rounds_artifact(data: dict[str, Any]) -> list[str]:
+
+JSON_TYPE_NAMES = {"object", "array", "integer", "number", "string", "boolean", "null"}
+
+
+def _json_type_matches(expected: str, value: Any) -> bool:
+    if expected == "object":
+        return isinstance(value, dict)
+    if expected == "array":
+        return isinstance(value, list)
+    if expected == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if expected == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if expected == "string":
+        return isinstance(value, str)
+    if expected == "boolean":
+        return isinstance(value, bool)
+    if expected == "null":
+        return value is None
+    raise ValueError(f"unsupported JSON schema type: {expected}")
+
+
+def _resolve_schema_ref(root_schema: dict[str, Any], ref: str) -> dict[str, Any]:
+    if not ref.startswith("#/"):
+        raise ValueError(f"unsupported schema ref: {ref}")
+    current: Any = root_schema
+    for raw_part in ref[2:].split("/"):
+        part = raw_part.replace("~1", "/").replace("~0", "~")
+        if not isinstance(current, dict) or part not in current:
+            raise ValueError(f"unresolvable schema ref: {ref}")
+        current = current[part]
+    if not isinstance(current, dict):
+        raise ValueError(f"schema ref does not point to an object: {ref}")
+    return current
+
+
+def _is_rfc3339_datetime(value: Any) -> bool:
+    if not isinstance(value, str) or not value:
+        return False
+    candidate = value[:-1] + "+00:00" if value.endswith("Z") else value
+    try:
+        parsed = datetime.fromisoformat(candidate)
+    except ValueError:
+        return False
+    return parsed.tzinfo is not None
+
+
+def validate_json_schema_subset(
+    value: Any,
+    schema: dict[str, Any],
+    *,
+    root_schema: dict[str, Any] | None = None,
+    path: str = "$",
+) -> list[str]:
+    """Validate the Draft 2020-12 subset used by review-rounds.v1.
+
+    This is intentionally small and stdlib-only, but it covers the declared
+    runtime contract: $ref, type, const, enum, required, properties,
+    additionalProperties=false, items, minItems, minLength, minimum, pattern,
+    and date-time format.  It prevents the bundled runtime gate from drifting
+    from schemas/review-rounds.v1.json.
+    """
+
     errors: list[str] = []
+    root = root_schema or schema
+
+    if "$ref" in schema:
+        try:
+            resolved = _resolve_schema_ref(root, str(schema["$ref"]))
+        except ValueError as exc:
+            return [f"{path}: {exc}"]
+        errors.extend(validate_json_schema_subset(value, resolved, root_schema=root, path=path))
+        schema = {key: item for key, item in schema.items() if key != "$ref"}
+        if not schema:
+            return errors
+
+    if "const" in schema and value != schema["const"]:
+        errors.append(f"{path}: expected const {schema['const']!r}")
+
+    if "enum" in schema and value not in schema["enum"]:
+        errors.append(f"{path}: expected one of {schema['enum']!r}")
+
+    expected_type = schema.get("type")
+    if expected_type is not None:
+        types = expected_type if isinstance(expected_type, list) else [expected_type]
+        if not all(isinstance(item, str) and item in JSON_TYPE_NAMES for item in types):
+            errors.append(f"{path}: unsupported schema type declaration {expected_type!r}")
+        elif not any(_json_type_matches(item, value) for item in types):
+            errors.append(f"{path}: expected type {expected_type!r}, got {type(value).__name__}")
+            return errors
+
+    if value is None:
+        return errors
+
+    if isinstance(value, str):
+        if "minLength" in schema and len(value) < int(schema["minLength"]):
+            errors.append(f"{path}: expected length >= {schema['minLength']}")
+        if "pattern" in schema:
+            try:
+                if re.search(str(schema["pattern"]), value) is None:
+                    errors.append(f"{path}: does not match pattern {schema['pattern']!r}")
+            except re.error as exc:
+                errors.append(f"{path}: invalid schema pattern: {exc}")
+        if schema.get("format") == "date-time" and not _is_rfc3339_datetime(value):
+            errors.append(f"{path}: must be RFC3339 date-time")
+
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and "minimum" in schema:
+        if value < schema["minimum"]:
+            errors.append(f"{path}: expected >= {schema['minimum']}")
+
+    if isinstance(value, list):
+        if "minItems" in schema and len(value) < int(schema["minItems"]):
+            errors.append(f"{path}: expected at least {schema['minItems']} items")
+        item_schema = schema.get("items")
+        if isinstance(item_schema, dict):
+            for index, item in enumerate(value):
+                errors.extend(validate_json_schema_subset(item, item_schema, root_schema=root, path=f"{path}[{index}]"))
+        return errors
+
+    if isinstance(value, dict):
+        properties = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
+        required = schema.get("required") if isinstance(schema.get("required"), list) else []
+        missing = [key for key in required if isinstance(key, str) and key not in value]
+        if missing:
+            errors.append(f"{path}: missing required properties: {', '.join(missing)}")
+        if schema.get("additionalProperties") is False:
+            extra = sorted(set(value) - set(properties))
+            if extra:
+                errors.append(f"{path}: unexpected properties: {', '.join(extra)}")
+        for key, child_schema in properties.items():
+            if key in value and isinstance(child_schema, dict):
+                errors.extend(validate_json_schema_subset(value[key], child_schema, root_schema=root, path=f"{path}.{key}"))
+
+    return errors
+
+
+def validate_review_rounds_artifact(data: dict[str, Any], schema: dict[str, Any] | None = None) -> list[str]:
+    errors: list[str] = []
+    if schema is not None:
+        errors.extend(validate_json_schema_subset(data, schema))
     if not isinstance(data, dict):
-        return ["artifact must be an object"]
+        return errors + ["artifact must be an object"]
     if data.get("schema_version") != SCHEMA_VERSION:
         errors.append(f"$.schema_version: must be {SCHEMA_VERSION}")
     policy_raw = data.get("policy")
     if not isinstance(policy_raw, dict):
         errors.append("$.policy: must be an object")
     else:
-        errors.extend(HaltingPolicy.from_mapping(policy_raw).validate())
+        try:
+            errors.extend(HaltingPolicy.from_mapping(policy_raw).validate())
+        except (TypeError, ValueError) as exc:
+            errors.append(f"$.policy: invalid halting policy: {exc}")
     rounds = data.get("rounds")
     if not isinstance(rounds, list):
         errors.append("$.rounds: must be an array")
@@ -393,7 +535,11 @@ def validate_review_rounds_artifact(data: dict[str, Any]) -> list[str]:
         if extra_round_keys:
             errors.append(f"{path}: unexpected properties: {', '.join(extra_round_keys)}")
         actions = round_result.get("actions")
-        if not isinstance(actions, list) or not actions or any(action not in {"refine", "challenge", "verify"} for action in actions):
+        if (
+            not isinstance(actions, list)
+            or not actions
+            or any(action not in {"refine", "challenge", "verify"} for action in actions)
+        ):
             errors.append(f"{path}.actions: must contain refine/challenge/verify values")
         for key in (
             "round_index",

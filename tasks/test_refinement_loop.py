@@ -33,6 +33,53 @@ def policy() -> HaltingPolicy:
 
 
 class RefinementLoopTest(unittest.TestCase):
+    def assert_review_rounds_cli_invalid(self, artifact: dict[str, object], expected_fragment: str) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "review-rounds.json"
+            path.write_text(json.dumps(artifact, ensure_ascii=True), encoding="utf-8")
+            result = subprocess.run(
+                [sys.executable, str(VALIDATOR_PATH), "--schema", str(ROUND_SCHEMA), "--data", str(path)],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("INVALID review rounds artifact", result.stderr)
+        self.assertIn(expected_fragment, result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
+    def valid_review_rounds_artifact(self) -> dict[str, object]:
+        return build_review_rounds_artifact(
+            policy=policy(),
+            rounds=[
+                {
+                    "input_candidates_count": 2,
+                    "output_candidates_count": 1,
+                    "new_evidence_count": 1,
+                    "verifier_pass_count": 1,
+                    "verifier_fail_count": 1,
+                    "rejected_candidates": [
+                        {
+                            "finding_id": "abc",
+                            "title": "Suppressed false positive",
+                            "reason": "verifier_fail",
+                            "detail": "diff evidence contradicted the candidate",
+                        }
+                    ],
+                }
+            ],
+            elapsed_ms=100,
+            active_candidates_count=1,
+            generated_at="2026-05-06T00:00:00Z",
+            pr={
+                "repository": "yuki777/pr-codex",
+                "number": 41,
+                "base_sha": "a" * 40,
+                "head_sha": "b" * 40,
+                "merge_commit_sha": None,
+            },
+        )
+
     def test_max_rounds_and_time_budget_are_hard_stops(self) -> None:
         rounds = [{"new_evidence_count": 1}, {"new_evidence_count": 1}, {"new_evidence_count": 1}]
         by_rounds = evaluate_halting(policy(), rounds, elapsed_ms=999, active_candidates_count=1)
@@ -102,36 +149,7 @@ class RefinementLoopTest(unittest.TestCase):
         self.assertEqual([item["id"] for item in filter_postable_findings(findings, artifact)], ["passing-id"])
 
     def test_review_rounds_artifact_validates_with_cli(self) -> None:
-        artifact = build_review_rounds_artifact(
-            policy=policy(),
-            rounds=[
-                {
-                    "input_candidates_count": 2,
-                    "output_candidates_count": 1,
-                    "new_evidence_count": 1,
-                    "verifier_pass_count": 1,
-                    "verifier_fail_count": 1,
-                    "rejected_candidates": [
-                        {
-                            "finding_id": "abc",
-                            "title": "Suppressed false positive",
-                            "reason": "verifier_fail",
-                            "detail": "diff evidence contradicted the candidate",
-                        }
-                    ],
-                }
-            ],
-            elapsed_ms=100,
-            active_candidates_count=1,
-            generated_at="2026-05-06T00:00:00Z",
-            pr={
-                "repository": "yuki777/pr-codex",
-                "number": 41,
-                "base_sha": "a" * 40,
-                "head_sha": "b" * 40,
-                "merge_commit_sha": None,
-            },
-        )
+        artifact = self.valid_review_rounds_artifact()
         self.assertEqual(validate_review_rounds_artifact(artifact), [])
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "review-rounds.json"
@@ -143,6 +161,52 @@ class RefinementLoopTest(unittest.TestCase):
                 text=True,
             )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_review_rounds_cli_enforces_declared_schema_required_fields(self) -> None:
+        cases = {
+            "missing-generated-at": (
+                lambda artifact: artifact.pop("generated_at"),
+                "missing required properties: generated_at",
+            ),
+            "missing-halting-detail": (
+                lambda artifact: artifact["halting"].pop("detail"),
+                "missing required properties: detail",
+            ),
+            "missing-halting-timing": (
+                lambda artifact: artifact["halting"].pop("elapsed_ms"),
+                "missing required properties: elapsed_ms",
+            ),
+            "incomplete-metrics": (
+                lambda artifact: artifact.update(metrics={"total_rounds": 1}),
+                "missing required properties: posted_candidate_count",
+            ),
+        }
+        for name, (mutate, expected_fragment) in cases.items():
+            with self.subTest(name=name):
+                artifact = self.valid_review_rounds_artifact()
+                mutate(artifact)
+                self.assert_review_rounds_cli_invalid(artifact, expected_fragment)
+
+    def test_review_rounds_cli_enforces_schema_types_arrays_and_metric_types(self) -> None:
+        cases = {
+            "rounds-not-array": (
+                lambda artifact: artifact.update(rounds={}),
+                "$.rounds: expected type 'array'",
+            ),
+            "actions-empty": (
+                lambda artifact: artifact["rounds"][0].update(actions=[]),
+                "$.rounds[0].actions: expected at least 1 items",
+            ),
+            "metrics-bool-integer": (
+                lambda artifact: artifact["metrics"].update(verifier_fail_candidates=True),
+                "$.metrics.verifier_fail_candidates: expected type 'integer'",
+            ),
+        }
+        for name, (mutate, expected_fragment) in cases.items():
+            with self.subTest(name=name):
+                artifact = self.valid_review_rounds_artifact()
+                mutate(artifact)
+                self.assert_review_rounds_cli_invalid(artifact, expected_fragment)
 
     def test_review_rounds_validator_rejects_sensitive_rejected_candidate_fields(self) -> None:
         artifact = build_review_rounds_artifact(

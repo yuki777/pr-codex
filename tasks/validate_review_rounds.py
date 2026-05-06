@@ -21,17 +21,18 @@ def load_json(path: Path) -> Any:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Validate a review-rounds.v1 artifact")
-    parser.add_argument("--schema", type=Path, help="accepted for workflow symmetry; semantic checks are stdlib-only")
+    parser.add_argument("--schema", type=Path, help="JSON schema to enforce before semantic checks")
     parser.add_argument("--data", type=Path, required=True)
     args = parser.parse_args(argv)
 
     try:
         data = load_json(args.data)
+        schema = load_json(args.schema) if args.schema is not None else None
     except ValueError as exc:
         print(f"INVALID review rounds artifact: {exc}", file=sys.stderr)
         return 1
 
-    errors = validate_review_rounds_artifact(data)
+    errors = validate_review_rounds_artifact(data, schema)
     if errors:
         print("INVALID review rounds artifact", file=sys.stderr)
         for error in errors:
