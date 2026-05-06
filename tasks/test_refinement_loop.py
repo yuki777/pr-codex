@@ -180,6 +180,10 @@ class RefinementLoopTest(unittest.TestCase):
                 lambda artifact: artifact.update(metrics={"total_rounds": 1}),
                 "missing required properties: posted_candidate_count",
             ),
+            "identifierless-rejected-candidate": (
+                lambda artifact: artifact["rounds"][0]["rejected_candidates"][0].pop("finding_id"),
+                "missing required properties: finding_id",
+            ),
         }
         for name, (mutate, expected_fragment) in cases.items():
             with self.subTest(name=name):
@@ -207,6 +211,70 @@ class RefinementLoopTest(unittest.TestCase):
                 artifact = self.valid_review_rounds_artifact()
                 mutate(artifact)
                 self.assert_review_rounds_cli_invalid(artifact, expected_fragment)
+
+    def test_structured_contradiction_fallback_signature_is_schema_safe(self) -> None:
+        artifact = build_review_rounds_artifact(
+            policy=policy(),
+            rounds=[
+                {
+                    "output_candidates_count": 0,
+                    "new_evidence_count": 1,
+                    "contradiction_signatures": [{"path": "src/app.ts", "title": "Some issue"}],
+                }
+            ],
+            elapsed_ms=100,
+            active_candidates_count=0,
+            generated_at="2026-05-06T00:00:00Z",
+        )
+        signature = artifact["rounds"][0]["contradiction_signatures"][0]
+        self.assertEqual(signature, "src/app.ts :: some issue")
+        self.assertNotIn("\x1f", signature)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "review-rounds.json"
+            path.write_text(json.dumps(artifact, ensure_ascii=True), encoding="utf-8")
+            result = subprocess.run(
+                [sys.executable, str(VALIDATOR_PATH), "--schema", str(ROUND_SCHEMA), "--data", str(path)],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_review_rounds_validator_recomputes_derived_metrics(self) -> None:
+        artifact = build_review_rounds_artifact(
+            policy=policy(),
+            rounds=[
+                {
+                    "output_candidates_count": 2,
+                    "new_evidence_count": 0,
+                    "verifier_fail_count": 2,
+                    "insufficient_evidence_count": 1,
+                    "contradiction_signatures": ["same"],
+                },
+                {
+                    "output_candidates_count": 1,
+                    "new_evidence_count": 0,
+                    "contradiction_signatures": ["same"],
+                },
+            ],
+            elapsed_ms=100,
+            active_candidates_count=1,
+            generated_at="2026-05-06T00:00:00Z",
+        )
+        artifact["metrics"].update(
+            verifier_fail_candidates=0,
+            suppressed_candidate_count=0,
+            no_new_evidence_rounds=0,
+            repeated_contradiction_events=0,
+            insufficient_evidence_events=0,
+            oscillation_detected=False,
+        )
+        self.assert_review_rounds_cli_invalid(artifact, "$.metrics.verifier_fail_candidates: expected 2 from rounds")
+
+    def test_review_rounds_validator_recomputes_posted_candidate_count(self) -> None:
+        artifact = self.valid_review_rounds_artifact()
+        artifact["metrics"]["posted_candidate_count"] = 0
+        self.assert_review_rounds_cli_invalid(artifact, "$.metrics.posted_candidate_count: expected 1 from rounds")
 
     def test_review_rounds_validator_rejects_sensitive_rejected_candidate_fields(self) -> None:
         artifact = build_review_rounds_artifact(

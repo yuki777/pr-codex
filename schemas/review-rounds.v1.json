@@ -111,10 +111,10 @@
     "rejected_candidate": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["local_only", "title", "reason"],
+      "required": ["local_only", "finding_id", "title", "reason"],
       "properties": {
         "local_only": {"const": true},
-        "finding_id": {"type": "string"},
+        "finding_id": {"$ref": "#/$defs/non_empty_string"},
         "fingerprint": {"type": "string"},
         "title": {"$ref": "#/$defs/non_empty_string"},
         "path": {"$ref": "#/$defs/non_empty_string"},

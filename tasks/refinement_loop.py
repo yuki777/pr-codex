@@ -157,7 +157,7 @@ def _normalise_signature(value: Any) -> str:
                 return raw.strip().lower()
         path = str(value.get("path", "")).strip().lower()
         title = " ".join(str(value.get("title", "")).casefold().split())
-        return f"{path}\x1f{title}" if path or title else ""
+        return f"{path} :: {title}" if path or title else ""
     return " ".join(str(value).casefold().split())
 
 
@@ -243,6 +243,8 @@ def sanitize_local_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
         if isinstance(value, str):
             value = " ".join(value.split())[:500]
         sanitized[key] = value
+    if "finding_id" not in sanitized and isinstance(sanitized.get("fingerprint"), str) and sanitized["fingerprint"]:
+        sanitized["finding_id"] = sanitized["fingerprint"]
     reason = sanitized.get("reason")
     if reason not in REJECTED_REASONS:
         sanitized["reason"] = "verifier_fail"
@@ -564,6 +566,8 @@ def validate_review_rounds_artifact(data: dict[str, Any], schema: dict[str, Any]
                 errors.append(f"{cpath}: unexpected properties: {', '.join(extra_candidate_keys)}")
             if candidate.get("local_only") is not True:
                 errors.append(f"{cpath}.local_only: must be true")
+            if not isinstance(candidate.get("finding_id"), str) or not candidate.get("finding_id"):
+                errors.append(f"{cpath}.finding_id: stable identifier is required")
             if not isinstance(candidate.get("title"), str) or not candidate.get("title"):
                 errors.append(f"{cpath}.title: must be non-empty")
             if candidate.get("reason") not in REJECTED_REASONS:
@@ -583,8 +587,16 @@ def validate_review_rounds_artifact(data: dict[str, Any], schema: dict[str, Any]
     metrics = data.get("metrics")
     if not isinstance(metrics, dict):
         errors.append("$.metrics: must be an object")
-    elif metrics.get("total_rounds") != len(rounds):
-        errors.append("$.metrics.total_rounds: must equal len(rounds)")
+    else:
+        if metrics.get("total_rounds") != len(rounds):
+            errors.append("$.metrics.total_rounds: must equal len(rounds)")
+        expected_posted = 0
+        if rounds and isinstance(rounds[-1], dict):
+            expected_posted = max(0, _as_int(rounds[-1].get("output_candidates_count")))
+        expected_metrics = round_metrics(rounds, active_candidates_count=expected_posted)
+        for key, expected_value in expected_metrics.items():
+            if metrics.get(key) != expected_value:
+                errors.append(f"$.metrics.{key}: expected {expected_value!r} from rounds, got {metrics.get(key)!r}")
     return errors
 
 
