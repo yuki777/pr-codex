@@ -142,23 +142,38 @@ jq -r '.started_at' ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.js
 
 全候補がスキップなら何もせず終了。
 
-### Step 2b: 選定PRの `head_sha` / `branch` / `base_branch` / `files` を取得
+### Step 2b: 選定PRの `repository_full_name` / `head_sha` / `base_sha` / `branch` / `base_branch` / `merge_commit_sha` / `files` を取得
 
-Step 2 で対象PRを1件選定した直後、未レビュー / failed / stale / completed のどの経路でもまず `head_sha` / `branch` / `base_branch` を取得する。`state == "completed"` の場合はこの時点で保存済み `head_sha` と比較し、同一ならスキップして PR 変更ファイル一覧は取得しない。未レビュー / failed / stale、または completed だが `head_sha` が変わっている場合だけ、完全な `files[]` を取得して Step 3 へ進む。Step 3 の clone と `metadata.json` / `run-plan.json` 作成・Step 4 の PR 差分スコープ制御は `$head_sha` / `$branch` / `$base_branch` / `$files_json` に依存するため、選定後に欠落すると後続が破綻する。
+Step 2 で対象PRを1件選定した直後、未レビュー / failed / stale / completed のどの経路でもまず `repository_full_name` / `head_sha` / `base_sha` / `branch` / `base_branch` / `merge_commit_sha` を取得する。`repository_full_name` は fork head repo ではなく、GitHub review の投稿先と同じ **base repo** (`.base.repo.full_name`) とする。`state == "completed"` の場合はこの時点で保存済み `head_sha` と比較し、同一ならスキップして PR 変更ファイル一覧は取得しない。未レビュー / failed / stale、または completed だが `head_sha` が変わっている場合だけ、完全な `files[]` を REST API paginate で取得して Step 3 へ進む。Step 3 の clone と `metadata.json` / `run-plan.json` 作成・Step 4 の PR 差分スコープ制御・Step 4c の canonical findings 生成は `$repository_full_name` / `$head_sha` / `$base_sha` / `$branch` / `$base_branch` / `$merge_commit_sha` / `$files_json` に依存するため、選定後に欠落すると後続が破綻する。
 
-まず `head_sha` / `branch` / `base_branch` を取得する。
+まず `repository_full_name` / `head_sha` / `base_sha` / `branch` / `base_branch` / `merge_commit_sha` を取得する。
 
 - いつ使うか: Step 2 で対象PRを1件選定した直後に必ず実行する
-- 判定条件: 標準出力に `{"head_sha":"...","branch":"...","base_branch":"..."}` の JSON が出力される（いずれかが欠落した場合は `jq` が非ゼロ終了し、stderr に `missing <field>` が出る）
-- 次アクション: 出力 JSON の `.head_sha` を `$head_sha`、`.branch` を `$branch`、`.base_branch` を `$base_branch` に保持する。`state == "completed"` の場合は、続く保存済み `head_sha` 比較テンプレートを先に実行する。一致したらこの候補をスキップし、異なる場合だけ **別テンプレートで完全な `files[]` を取得**して Step 3 へ進む。`state != "completed"` の場合はそのまま完全な `files[]` を取得する
+- 判定条件: 標準出力に `{"repository_full_name":"...","head_sha":"...","base_sha":"...","branch":"...","base_branch":"...","merge_commit_sha":"..."}` の JSON が出力される（required field のいずれかが欠落した場合は `gh api --jq` が非ゼロ終了し、stderr に `missing <field>` が出る。`merge_commit_sha` は open PR では空文字列でよい）
+- 次アクション: 出力 JSON の `.repository_full_name` を `$repository_full_name`、`.head_sha` を `$head_sha`、`.base_sha` を `$base_sha`、`.branch` を `$branch`、`.base_branch` を `$base_branch`、`.merge_commit_sha` を `$merge_commit_sha` に保持する。`state == "completed"` の場合は、続く保存済み `head_sha` 比較テンプレートを先に実行する。一致したらこの候補をスキップし、異なる場合だけ **別テンプレートで完全な `files[]` を取得**して Step 3 へ進む。`state != "completed"` の場合はそのまま完全な `files[]` を取得する
 
 ```bash
-gh pr view $pr_number --repo $org/$repository --json headRefOid,headRefName,baseRefName | jq -ce 'if ((.headRefOid // "") == "") then error("missing headRefOid") elif ((.headRefName // "") == "") then error("missing headRefName") elif ((.baseRefName // "") == "") then error("missing baseRefName") else {head_sha:.headRefOid,branch:.headRefName,base_branch:.baseRefName} end'
+gh api repos/$org/$repository/pulls/$pr_number --jq '
+  {
+    repository_full_name: .base.repo.full_name,
+    head_sha: .head.sha,
+    base_sha: .base.sha,
+    branch: .head.ref,
+    base_branch: .base.ref,
+    merge_commit_sha: (.merge_commit_sha // "")
+  }
+  | if ((.repository_full_name // "") == "") then error("missing repository_full_name")
+    elif ((.head_sha // "") == "") then error("missing head_sha")
+    elif ((.base_sha // "") == "") then error("missing base_sha")
+    elif ((.branch // "") == "") then error("missing branch")
+    elif ((.base_branch // "") == "") then error("missing base_branch")
+    else . end
+'
 ```
 
 #### `state == "completed"` の場合の保存済み `head_sha` 比較
 
-- いつ使うか: Step 2 で `state == "completed"` と判定し、上の `jq -ce` で現在の `$head_sha` を取得した直後に実行する
+- いつ使うか: Step 2 で `state == "completed"` と判定し、上の `gh api --jq` で現在の `$head_sha` を取得した直後に実行する
 - 判定条件: 保存済み `head_sha` を取得できる
 - 次アクション: 保存済みと現在 (`$head_sha`) が異なれば追加コミットありとしてこの候補を選定し、PR 変更ファイル一覧の取得へ進む。一致するなら PR 変更ファイル一覧は取得せず、この候補はスキップして Step 2 で次の候補に戻る
 
@@ -182,14 +197,17 @@ set -o pipefail && gh api repos/$org/$repository/pulls/$pr_number/files --pagina
 
 #### 変数の保持例
 
-1つ目の `jq -ce` の出力が `{"head_sha":"deadbeef01","branch":"feat/dark-mode","base_branch":"main"}`、2つ目の `jq -sce` の出力が `["src/theme.ts","src/App.tsx"]` の場合、以下のように Bash 変数へ保持する:
+1つ目の `gh api --jq` の出力が `{"repository_full_name":"octo/example","head_sha":"deadbeef01","base_sha":"cafebabe02","branch":"feat/dark-mode","base_branch":"main","merge_commit_sha":""}`、2つ目の `jq -sce` の出力が `["src/theme.ts","src/App.tsx"]` の場合、以下のように Bash 変数へ保持する:
 
+- `$repository_full_name = octo/example`（base repo の owner/repo 形式の文字列。fork PR でも投稿先 repo と一致させる）
 - `$head_sha = deadbeef01`（文字列そのまま）
+- `$base_sha = cafebabe02`（文字列そのまま）
 - `$branch = feat/dark-mode`（文字列そのまま）
 - `$base_branch = main`（文字列そのまま）
+- `$merge_commit_sha = ""`（open PR では空文字列。merge commit が取得できる場合はその SHA）
 - `$files_json = ["src/theme.ts","src/App.tsx"]`（**JSON 配列そのままの文字列**。Step 3 の metadata.json 生成で `jq --argjson files "$files_json"` に渡す）
 
-`$files_json` は 2つ目のテンプレートの標準出力そのままを JSON 配列文字列として保持したもの。抽出は Claude 側で 2 回の出力を読み取って変数へ分解する（シェル側で追加の `jq` パイプは挟まない。1 テンプレート = 1 シェル実行単位の原則に従う）。
+`$files_json` は 2つ目のテンプレートの標準出力そのままを JSON 配列文字列として保持したもの。`$repository_full_name` は canonical findings の `pr.repository` にそのまま使うが、必ず `.base.repo.full_name` 由来の投稿先 repo とし、`.head.repo.full_name` 由来の fork repo を入れてはならない。`$base_sha` は `pr.base_sha` と `metadata.json.base_sha` の両方に使う。`$merge_commit_sha` は empty string の場合に限り metadata では `null` に正規化してよい。抽出は Claude 側で 2 回の出力を読み取って変数へ分解する（シェル側で追加の `jq` パイプは挟まない。1 テンプレート = 1 シェル実行単位の原則に従う）。
 
 ### Step 3: 作業ディレクトリの準備
 
@@ -318,7 +336,7 @@ awk '
 - `pr.diff` は両ツール共通の「PR 差分の確定情報源」として Step 4 で参照される
 - `pr.diff.ranges.txt` は `pr.diff` から抽出した「コメント可能行範囲」の確定情報源として Step 4 で参照される
 
-以下の `status.json` / `metadata.json` / `run-plan.json` は Bash で作成する（`jq -n --arg` / `--argjson` / `--slurpfile` / `--rawfile` の出力を `>` でリダイレクト）。統合レビュー `review.md` のみ Step 4c で `Write` ツールを使う。
+以下の `status.json` / `metadata.json` / `run-plan.json` は Bash で作成する（`jq -n --arg` / `--argjson` / `--slurpfile` / `--rawfile` の出力を `>` でリダイレクト）。`findings.verified.json` / `validation-report.json` / `review.md` は Step 4c で `Write` ツールを使い、runtime gate 通過後に final path へ反映する。
 
 まず現在時刻を取得する（出力を `$started_at` として保持する）。
 
@@ -339,7 +357,7 @@ jq -n --arg started_at "$started_at" --arg head_sha "$head_sha" '{state:"running
 - 次アクション: `run-plan.json` 作成へ進む
 
 ```bash
-jq -n --arg org "$org" --arg repository "$repository" --arg pr_number "$pr_number" --arg pr_url "$pr_url" --arg head_sha "$head_sha" --arg branch "$branch" --arg base_branch "$base_branch" --arg title "$title" --argjson files "$files_json" '{org:$org,repository:$repository,pr_number:$pr_number,pr_url:$pr_url,head_sha:$head_sha,branch:$branch,base_branch:$base_branch,title:$title,files:$files}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json
+jq -n --arg org "$org" --arg repository "$repository" --arg repository_full_name "$repository_full_name" --argjson pr_number "$pr_number" --arg pr_url "$pr_url" --arg head_sha "$head_sha" --arg base_sha "$base_sha" --arg branch "$branch" --arg base_branch "$base_branch" --arg merge_commit_sha "$merge_commit_sha" --arg title "$title" --argjson files "$files_json" '{org:$org,repository:$repository,repository_full_name:$repository_full_name,pr_number:$pr_number,pr_url:$pr_url,head_sha:$head_sha,base_sha:$base_sha,branch:$branch,base_branch:$base_branch,merge_commit_sha:(if $merge_commit_sha == "" then null else $merge_commit_sha end),title:$title,files:$files}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json
 ```
 
 - いつ使うか: `metadata.json` 作成直後に必ず実行する
@@ -433,6 +451,8 @@ Step 4a / 4b 共通のレビュー観点本文（MCP追加情報収集 / 7観点
 - `depth_actual == "standard"` の場合: 変更行周辺と直接の呼び出し元 / 呼び出し先を優先し、広域探索より 20 分以内完了を優先する
 - `risk_tags` に `security` または `data_migration` が含まれる場合: そのタグに対応するファイル群を最優先で確認する
 - `{REVIEW_CRITERIA}` / `{RUN_PLAN_GUIDANCE}` を bash double-quote 内へ差し込む前に、両方とも `\` → `\\`、`"` → `\"`、`$` → `\$`、`` ` `` → `\`` の順でエスケープする
+
+さらに canonical findings の `producer.version` を埋めるため、同じ `$CLAUDE_PLUGIN_ROOT` を基準に `$CLAUDE_PLUGIN_ROOT/.claude-plugin/plugin.json` を Read ツールで取得し、`.version` を `$plugin_version` として保持する。`findings.verified.json` の `producer.version` は空文字列不可のため、取得に失敗した場合は Step 5 の **failed 更新** へ遷移する。`schemas/findings.v1.json` も同じ基準で Read し、Step 4c の schema validation に使う。
 
 パス解決: Read ツールの `file_path` には `REVIEW_CRITERIA.md` の絶対パスを渡す。プラグイン環境では `$CLAUDE_PLUGIN_ROOT/skills/review/REVIEW_CRITERIA.md` に配置される。`$CLAUDE_PLUGIN_ROOT` が未設定・不明な場合は以下の Bash で値を取得してから絶対パスを組み立てる。
 
@@ -566,25 +586,73 @@ MCP について:
 
 両方のレビューが完了したら、メインコンテキスト（自分自身）が以下を行う:
 
-1. `claude-review.md` / `codex-review.md` / `pr.diff.ranges.txt` / `run-plan.json` を読む
-2. **スコープ検証 (必須)**: どちらか一方でも本文が `PR_DIFF_UNAVAILABLE` のみなら、統合レビューは作成せず Step 5 の **failed 更新** へ遷移する（review.md は生成しない）。
-3. **破棄ルール (必須)**: `metadata.json.files[]` に含まれないパスへの指摘は原則破棄する。ファイルパスが `.md` の見出しやコードブロックで言及されていたら、そのパスが `files[]` 配列に属するかを必ず照合する。有益な一般的指摘で残す価値があるものだけ、`## 補足` セクションの末尾に「参考（範囲外）」として記載する。`## 重大な問題 (Must Fix)` / `## 改善提案 (Should Fix)` には絶対に採用しない。
-4. **コメント可能行範囲の自己検証 (必須)**: `## 重大な問題 (Must Fix)` / `## 改善提案 (Should Fix)` に採用する各レベル3見出しについて、`path` と行番号が `pr.diff.ranges.txt` の同一 `path` の範囲内に収まるかをメインコンテキストで検証する。単一行は `line` が範囲内、複数行は `[start_line, line]` の両端が同じ hunk 範囲内にある場合だけ有効とする。範囲外なら、同一ファイルの最も近いコメント可能行に見出しを差し替え、本文の `問題` または `理由` に `(参考: 元の行 path:L<行番号>)` を補足する。同一ファイルにコメント可能行がない場合は Must Fix / Should Fix には採用せず、`## 補足` に「範囲外指摘」として残す。
-5. 生レビューを内部的に比較し、最終レビューへ統合する。この比較過程は review.md に書かない:
+1. `claude-review.md` / `codex-review.md` / `pr.diff.ranges.txt` / `metadata.json` / `run-plan.json` を読み、さらに canonical schema として `$CLAUDE_PLUGIN_ROOT/schemas/findings.v1.json` を Read する（パス解決は Step 4 前処理の `REVIEW_CRITERIA.md` と同じく `$CLAUDE_PLUGIN_ROOT` 基準で行う）
+2. **スコープ検証 (必須)**: どちらか一方でも本文が `PR_DIFF_UNAVAILABLE` のみなら、統合成果物は作成せず Step 5 の **failed 更新** へ遷移する（`findings.verified.json` / `review.md` は生成しない）
+3. まず 2 つの生レビューから finding 候補を正規化し、**`findings.verified.json` をメモリ上で先に構築する**。`review.md` も同じくメモリ上でこの canonical artifact から派生生成し、ID / fingerprint 再計算 / 件数 gate と temp file への同梱 validator 検証を通すまで final path へは書き出さない。`findings.verified.json` は `schemas/findings.v1.json` に従い、最低限以下を満たす:
+   - top-level: `schema_version = "findings.v1"`, `producer`, `pr`, `generated_at`, `findings[]`
+   - `producer.name` は `pr-codex`、`producer.version` は Step 4 前処理で `$CLAUDE_PLUGIN_ROOT/.claude-plugin/plugin.json` から読んだ `$plugin_version`、`producer.run_id` は `<org>-<repository>-<pr_number>-<head_sha>` のような再生成可能な値にする
+   - `pr.repository` は `metadata.json.repository_full_name`（base repo の owner/repo 形式。GitHub review 投稿先と同一）を使い、`pr.number` / `pr.base_sha` / `pr.head_sha` も `metadata.json` から埋める。fork PR でも `.head.repo.full_name` は使わない。`merge_commit_sha` は `metadata.json.merge_commit_sha` が `null` でない場合のみ入れる
+   - canonical finding では **`source_agent` 単数形は使わず**、`source_agents[]` と `merged_from[]` を使う。`merged_from[]` には生レビュー中の見出しや内部IDなど、由来追跡できる文字列を入れる
+   - `id` は M1 では **`fingerprint` と完全に同じ値**に固定する。`fingerprint` は README の「fingerprint 正準アルゴリズム」で定義された `lowercase_hex(sha256(path + "\x1f" + category + "\x1f" + normalized_title + "\x1f" + (primary_symbol || "")))` だけを使う。別のハッシュ、UUID、連番、`run_id` 付き ID は使わない
+   - `normalized_title` は `title` を Unicode NFKC → Unicode lowercase → 連続空白を ASCII space 1 個へ畳み込み → 前後 trim → 末尾の Unicode punctuation（General Category P*）をなくなるまで除去 → 最後に右 trim、の順で正規化する。`primary_symbol` は `title` 内で最初に backtick で囲まれた symbol を前後 trim した値に固定し、存在しない場合は空文字列にする
+   - `location` は `{path, start_line, end_line?, side, diff_hunk_ref?}`。本 workflow では head 基準のため `side` は通常 `RIGHT` を使う
+   - `category` は schema enum の `bug` / `security` / `performance` / `tests` / `design` / `code_quality` / `consistency` / `runtime_error` のいずれかだけを使う。`bugs` や `security_issue` のような自由ラベルは禁止。人間向けの細分類が必要な場合だけ、`fingerprint` 入力外の `category_label` に入れる
+   - `title` は短い見出し、`problem` / `reason` / `suggestion` は review.md の 3 点組にそのまま再利用できる粒度で書く
+   - `axes` は `{real, triggerable, impactful, general}` の 4 軸を必ず埋める。各軸は、2 者が同じ事実を肯定している、または verifier / テスト / CI / 静的解析で肯定できた場合は `yes`、1 者のみの主張または根拠不足なら `unknown`、生レビューまたは根拠が明示的に否定している場合は `no` とする。severity だけから `yes` を推測してはならない
+   - `evidence_level` は決定論的に選ぶ。verifier / 再現テスト / CI / 静的解析で確認できたら `verified`、具体的な影響まで説明できるなら `impact_explained`、head diff 上の発火経路を特定できるなら `trigger_path_identified`、2 者が同一問題または同一 trigger path を示すが発火経路・影響が未確定なら `corroborated`、1 者のみまたは根拠が弱い場合は `suspicion` とする。`suspicion` は schema 上 `posting.explanation_postable=false` を強制するため、GitHub 投稿対象にしない
+   - `posting` は M1 の `/pr-codex:send` が **Must Fix のみ自動投稿**する前提に合わせ、`{post_policy, explanation_postable, not_postable_reason?, audience?}` を severity ごとに固定する:
+     - `must_fix`: `pr.diff.ranges.txt` 範囲内で、`evidence_level != "suspicion"` かつ説明投稿が安全なものだけ `post_policy=inline` / `explanation_postable=true`。それ以外は `must_fix` として採用せず、`note` + `local_only` または `## 補足` に退避する
+     - `should_fix`: M1 では GitHub inline 自動投稿対象外のため、説明投稿が安全なら `post_policy=body_summary` / `explanation_postable=true` を既定にする。範囲外・低根拠・投稿に不向きなものは `post_policy=local_only` / `audience=human_reviewer` とする。`not_postable_reason` は `explanation_postable=false` の場合だけ付け、`explanation_postable=true` や `post_policy=inline` と同居させない。`should_fix` に `post_policy=inline` は付けない
+     - `nit`: M1 では GitHub inline 自動投稿対象外のため、`post_policy=body_summary` / `explanation_postable=true` を既定にする。範囲外または低根拠なら `local_only` に退避する。`not_postable_reason` は `explanation_postable=false` の場合だけ付ける
+     - `note`: `post_policy=local_only` 固定で `audience` を必須にする（既定は `human_reviewer`）。`evidence_level=suspicion` の場合は `explanation_postable=false` / `not_postable_reason=low_evidence_suspicion` を必ず付ける
+   - `fingerprint` の入力は README 記載どおり `path` / `category` / `normalized_title` / `primary_symbol` に固定し、`line` は含めない
+   - JSON Schema Draft 2020-12 だけでは sibling equality (`id == fingerprint`) や fingerprint 再計算を標準機能だけで強制しづらいため、Step 4c の runtime gate として **全 finding で `id == fingerprint` と正準 fingerprint 再計算一致を確認**する。1 件でもずれたら failed とし、completed にしてはならない
+   - **`created_at` は finding 個別には書かない**。Issue #16 の最新 comment と参照 gist を優先し、canonical runtime artifact では top-level `generated_at` に集約する
+4. **破棄ルール (必須)**: `metadata.json.files[]` に含まれないパスへの指摘は canonical findings に採用しない。ファイルパスが `.md` の見出しやコードブロックで言及されていたら、そのパスが `files[]` 配列に属するかを必ず照合する。有益な一般的指摘で残す価値があるものだけ、`severity=note` + `posting.post_policy=local_only` もしくは `review.md` の `## 補足` 末尾に「参考（範囲外）」として残す。`must_fix` / `should_fix` には絶対に採用しない
+5. **コメント可能行範囲の自己検証 (必須)**: `must_fix` として採用する各 finding について、`location.path` と `location.start_line` / `location.end_line` が `pr.diff.ranges.txt` の同一 `path` の範囲内に収まるかをメインコンテキストで検証する。単一行は `start_line`、複数行は `[start_line, end_line]` の両端が同じ hunk 範囲内にある場合だけ有効とする。範囲外なら、同一ファイルの最も近いコメント可能行へ `location` を差し替え、`problem` または `reason` に `(参考: 元の行 path:L<行番号>)` を補足する。同一ファイルにコメント可能行がない場合は `must_fix` には採用せず、`note` / `local_only` または `## 補足` に退避する。`should_fix` / `nit` は M1 では inline 自動投稿対象外だが、`review.md` の参照性を保つため、可能な限り diff 範囲内の head 側行番号を使う
+6. severity が衝突した場合は **conservative min** を採用し、`severity_disputed=true`, `severity_by_source`, `merger_rule_applied="conservative_min_until_verifier_available"`, `verifier_required=true` を記録する。validation status (`metadata_files_member`, `diff_range_valid`) は canonical findings には入れず、必要なら副成果物 `validation-report.json` に分離する
+7. 生レビューを内部的に比較し、最終 findings へ統合する。この比較過程は `review.md` に書かない:
    - **一致点**: 同一原因・同一影響・同一箇所の重複指摘をまとめ、採用判断の信頼度評価に使う
-   - **相違点**: 一部の生レビューにだけある指摘は、pr.diff と checkout 済みソースで妥当性を再検証して採否と重要度を決める
-   - **補完**: 見落とされていた観点が補われている場合は、根拠を確認したうえで最終レビューに反映する
-   - review.md には最終判断のみを書く。レビュー実行者名 / モデル名 / どの生レビュー由来かを示す表現 / '両者一致' / '片方のみ' のような由来表現は書かない
-6. `run-plan.json` で `skip_reason != null`、`recommended_mode != "standard"`、または `depth_actual != "deep"` のいずれかに該当する場合は、`## 補足` に preflight 情報を最低限残す。`skip_reason != null` の場合は `- preflight: <skip_reason>。M1 の既定では focused fallback でレビューを継続した。` を含める。加えて `files_changed` / `lines_added` / `lines_removed` / `recommended_mode` / `depth_actual` / `risk_tags` を明記し、レビュー範囲や重点が意図的に変わった事実を受け手が判断できるようにする
-7. 統合した最終レビューを `Write` ツールで `$HOME/claude-loop-pr-codex/<org>-<repository>-<pr_number>/review.md` に書き出す（`<...>` は実値に置換した絶対パスで指定する）
+   - **相違点**: 一部の生レビューにだけある指摘は、`pr.diff` と checkout 済みソースで妥当性を再検証して採否と重要度を決める
+   - **補完**: 見落とされていた観点が補われている場合は、根拠を確認したうえで最終 findings に反映する
+   - `review.md` には最終判断のみを書く。レビュー実行者名 / モデル名 / どの生レビュー由来かを示す表現 / `両者一致` / `片方のみ` のような由来表現は書かない
+8. `review.md` は **`findings.verified.json` から派生生成** する。`must_fix` → `## 重大な問題 (Must Fix)`, `should_fix` → `## 改善提案 (Should Fix)`, `nit` → `## 軽微な指摘 (Nit)`, `note` や `post_policy=local_only/suppress` の項目 → `## 補足` に対応させる。`## 総評` と `## 良い点` は人間向け要約として記述してよいが、Must Fix / Should Fix の件数や内容が canonical findings と矛盾してはならない
+9. `run-plan.json` で `skip_reason != null`、`recommended_mode != "standard"`、または `depth_actual != "deep"` のいずれかに該当する場合は、`review.md` の `## 補足` に preflight 情報を最低限残す。`skip_reason != null` の場合は `- preflight: <skip_reason>。M1 の既定では focused fallback でレビューを継続した。` を含める。加えて `files_changed` / `lines_added` / `lines_removed` / `recommended_mode` / `depth_actual` / `risk_tags` を明記し、レビュー範囲や重点が意図的に変わった事実を受け手が判断できるようにする
+10. **fingerprint 整合 gate (必須)**: 全 finding で `id == fingerprint` を確認し、さらに `path` / `category` / `title` から README の正準アルゴリズムで fingerprint を再計算した値が JSON 内の `fingerprint` と一致することを、後述の `tasks/validate_findings.py` で検証する。1 件でもずれたら Step 5 の **failed 更新** へ遷移し、final artifact を書き出してはならない
+11. **件数一致 gate (必須)**: `findings.verified.json` の `severity=must_fix` 件数と、派生生成した `review.md` の `## 重大な問題 (Must Fix)` 見出し件数は **100% 一致** させる。1 件でもずれたら Step 5 の **failed 更新** へ遷移し、completed にしてはならない
+12. 上記 runtime gate を通過した場合のみ、`findings.verified.json` / `review.md`（必要なら `validation-report.json` も）をまず `*.tmp` へ `Write` ツールで書き出す
+13. **同梱 validator gate (必須)**: `findings.verified.json.tmp` を `tasks/validate_findings.py` で検証する。必須フィールド欠落、型不一致、enum 不一致、`posting` / `evidence_level` 条件違反、`pr.number` 非整数、RFC3339 / URI format 不正、`end_line < start_line`、`id != fingerprint`、fingerprint 再計算不一致、`metadata.json` の投稿先 repo / PR number / head/base SHA と `findings.verified.json.pr.*` の不一致など 1 件でも contract に反したら Step 5 の **failed 更新** へ遷移し、final artifact を書き出してはならない
+14. temp write と同梱 validator が成功した場合のみ Bash の `mv` で final path へ反映する。途中で temp write / validator / `mv` のいずれかが失敗した場合は Step 5 の **failed 更新** へ遷移し、completed にしてはならない
 
 - いつ使うか: `claude-review.md` と `codex-review.md` の両方が揃った後
-- 判定条件: `review.md` が作成される（両方が `PR_DIFF_UNAVAILABLE` の場合は生成しない）
-- 次アクション: 書き出し後 Step 5 へ進む（`PR_DIFF_UNAVAILABLE` があった場合は Step 5 failed 分岐へ）
+- 判定条件: 全 finding で `id == fingerprint` が成り立ち、`review.md` と Must Fix 件数が一致し、`findings.verified.json.tmp` が同梱 validator を通過したうえで temp file → final path の反映まで完了する（`PR_DIFF_UNAVAILABLE` の場合は生成しない）
+- 次アクション: 書き出し後 Step 5 へ進む（`PR_DIFF_UNAVAILABLE` / `id != fingerprint` / 件数不一致 / temp write failure / validator failure / `mv` failure があった場合は Step 5 failed 分岐へ）
 
-`Write` ツールは `~` やシェル変数（`$org` 等）を展開しない。`file_path` にはホームディレクトリを `$HOME` の実値（例: `/Users/adachi`）に展開済みの絶対パスを渡し、`$org` / `$repository` / `$pr_number` も実値に置換してから呼び出すこと。
+`Write` ツールは `~` やシェル変数（`$org` 等）を展開しない。`file_path` にはホームディレクトリを `$HOME` の実値（例: `/Users/adachi`）に展開済みの絶対パスを渡し、`$org` / `$repository` / `$pr_number` も実値に置換してから呼び出すこと。`findings.verified.json` の JSON 本文も、プレースホルダを残さず実値で埋める。temp file を使う場合も同様に絶対パスで指定する。
 
-本文についても、プレースホルダ（`実際のPRタイトル`, `実際のPR URL`, `<head_sha>`, 各セクション本文）は必ず実値に置換し、残してはならない。`<head_sha>` は `metadata.json` / `status.json` と同じ値（Step 2b で取得した `$head_sha`）を実値で埋める。シェル展開やヒアドキュメントは使わず、Markdown 本文を直接 `Write` へ渡すことでクォートやプレースホルダ漏れを回避する。
+temp file 書き出し後、final artifact へ反映する前に以下の同梱 validator を必ず実行する。`$CLAUDE_PLUGIN_ROOT` が shell 環境で未設定の場合は、Step 4 前処理で解決した plugin root の絶対パスに置換してから Bash ツールへ渡す（コマンド構造は変えない）。この validator は stdlib-only で、npm cache やネットワークを使わず、作業ディレクトリ外へ書き込まない。
+
+```bash
+python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings.py --schema $CLAUDE_PLUGIN_ROOT/schemas/findings.v1.json --data ~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.verified.json.tmp --metadata ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json
+```
+
+temp file を final artifact に反映する際は、以下の `mv` テンプレートだけを使う。`review.md` を先に反映し、その後 `findings.verified.json` を反映する。これにより `findings.verified.json` だけが残る状態を避け、completed 更新前に send primary path の前提が成立しないようにする。
+
+```bash
+mv ~/claude-loop-pr-codex/$org-$repository-$pr_number/review.md.tmp ~/claude-loop-pr-codex/$org-$repository-$pr_number/review.md
+```
+
+```bash
+mv ~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.verified.json.tmp ~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.verified.json
+```
+
+副成果物 `validation-report.json` を出す場合のみ、最後に以下を実行してよい。
+
+```bash
+mv ~/claude-loop-pr-codex/$org-$repository-$pr_number/validation-report.json.tmp ~/claude-loop-pr-codex/$org-$repository-$pr_number/validation-report.json
+```
+
+`review.md` 本文についても、プレースホルダ（`実際のPRタイトル`, `実際のPR URL`, `<head_sha>`, 各セクション本文）は必ず実値に置換し、残してはならない。`<head_sha>` は `metadata.json` / `status.json` と同じ値（Step 2b で取得した `$head_sha`）を実値で埋める。シェル展開やヒアドキュメントは使わず、Markdown 本文を直接 `Write` へ渡すことでクォートやプレースホルダ漏れを回避する。
 
 `review.md` のテンプレート構造:
 
@@ -601,7 +669,7 @@ MCP について:
 
 ## 重大な問題 (Must Fix)
 
-マージ前に必ず修正すべき問題。根拠確認済みの指摘のみを残す。`metadata.json.files[]` 範囲外の指摘は掲載しない。見出し行番号は必ず `pr.diff.ranges.txt` の同一 path の範囲内に収める。
+マージ前に必ず修正すべき問題。`findings.verified.json` の `severity=must_fix` から機械的に導出される内容だけを残す。`metadata.json.files[]` 範囲外の指摘は掲載しない。見出し行番号は必ず `pr.diff.ranges.txt` の同一 path の範囲内に収める。
 
 ### `path/to/file.ext:L<行番号>` (もしくは `path/to/file.ext:L<開始>-L<終了>`)
 
@@ -611,7 +679,7 @@ MCP について:
 
 ## 改善提案 (Should Fix)
 
-修正が強く推奨される問題。同じフォーマットで記載。見出し行番号は必ず `pr.diff.ranges.txt` の同一 path の範囲内に収める。
+修正が強く推奨される問題。`findings.verified.json` の `severity=should_fix` から導出し、同じフォーマットで記載する。M1 の `/pr-codex:send` では inline 自動投稿対象外のため、canonical finding の `posting.post_policy` は `body_summary` または `local_only` とする。見出し行番号は可能な限り `pr.diff.ranges.txt` の同一 path の範囲内に収める。
 
 ### `path/to/file.ext:L<行番号>` (もしくは `path/to/file.ext:L<開始>-L<終了>`)
 
@@ -621,7 +689,7 @@ MCP について:
 
 ## 軽微な指摘 (Nit)
 
-スタイルや好みに関する軽微な指摘。箇条書きで簡潔に。各項目に必ず `path/to/file.ext:L<行番号>` 表記を付ける。
+スタイルや好みに関する軽微な指摘。`findings.verified.json` の `severity=nit` から箇条書きで簡潔に導出する。各項目に必ず `path/to/file.ext:L<行番号>` 表記を付ける。
 
 ## 良い点
 
@@ -629,7 +697,7 @@ MCP について:
 
 ## 補足
 
-投稿対象外の補足事項があれば記載する。例: コメント可能行がない範囲外の参考指摘、レビュー上の前提、確認できなかった事項。なければ 'なし'。
+投稿対象外の補足事項があれば記載する。`severity=note` や `posting.post_policy=local_only/suppress` の finding、コメント可能行がない範囲外の参考指摘、レビュー上の前提、確認できなかった事項を置く。なければ `なし`。
 ```
 
 ### Step 5: 結果保存
@@ -692,12 +760,12 @@ jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" --arg head
 - 次アクション: `review.md` を Read ツールで読み、以下の内容をユーザーにテキストで報告して終了する
   - 対象PR（`$pr_url` のリンク付き）
   - レビュー結果の要約（総評 + 重大な問題の件数と代表例、改善提案の件数を含める）
-  - 結果ファイルのパス（`~/claude-loop-pr-codex/$org-$repository-$pr_number/review.md`）
+  - 結果ファイルのパス（`~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.verified.json` と `~/claude-loop-pr-codex/$org-$repository-$pr_number/review.md`）
 
 ## エラーハンドリング
 
 - PRがclosed/merged → `skipped` としてログに記録し、次の候補へ進む
-- Step 2b の `jq -ce` / `jq -sce` で `missing headRefOid / headRefName / baseRefName / files` が出た → `state=failed` で記録し、その回は終了（PR メタデータが必須フィールドを欠いているため信頼できるレビュー不可）
+- Step 2b の metadata `gh api --jq` / files `jq -sce` で `missing repository_full_name / head_sha / base_sha / branch / base_branch / files` が出た → `state=failed` で記録し、その回は終了（PR メタデータまたは変更ファイル一覧が必須フィールドを欠いているため信頼できるレビュー不可）
 - Step 3 の `gh pr diff` が失敗または空出力（`pr.diff` 未生成） → `state=failed` で記録し、その回は終了（PR 差分スコープが確定できないため Step 4 に進まない）
 - Step 3 の `run-plan.json` 生成が失敗 → `state=failed` で記録し、その回は終了（preflight 指標が欠落したまま Step 4 に進まない）
 - Step 5 の `run-plan.json` 追記更新が失敗 → `state=completed` を先に確定せず `state=failed` で記録し、その回は終了（壊れた `run-plan.json` を completed 扱いで残さない）
@@ -706,6 +774,10 @@ jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" --arg head
 - `codex exec` がタイムアウト（20分） → `state=failed` で記録
 - `codex exec` が非ゼロ終了 → `state=failed` で記録
 - **`claude-review.md` / `codex-review.md` のいずれかが `PR_DIFF_UNAVAILABLE` のみ → `state=failed` で記録し、`review.md` は生成しない**
+- **`findings.verified.json.tmp` が同梱 validator による `schemas/findings.v1.json` validation / fingerprint 再計算 / format / range validation に失敗 → `state=failed` で記録し、final artifact は反映しない**
+- **`findings.verified.json` のいずれかの finding で `id != fingerprint` → `state=failed` で記録し、final artifact は反映しない**
+- **`findings.verified.json` の Must Fix 件数と `review.md` の Must Fix 見出し件数が不一致 → `state=failed` で記録し、send へ進めない**
+- **`*.tmp` の Write または temp → final の `mv` が失敗 → `state=failed` で記録し、completed にしない**
 - 権限不足（404/403） → `state=failed` で記録し、その回は終了
 
 ## ファイル構成
@@ -716,6 +788,8 @@ jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" --arg head
 $CLAUDE_PLUGIN_ROOT/skills/review/
   ├── SKILL.md                ← 本ファイル
   └── REVIEW_CRITERIA.md      ← 4a / 4b 共通のレビュー観点本文。Step 4 前処理で Read し、{REVIEW_CRITERIA} プレースホルダに置換
+$CLAUDE_PLUGIN_ROOT/tasks/
+  └── validate_findings.py    ← canonical findings の schema / fingerprint / format / range validator
 ```
 
 実行時の作業ディレクトリ:
@@ -724,7 +798,7 @@ $CLAUDE_PLUGIN_ROOT/skills/review/
 ~/claude-loop-pr-codex/
   └── $org-$repository-$pr_number/
         ├── status.json
-        ├── metadata.json        ← org/repo/pr_number/pr_url/head_sha/branch/base_branch/title/files を含む
+        ├── metadata.json        ← org/repository/repository_full_name/pr_number/pr_url/head_sha/base_sha/branch/base_branch/merge_commit_sha/title/files を含む
         ├── run-plan.json        ← preflight 指標。Step 5 成功時に actual_duration_ms / actual_tokens を追記
         ├── pr.diff              ← PR 差分 (unified diff)。Step 4a/4b のスコープ確定情報源
         ├── pr.diff.ranges.txt   ← コメント可能行範囲。Step 4a/4b と Step 4c の行番号検証に使う
@@ -732,7 +806,12 @@ $CLAUDE_PLUGIN_ROOT/skills/review/
         ├── clone-codex/         ← Codex CLI 用 shallow clone (depth 50, base fetch 済み)
         ├── claude-review.md     ← Claude Code の生レビュー
         ├── codex-review.md      ← Codex CLI の生レビュー
+        ├── findings.verified.json ← canonical findings (`schemas/findings.v1.json`)
+        ├── validation-report.json ← validation の副成果物（optional）
         ├── review.md            ← 統合レビュー（最終成果物）
+        ├── findings.verified.json.tmp  ← Step 4c の一時ファイル（失敗時に残り得る）
+        ├── validation-report.json.tmp  ← Step 4c の一時ファイル（optional）
+        ├── review.md.tmp        ← Step 4c の一時ファイル（失敗時に残り得る）
         ├── claude.log
         └── codex.log
 ```
@@ -741,7 +820,7 @@ $CLAUDE_PLUGIN_ROOT/skills/review/
 
 本スキルは Claude Code を `--permission-mode auto` で起動することを前提とする（README の「使い方」参照）。auto mode でも、許可済みツールやコマンドの内容によっては分類器の判断で承認が必要になり得るため、本スキルではテンプレートに明示された操作だけを実行する。
 
-ローカルの書き込みは作業ディレクトリ `~/claude-loop-pr-codex/` 配下に限り、`clone-claude/` / `clone-codex/` の作成と更新、`status.json` / `metadata.json` / `run-plan.json` / `pr.diff` / `pr.diff.ranges.txt` / `claude.log` / `codex.log` / `claude-review.md` / `codex-review.md` / `review.md` の成果物作成のみ許可する。
+ローカルの書き込みは作業ディレクトリ `~/claude-loop-pr-codex/` 配下に限り、`clone-claude/` / `clone-codex/` の作成と更新、`status.json` / `metadata.json` / `run-plan.json` / `pr.diff` / `pr.diff.ranges.txt` / `claude.log` / `codex.log` / `claude-review.md` / `codex-review.md` / `findings.verified.json` / `validation-report.json` / `review.md` と、それらの `*.tmp` 一時ファイル作成のみ許可する。schema / fingerprint validation のために `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings.py ...` を実行してよいが、validator は成果物を書き換えず検証だけに使う。
 
 許可ルールは以下の allowlist に従う。
 
@@ -751,19 +830,19 @@ $CLAUDE_PLUGIN_ROOT/skills/review/
 4. シェル演算子はテンプレート中に明示された `|` `<` `>` `2>` `&&` のみ許可する。パイプラインの upstream 失敗検知のため、テンプレート中に明示された `set -o pipefail &&` は削除せずそのまま使う
 5. JSON 生成は `jq -n --arg` / `--argjson` / `--slurpfile` / `--rawfile` を使う。ヒアドキュメントで JSON を直接組み立てない
 6. ファイル書き込みの使い分け:
-   - 統合レビュー `review.md` は `Write` ツールで書き出す（`file_path` は `~` / `$...` を展開しないため、実値の絶対パスを渡す）
+   - `findings.verified.json.tmp` / `validation-report.json.tmp` / `review.md.tmp` は `Write` ツールで書き出し、gate 通過後に `mv` で final name へ反映する（`file_path` は `~` / `$...` を展開しないため、実値の絶対パスを渡す）
    - `status.json` / `metadata.json` / `run-plan.json` は `jq -n --arg` / `--argjson` / `--slurpfile` / `--rawfile` の出力を `Bash` の `>` で書く
    - `pr.diff` は Step 3 の `gh pr diff` の標準出力を `>` でリダイレクトして作成する
    - `pr.diff.ranges.txt` は Step 3 の `awk` の標準出力を `>` でリダイレクトして作成する
    - `claude-review.md` / `codex-review.md` / `claude.log` / `codex.log` は Step 4a / 4b の標準出力・標準エラーを `>` / `2>` でリダイレクトして作成する
 7. Step 4a / 4b の timeout は必ず `1200000` に固定する
-8. テンプレートに明示された `git fetch` / `git checkout FETCH_HEAD` / 成果物ファイル作成以外の状態変更操作は実行しない。禁止例: `git push` / `git merge` / `git reset --*` / `git clean -fd[x]` / `git stash` / `git commit` / `git tag` / `git branch -D`、`rm -rf` 系、`gh pr` / `gh issue` の write 操作、および GitHub / Backlog / DocBase の write 系 MCP ツール
+8. テンプレートに明示された `git fetch` / `git checkout FETCH_HEAD` / `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings.py ...` / temp file から final artifact への `mv` / 成果物ファイル作成以外の状態変更操作は実行しない。禁止例: `git push` / `git merge` / `git reset --*` / `git clean -fd[x]` / `git stash` / `git commit` / `git tag` / `git branch -D`、`rm -rf` 系、`gh pr` / `gh issue` の write 操作、および GitHub / Backlog / DocBase の write 系 MCP ツール
 9. 1回の実行で選定・処理する PR は 1 件のみとする
 10. Step 4a / 4b のプロンプト中に含まれる `{REVIEW_CRITERIA}` と `{RUN_PLAN_GUIDANCE}` プレースホルダは、Step 4 前処理で Read した `REVIEW_CRITERIA.md` と `run-plan.json` を元に Claude 側で置換したうえで、Bash ツールに渡す完全体のコマンド文字列として使う。`{REVIEW_CRITERIA}` と `{RUN_PLAN_GUIDANCE}` のどちらも bash double-quote 内で安全になるよう、差し込み前に **`\` → `\\`、`"` → `\"`、`$` → `\$`、`` ` `` → `\``** の順でエスケープする。シェルでのコマンド置換 (`$()`) やヒアドキュメントは使わない
 
 補助注記（いずれもテンプレート一字一句原則の具体適用例）:
 
-- `gh api` や `gh pr view` の `--jq` フラグは使わない。テンプレートはすべて `| jq` パイプ形式で統一しており、クォートを含むフラグ値は auto mode の分類器でも停止要因になり得る
+- Step 2b の metadata 取得テンプレートだけは、`gh` の version-dependent な `gh pr view --json headRefOid/baseRefOid` を避けるため `gh api ... --jq '...'` を明示的に使う。それ以外のテンプレートへ任意に `--jq` を追加しない。`gh pr view --jq` は使わない
 - `set -o pipefail &&` が明示されたテンプレートでは、`gh api --paginate` など upstream の非ゼロ終了を最後段の `jq` 成功で握りつぶさないため、必ずテンプレートどおりに残す
 - `$()` は使わない。コマンド置換はテンプレートに含まれず、auto mode でも承認プロンプトや停止要因になり得る（変数展開 `$org` 等はテンプレート内で使用する）
 - `for` / `while` / `while read` / `xargs` などのループ・反復構文は使わない。テンプレート外であり、実行単位・ログの再現性を崩す

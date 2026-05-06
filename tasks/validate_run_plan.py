@@ -396,7 +396,16 @@ def validate_step5_write_order() -> None:
 
 def validate_completed_head_check_before_files() -> None:
     text = SKILL_PATH.read_text()
-    head_index = text.index('gh pr view $pr_number --repo $org/$repository --json headRefOid,headRefName,baseRefName')
+    head_index = text.index('gh api repos/$org/$repository/pulls/$pr_number --jq')
+    head_block = extract_bash_block("gh api repos/$org/$repository/pulls/$pr_number --jq")
+    forbidden_snippets = ["gh pr view", "headRefOid", "baseRefOid", ".head.repo.full_name"]
+    for snippet in forbidden_snippets:
+        if snippet in head_block:
+            raise AssertionError(f"Step 2b metadata template must not depend on unsupported gh pr view field: {snippet}")
+    required_snippets = [".base.repo.full_name", ".head.sha", ".base.sha", ".head.ref", ".base.ref", ".merge_commit_sha"]
+    for snippet in required_snippets:
+        if snippet not in head_block:
+            raise AssertionError(f"Step 2b metadata template missing required gh api field: {snippet}")
     saved_head_section_index = text.index('#### `state == "completed"` の場合の保存済み `head_sha` 比較')
     saved_head_index = text.index("jq -r '.head_sha' ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json")
     files_index = text.index("gh api repos/$org/$repository/pulls/$pr_number/files --paginate")
@@ -411,6 +420,26 @@ def validate_completed_head_check_before_files() -> None:
     for snippet in required_snippets:
         if snippet not in text_between:
             raise AssertionError(f"completed head_sha comparison docs missing required snippet: {snippet}")
+
+
+def validate_step2b_jq_allowlist_docs() -> None:
+    text = SKILL_PATH.read_text()
+    stale_snippets = [
+        "`gh api` や `gh pr view` の `--jq` フラグは使わない",
+        "テンプレートはすべて `| jq` パイプ形式で統一",
+    ]
+    for snippet in stale_snippets:
+        if snippet in text:
+            raise AssertionError(f"Step 2b metadata docs still contain stale --jq prohibition: {snippet}")
+
+    required_snippets = [
+        "Step 2b の metadata 取得テンプレートだけは",
+        "`gh api ... --jq '...'` を明示的に使う",
+        "`gh pr view --jq` は使わない",
+    ]
+    for snippet in required_snippets:
+        if snippet not in text:
+            raise AssertionError(f"Step 2b metadata allowlist docs missing required snippet: {snippet}")
 
 
 def validate_review_preflight_supplement_docs() -> None:
@@ -510,6 +539,7 @@ def main() -> None:
     validate_threshold_behavior(schema)
     validate_risk_tag_detection()
     validate_completed_head_check_before_files()
+    validate_step2b_jq_allowlist_docs()
     validate_review_preflight_supplement_docs()
     validate_step5_write_order()
     validate_escape_rule_docs()

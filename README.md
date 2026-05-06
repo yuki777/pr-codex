@@ -16,6 +16,7 @@ GitHub PRを **Claude Code** と **Codex CLI** の2者レビュー方式で自�
 - Codex CLI (`codex-cli 0.121.0` 以上、`codex exec -m gpt-5.5` が使えること)
 - GitHub CLI (`gh`)
 - `jq`（SKILL.md 内の全テンプレートで利用する。macOS 標準では未インストール）
+- `python3`（同梱 validator `tasks/validate_findings.py` で `findings.verified.json` を検証するため）
 
 ## セットアップ
 
@@ -67,7 +68,7 @@ cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
 2. **候補の選定** — 未レビュー・失敗・追加コミットありの最初の1件を選定
 3. **作業ディレクトリの準備** — PRブランチを各ツール用に個別に shallow clone
 4. **2者レビュー実行** — Claude Code と Codex CLI が並行してレビュー
-5. **結果の統合** — 両者の指摘を比較・議論し、統合レビューを作成
+5. **結果の統合** — 両者の指摘を比較・議論し、`findings.verified.json` と `review.md` を生成
 6. **結果報告** — レビュー結果の要約をユーザーに報告
 
 ## レビューの投稿
@@ -81,7 +82,7 @@ cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
 `/pr-codex:send` の挙動:
 
 1. `~/claude-loop-pr-codex/` 配下から `status.json` が `state:completed` でかつ `review.md` が存在するディレクトリを1件選定する（名前昇順の先頭1件）
-2. `review.md` をパースし、`## 総評` / `## 良い点` を body に、`## 重大な問題 (Must Fix)`をインラインコメントに分解（`## 改善提案 (Should Fix)`と `## 軽微な指摘` と `## 議論・判断` は投稿しない）
+2. `findings.verified.json` を一次入力として `Must Fix` を抽出し、`review.md` から `## 総評` / `## 良い点` を body に使う（移行期間は Markdown parser を fallback として残すが、`findings.verified.json` が存在するのに Must Fix 件数が `review.md` と一致しない場合は中断する）
 3. GitHub Reviews API への payload サマリをユーザーに提示し、明示的な承認を得る
 4. 承認後、`gh api --method POST .../reviews` で投稿（`event` は Must Fix ありなら `REQUEST_CHANGES`、なければ `COMMENT`。`APPROVE` は自動では出さない）
 5. 投稿成功後、対象ディレクトリを `~/claude-loop-pr-codex/sent/` に移動する
@@ -95,20 +96,46 @@ cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
   ├── $org-$repo-$pr/             # 進行中 / 未投稿のレビュー
   │     ├── status.json           # 実行状態（running / completed / failed）
   │     ├── metadata.json         # PR情報（org, repo, pr_number, head_sha 等）
+  │     ├── pr.diff               # PR 差分 (unified diff)
+  │     ├── pr.diff.ranges.txt    # GitHub inline comment 可能範囲
   │     ├── clone-claude/         # Claude Code 用 shallow clone
   │     ├── clone-codex/          # Codex CLI 用 shallow clone
   │     ├── claude-review.md      # Claude Code の生レビュー
   │     ├── codex-review.md       # Codex CLI の生レビュー
+  │     ├── findings.verified.json # canonical findings (`schemas/findings.v1.json`)
+  │     ├── validation-report.json # validation の副成果物（canonical findings とは分離）
   │     ├── review.md             # 統合レビュー（最終成果物）
   │     ├── claude.log
   │     └── codex.log
   └── sent/                       # /pr-codex:send で投稿済み
         └── $org-$repo-$pr/       # 投稿後にここへ移動される
+              ├── findings.verified.json
               ├── review.md
               ├── review-payload.json   # 投稿した GitHub Reviews API の payload
               ├── review-response.json  # gh api のレスポンス（.html_url 等）
               └── ... (他ファイルも一緒に保管される)
 ```
+
+## Schema
+
+- canonical runtime artifact は `schemas/findings.v1.json` (JSON Schema Draft 2020-12) で定義する
+- `findings.verified.json` は top-level `generated_at` を持ち、per-finding `created_at` は持たない
+- `findings.verified.json.pr.repository` は **投稿先の base repo** (`owner/repo`) に固定する。fork PR でも head repo ではなく、`metadata.json.repository_full_name` および `/pr-codex:send` の投稿先 `$org/$repository` と一致させる
+- M1 の `finding.id` は **`fingerprint` と同値**に固定する（retry / send の `source_finding_id` / eval harness 比較で決定論的に追跡するため）
+- `category` は schema enum（`bug` / `security` / `performance` / `tests` / `design` / `code_quality` / `consistency` / `runtime_error`）に固定し、自由文字列の揺れを `fingerprint` に入れない
+- `fingerprint` の入力は `path` / `category` / `normalized_title` / `primary_symbol` に固定し、`line` は含めない
+- JSON Schema Draft 2020-12 単体では sibling equality (`id == fingerprint`) を標準機能だけで強制しにくいため、この等値は **review/send workflow の必須 runtime gate** として扱う
+- review 側は `findings.verified.json` を completed 前に同梱 validator `tasks/validate_findings.py` で `schemas/findings.v1.json` へ検証し、send 側 primary path も同じ validator に失敗したら fallback せず中断する
+- schema 自体は `location.side` に `LEFT` も残すが、M1 の send workflow は `RIGHT` のみ受け付ける
+- `tasks/validate_findings.py` は JSON shape / enum / conditional rule / RFC3339 date-time / URI / `end_line >= start_line` / `id == fingerprint` / fingerprint 再計算 / `metadata.json` との PR context 一致を stdlib-only で検証する
+
+### fingerprint 正準アルゴリズム
+
+1. `path`: `location.path` のリポジトリ相対 POSIX path をそのまま使う
+2. `category`: schema enum の値をそのまま使う
+3. `normalized_title`: `title` に Unicode NFKC 正規化 → Unicode lowercase → 連続空白を ASCII space 1 個へ畳み込み → 前後 trim → 末尾の Unicode punctuation（General Category が P で始まる文字）をなくなるまで除去 → 最後に右 trim、の順で処理する
+4. `primary_symbol`: `title` 内で最初に backtick で囲まれた symbol を前後 trim して使う。存在しない場合は空文字列にする
+5. `id = fingerprint = lowercase_hex(sha256(path + "\x1f" + category + "\x1f" + normalized_title + "\x1f" + (primary_symbol || "")))`
 
 ## バージョンアップ（作者向け）
 

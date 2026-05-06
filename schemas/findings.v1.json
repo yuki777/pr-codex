@@ -1,0 +1,571 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/yuki777/pr-codex/main/schemas/findings.v1.json",
+  "title": "pr-codex canonical findings v1",
+  "type": "object",
+  "additionalProperties": false,
+  "$comment": "Issue #16 latest comment and the associated gist finalized top-level generated_at for canonical findings. The older per-finding created_at field is intentionally omitted here. M1 fixes finding.id to the same deterministic lowercase sha256 hex value as fingerprint so retries and send.source_finding_id can track a finding stably. Fingerprint canonical form: lowercase_hex(sha256(path + U+001F + category + U+001F + normalized_title + U+001F + primary_symbol_or_empty)); normalized_title uses Unicode NFKC, Unicode lowercase, whitespace collapse, trim, and trailing Unicode punctuation (General Category P*) removal followed by a final right trim; primary_symbol is the trimmed first back-ticked symbol in title, or empty string if absent.",
+  "required": [
+    "schema_version",
+    "producer",
+    "pr",
+    "generated_at",
+    "findings"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "findings.v1"
+    },
+    "producer": {
+      "$ref": "#/$defs/producer"
+    },
+    "pr": {
+      "$ref": "#/$defs/pr"
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/finding"
+      }
+    }
+  },
+  "$defs": {
+    "sha": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{7,64}$"
+    },
+    "non_empty_string": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F\\uD800-\\uDFFF]+$",
+      "description": "Non-empty UTF-8-safe string. Lone surrogate code points and C0/C1 control characters are invalid in canonical artifacts."
+    },
+    "severity": {
+      "enum": [
+        "must_fix",
+        "should_fix",
+        "nit",
+        "note"
+      ]
+    },
+    "axis_value": {
+      "enum": [
+        "yes",
+        "no",
+        "unknown"
+      ]
+    },
+    "evidence_level": {
+      "enum": [
+        "suspicion",
+        "corroborated",
+        "trigger_path_identified",
+        "impact_explained",
+        "verified"
+      ]
+    },
+    "post_policy": {
+      "enum": [
+        "inline",
+        "body_summary",
+        "local_only",
+        "suppress"
+      ]
+    },
+    "not_postable_reason": {
+      "enum": [
+        "depends_on_pr_external_context",
+        "security_detail",
+        "too_long",
+        "low_evidence_suspicion",
+        "private_dependency",
+        "other_explained"
+      ]
+    },
+    "audience": {
+      "enum": [
+        "human_reviewer",
+        "eval_harness",
+        "future_memory"
+      ]
+    },
+    "merger_rule_applied": {
+      "enum": [
+        "none",
+        "conservative_min_until_verifier_available",
+        "verifier_decided"
+      ]
+    },
+    "evidence_type": {
+      "enum": [
+        "manual_review",
+        "static_analysis",
+        "test",
+        "ci_log",
+        "reference"
+      ]
+    },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version",
+        "run_id"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "version": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "run_id": {
+          "$ref": "#/$defs/non_empty_string"
+        }
+      }
+    },
+    "pr": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "number",
+        "base_sha",
+        "head_sha"
+      ],
+      "properties": {
+        "repository": {
+          "type": "string",
+          "pattern": "^[^/\\s]+/[^/\\s]+$",
+          "description": "Base repository in owner/repo form; this must match the GitHub PR repository that /pr-codex:send posts to, not a fork head repository."
+        },
+        "number": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "base_sha": {
+          "$ref": "#/$defs/sha"
+        },
+        "head_sha": {
+          "$ref": "#/$defs/sha"
+        },
+        "merge_commit_sha": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "location": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "start_line",
+        "side"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "start_line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "end_line": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Optional inclusive end line for multi-line comments. Must be greater than or equal to start_line; the bundled tasks/validate_findings.py enforces this cross-field rule."
+        },
+        "side": {
+          "description": "Schema keeps LEFT/RIGHT for forward compatibility, but the M1 review/send workflow only emits and accepts RIGHT. LEFT must be rejected by the current send primary path until old-side range validation exists.",
+          "enum": [
+            "LEFT",
+            "RIGHT"
+          ]
+        },
+        "diff_hunk_ref": {
+          "$ref": "#/$defs/non_empty_string"
+        }
+      }
+    },
+    "axes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "real",
+        "triggerable",
+        "impactful",
+        "general"
+      ],
+      "properties": {
+        "real": {
+          "$ref": "#/$defs/axis_value"
+        },
+        "triggerable": {
+          "$ref": "#/$defs/axis_value"
+        },
+        "impactful": {
+          "$ref": "#/$defs/axis_value"
+        },
+        "general": {
+          "$ref": "#/$defs/axis_value"
+        }
+      }
+    },
+    "posting": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "post_policy",
+        "explanation_postable"
+      ],
+      "properties": {
+        "post_policy": {
+          "$ref": "#/$defs/post_policy"
+        },
+        "explanation_postable": {
+          "type": "boolean"
+        },
+        "not_postable_reason": {
+          "$ref": "#/$defs/not_postable_reason"
+        },
+        "audience": {
+          "$ref": "#/$defs/audience"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "explanation_postable": {
+                "const": true
+              }
+            },
+            "required": [
+              "explanation_postable"
+            ]
+          },
+          "then": {
+            "not": {
+              "required": [
+                "not_postable_reason"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "post_policy": {
+                "const": "inline"
+              }
+            },
+            "required": [
+              "post_policy"
+            ]
+          },
+          "then": {
+            "not": {
+              "required": [
+                "not_postable_reason"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "severity_by_source": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "$ref": "#/$defs/severity"
+      }
+    },
+    "evidence_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/evidence_type"
+        },
+        "tool": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "command": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "diagnostic_code": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "path": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "note": {
+          "$ref": "#/$defs/non_empty_string"
+        }
+      }
+    },
+    "php": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "symbol": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "composer_package": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "language_version": {
+          "$ref": "#/$defs/non_empty_string"
+        }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "fingerprint",
+        "source_agents",
+        "merged_from",
+        "location",
+        "severity",
+        "category",
+        "title",
+        "problem",
+        "reason",
+        "suggestion",
+        "evidence_level",
+        "axes",
+        "posting"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/fingerprint",
+          "description": "M1 deterministic identifier. Use exactly the same lowercase SHA-256 hex string as fingerprint so reruns, retry send flows, and eval harness comparisons can trace the same finding without a separate allocator."
+        },
+        "fingerprint": {
+          "$ref": "#/$defs/fingerprint"
+        },
+        "source_agents": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/non_empty_string"
+          }
+        },
+        "merged_from": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/non_empty_string"
+          }
+        },
+        "location": {
+          "$ref": "#/$defs/location"
+        },
+        "severity": {
+          "$ref": "#/$defs/severity"
+        },
+        "category": {
+          "$ref": "#/$defs/category"
+        },
+        "title": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "problem": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "reason": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "suggestion": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "evidence_level": {
+          "$ref": "#/$defs/evidence_level"
+        },
+        "axes": {
+          "$ref": "#/$defs/axes"
+        },
+        "posting": {
+          "$ref": "#/$defs/posting"
+        },
+        "severity_disputed": {
+          "type": "boolean"
+        },
+        "severity_by_source": {
+          "$ref": "#/$defs/severity_by_source"
+        },
+        "merger_rule_applied": {
+          "$ref": "#/$defs/merger_rule_applied"
+        },
+        "verifier_required": {
+          "type": "boolean"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidence_item"
+          }
+        },
+        "php": {
+          "$ref": "#/$defs/php"
+        },
+        "category_label": {
+          "$ref": "#/$defs/non_empty_string",
+          "description": "Optional human-readable category nuance. It is explicitly not a fingerprint input; category enum remains the stable fingerprint component."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "posting": {
+                "properties": {
+                  "explanation_postable": {
+                    "const": false
+                  }
+                },
+                "required": [
+                  "explanation_postable"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "posting"
+            ]
+          },
+          "then": {
+            "properties": {
+              "posting": {
+                "required": [
+                  "not_postable_reason"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "evidence_level": {
+                "const": "suspicion"
+              }
+            },
+            "required": [
+              "evidence_level"
+            ]
+          },
+          "then": {
+            "properties": {
+              "posting": {
+                "properties": {
+                  "explanation_postable": {
+                    "const": false
+                  }
+                },
+                "required": [
+                  "explanation_postable"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "posting": {
+                "properties": {
+                  "post_policy": {
+                    "const": "local_only"
+                  }
+                },
+                "required": [
+                  "post_policy"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "posting"
+            ]
+          },
+          "then": {
+            "properties": {
+              "posting": {
+                "required": [
+                  "audience"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "severity_disputed": {
+                "const": true
+              }
+            },
+            "required": [
+              "severity_disputed"
+            ]
+          },
+          "then": {
+            "required": [
+              "severity_by_source",
+              "merger_rule_applied",
+              "verifier_required"
+            ]
+          }
+        }
+      ]
+    },
+    "category": {
+      "description": "Stable category used as a fingerprint input. Free-form category variants are not allowed in M1; put nuance in category_label/title/problem instead.",
+      "enum": [
+        "bug",
+        "security",
+        "performance",
+        "tests",
+        "design",
+        "code_quality",
+        "consistency",
+        "runtime_error"
+      ]
+    },
+    "fingerprint": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "Deterministic lowercase hex SHA-256. Compute lowercase_hex(sha256(path + U+001F + category + U+001F + normalized_title + U+001F + primary_symbol_or_empty)); normalized_title = title normalized with Unicode NFKC, Unicode lowercase, whitespace collapsed to one ASCII space, trimmed, and trailing Unicode punctuation (General Category P*) removed followed by a final right trim; primary_symbol = trimmed first back-ticked symbol in title, or empty string. In M1, id must equal fingerprint."
+    }
+  }
+}

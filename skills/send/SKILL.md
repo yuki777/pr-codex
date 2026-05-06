@@ -8,11 +8,12 @@ allowed-tools: ["Bash", "Read", "Write", "Glob", "Grep"]
 
 # pr-codex-send
 
-`/pr-codex:review` が生成した統合レビュー (`review.md`) を該当 GitHub PR にレビューコメントとして投稿し、処理済みディレクトリを `~/claude-loop-pr-codex/sent/` に移動する。
+`/pr-codex:review` が生成した canonical findings (`findings.verified.json`) と統合レビュー (`review.md`) を使って GitHub PR にレビューコメントを投稿し、処理済みディレクトリを `~/claude-loop-pr-codex/sent/` に移動する。
 
 ## 前提
 
 - `/pr-codex:review` が先に実行されており、`~/claude-loop-pr-codex/<org>-<repository>-<pr_number>/` 配下に `status.json` (`state:completed`) / `metadata.json` / `review.md` が揃っている
+- `findings.verified.json` があればそれを **一次入力** とし、`review.md` parser は fallback としてのみ使う
 - GitHub CLI (`gh`) がログイン済みで、対象 PR にレビュー投稿権限がある (`gh auth status` で確認可能)
 - `jq` が利用可能
 
@@ -69,29 +70,118 @@ test -f ~/claude-loop-pr-codex/$candidate/review.md
 ### Step 2: メタデータとレビューの読み込み
 
 - いつ使うか: `$dir_name` が確定した直後に実行する
-- 判定条件: 標準出力に `org=` / `repository=` / `pr_number=` / `pr_url=` / `head_sha=` / `title=` の 6 行が返る
-- 次アクション: 各値をそれぞれ `$org`, `$repository`, `$pr_number`, `$pr_url`, `$head_sha`, `$title` として保持し、`review.md` の Read へ進む
+- 判定条件: 標準出力に `org=` / `repository=` / `repository_full_name=` / `pr_number=` / `pr_url=` / `head_sha=` / `base_sha=` / `title=` の 8 行が返る
+- 次アクション: 各値をそれぞれ `$org`, `$repository`, `$repository_full_name`, `$pr_number`, `$pr_url`, `$head_sha`, `$base_sha`, `$title` として保持し、`review.md` の Read へ進む
 
 ```bash
-jq -r '"org=\(.org)\nrepository=\(.repository)\npr_number=\(.pr_number)\npr_url=\(.pr_url)\nhead_sha=\(.head_sha)\ntitle=\(.title)"' ~/claude-loop-pr-codex/$dir_name/metadata.json
+jq -r '"org=\(.org)\nrepository=\(.repository)\nrepository_full_name=\(.repository_full_name)\npr_number=\(.pr_number)\npr_url=\(.pr_url)\nhead_sha=\(.head_sha)\nbase_sha=\(.base_sha)\ntitle=\(.title)"' ~/claude-loop-pr-codex/$dir_name/metadata.json
 ```
 
 続いて `review.md` を Read ツールで取得する。`file_path` は `~` を `$HOME` の実値に展開した絶対パスで渡す（例: `/Users/adachi/claude-loop-pr-codex/$dir_name/review.md` の `$dir_name` と `/Users/adachi` をいずれも実値に置換してから呼び出す）。
 
-### Step 3: `review.md` の解析
+- いつ使うか: `review.md` を読み込んだ直後に実行する
+- 判定条件: `findings.verified.json` が存在するなら終了コード 0
+- 次アクション: 存在するなら `findings.verified.json` を Read ツールで取得して Step 3 の primary path へ。存在しなければ Step 3b の Markdown fallback へ
 
-Claude 側で本文をメモリ上で以下のセクションに分解する。シェルでのパースは行わない。
+```bash
+test -f ~/claude-loop-pr-codex/$dir_name/findings.verified.json
+```
 
-- `## 総評` 直下の本文 → `$summary`（後続セクション見出しの直前まで。前後の空行はトリム）
-- `## 良い点` 直下の本文 → `$good_points`（同様にトリム）
+### Step 2.5: plugin root / schema / validator path の解決
+
+primary / fallback のどちらへ進む場合も、Step 4.5 の Codex セルフレビューで `{SCHEMA_PATH}` / `{VALIDATOR_PATH}` を絶対パスへ置換できるよう、ここで `schema_path` と `validator_path` を保持する。`findings.verified.json` が存在する primary path では同じ値を Step 3 の同梱 validator 実行にも使う。`$CLAUDE_PLUGIN_ROOT` が未設定・不明な場合は review skill と同じ手順（`echo "$CLAUDE_PLUGIN_ROOT"`、空なら `**/pr-codex/skills/review/REVIEW_CRITERIA.md` の探索結果から plugin root を逆算）で絶対パスを確定する。
+
+保持する値:
+
+- `schema_path = <plugin-root>/schemas/findings.v1.json`
+- `validator_path = <plugin-root>/tasks/validate_findings.py`
+
+### Step 3: `findings.verified.json` の解析 (primary)
+
+`findings.verified.json` が存在する場合、**これを一次情報源**として payload を組み立てる。`review.md` は `## 総評` / `## 良い点` の本文取得と、Must Fix 件数 gate の確認にだけ使う。まず Step 2.5 で保持した `validator_path` / `schema_path` を使い、`findings.verified.json` がその schema に適合するかを review 側と同じ同梱 validator で外部検証してから抽出へ進む。
+
+#### 同梱 validator コマンド
+
+- いつ使うか: `findings.verified.json` が存在する primary path の開始直後、JSON 抽出や payload 生成の前に必ず実行する
+- 判定条件: 終了コード 0
+- 次アクション: 成功なら Read ツールで `findings.verified.json` を読み Step 3 の抽出へ進む。失敗ならユーザーに通知して中断し、Markdown fallback へは切り替えない
+- `$CLAUDE_PLUGIN_ROOT` が shell 環境で未設定の場合は、Step 2.5 で保持した `validator_path` / `schema_path` の実値へ置換してから Bash ツールへ渡す。Step 4.5 のプロンプトにも同じ絶対パスを埋め込む
+
+```bash
+python3 $validator_path --schema $schema_path --data ~/claude-loop-pr-codex/$dir_name/findings.verified.json --metadata ~/claude-loop-pr-codex/$dir_name/metadata.json
+```
+
+Claude 側でメモリ上に以下を抽出する:
+
+- `review.md` から:
+  - `## 総評` 直下の本文 → `$summary`（後続セクション見出しの直前まで。前後の空行はトリム）
+  - `## 良い点` 直下の本文 → `$good_points`（同様にトリム）
+  - `## 重大な問題 (Must Fix)` 配下の `### ...` 見出し数 → `$must_fix_markdown_count`
+- `findings.verified.json` から:
+  - ファイルが空でないこと、JSON parse に成功すること、top-level が object であること
+  - top-level `schema_version` が **`findings.v1`** であること
+  - top-level `findings` フィールドが存在し、array であること
+  - 上記同梱 validator による `schemas/findings.v1.json` validation を通ること
+  - top-level `pr.repository` / `pr.number` / `pr.head_sha` / `pr.base_sha` が `metadata.json.repository_full_name` / `metadata.json.pr_number` / `metadata.json.head_sha` / `metadata.json.base_sha` と一致し、`metadata.json.repository_full_name == "$org/$repository"` で投稿先 repo と一致すること
+  - すべての finding で `id == fingerprint` が成り立ち、同梱 validator が正準アルゴリズムで再計算した fingerprint と一致すること
+  - `findings[]` のうち `severity == "must_fix"` の要素を `$must_fix` 配列として抽出する
+  - M1 の投稿 contract として、`severity != "must_fix"` の finding に `posting.post_policy == "inline"` が含まれないことを確認する
+
+#### `findings.verified.json` から抽出するフィールド
+
+各 Must Fix finding から以下を payload 用に組み立てる:
+
+| 出力キー        | 値 |
+| --------------- | --- |
+| `path`          | `location.path` |
+| `line`          | `location.end_line` があればその値、なければ `location.start_line` |
+| `start_line`    | `location.end_line` がある場合のみ `location.start_line` |
+| `side`          | `location.side` が `"RIGHT"` であることを確認したうえで `"RIGHT"` |
+| `start_side`    | `location.end_line` がある場合のみ `"RIGHT"` |
+| `body`          | 下の Must Fix body フォーマット |
+| `heading_markdown` | ``### `path:L<行番号>` `` または ``### `path:L<開始>-L<終了>` `` |
+| `source_finding_id` | finding の `id` |
+
+#### primary path の必須ガード
+
+- `findings.verified.json` が空 / JSON parse 失敗 / top-level object でない / `findings[]` 不在または非配列 / 同梱 validator による `schemas/findings.v1.json` validation / fingerprint 再計算 / format / range validation 失敗 / `id != fingerprint` のいずれかなら、ユーザーに通知して **中断** する（fallback へは切り替えない）
+- `findings.verified.json.pr.repository != metadata.json.repository_full_name`、`findings.verified.json.pr.number != metadata.json.pr_number`、`findings.verified.json.pr.head_sha != metadata.json.head_sha`、`findings.verified.json.pr.base_sha != metadata.json.base_sha`、または `metadata.json.repository_full_name != "$org/$repository"` のいずれかなら、canonical artifact が投稿先 PR と一致しないため **中断** する（fallback へは切り替えない）
+- `severity == "must_fix"` の finding は、M1 では **`posting.post_policy == "inline"` かつ `posting.explanation_postable == true`** のものだけを自動投稿対象として扱う
+- `severity != "must_fix"` の finding に `posting.post_policy == "inline"` が 1 件でもあれば、review 側の M1 posting contract 違反として **中断** する（fallback へは切り替えない）。M1 では `should_fix` / `nit` / `note` は inline 自動投稿対象外であり、`body_summary` / `local_only` / `suppress` のいずれかで表現する
+- `severity == "must_fix"` の finding で `location.side != "RIGHT"` が 1 件でもあれば、現 workflow の `pr.diff.ranges.txt` が head/new 側前提のため **中断** する（fallback へは切り替えない）
+- `must_fix` なのに `posting.post_policy` が `body_summary` / `local_only` / `suppress` のもの、または `posting.explanation_postable == false` のものが 1 件でもあれば、GitHub payload へ安全に変換できないため **中断** する（fallback へは切り替えない）
+- `findings.verified.json` が存在する場合、`$must_fix` の件数と `$must_fix_markdown_count` が **完全一致** しなければ中断する。人手で `review.md` が編集された、または review 側の派生生成が壊れている可能性があるため、fallback へは切り替えない
+
+#### `body` のフォーマット
+
+Must Fix:
+
+```
+🚨 **Must Fix**
+
+- 問題: <problem>
+- 理由: <reason>
+- 提案: <suggestion>
+```
+
+#### 空セクションの扱い
+
+- `$must_fix` が空配列になっても構わない
+- `$good_points` が空文字列なら body から `## 良い点` セクションを省略する
+- `$summary` が空になることは想定しない（`/pr-codex:review` のテンプレートで必ず出力されるため）。万一空ならユーザーに通知して処理を中断する
+
+Step 3.5 で範囲外コメントをレビュー body 末尾へ退避するため、各 finding について `heading_markdown` と `body`（GitHub API 用に整形する前の元情報）も Claude 側のメモリ上に保持する。
+
+### Step 3b: `review.md` の解析 (fallback)
+
+`findings.verified.json` が存在しない場合のみ、移行期間の fallback として従来どおり `review.md` をパースする。シェルでのパースは行わない。
+
+- `## 総評` 直下の本文 → `$summary`
+- `## 良い点` 直下の本文 → `$good_points`
 - `## 重大な問題 (Must Fix)` 配下の各 `### \`path:L行番号\`` ブロック → `$must_fix` 配列
-- それ以外のセクション（`## 改善提案 (Should Fix)` / `## 軽微な指摘 (Nit)` / `## 補足`）はすべて**投稿対象外**。`$must_fix` 以外の配列は作らない。`review.md` にはそのまま残るのでユーザーが必要に応じて参照する。
+- それ以外のセクション（`## 改善提案 (Should Fix)` / `## 軽微な指摘 (Nit)` / `## 補足`）はすべて**投稿対象外**
 
-#### 指摘ブロックの構造
-
-以下の構造は `## 重大な問題 (Must Fix)` セクション内の `### path:L<行番号>` ブロックにのみ適用する。Should Fix / Nit セクションは投稿対象外のため、ブロックを抽出する必要はない。
-
-各指摘ブロックは以下のフォーマット:
+各指摘ブロックの構造と抽出ルールは従来どおり以下とする:
 
 ```markdown
 ### `path/to/file.ext:L<行番号>` (もしくは `path/to/file.ext:L<開始>-L<終了>`)
@@ -101,8 +191,6 @@ Claude 側で本文をメモリ上で以下のセクションに分解する。�
 - 提案: <提案文>
 ```
 
-ここから抽出するフィールド:
-
 | 出力キー        | 値                                                                 |
 | --------------- | ------------------------------------------------------------------ |
 | `path`          | 見出し内のバッククォート直後からコロン `:L` 直前までの文字列       |
@@ -110,35 +198,15 @@ Claude 側で本文をメモリ上で以下のセクションに分解する。�
 | `start_line`    | 範囲指定時のみ。`L<開始>` の数値                                   |
 | `side`          | 常に `"RIGHT"` を付与 (review.md の行番号は head 基準であるため)   |
 | `start_side`    | 範囲指定時のみ `"RIGHT"`                                           |
-| `body`          | 下のフォーマットで組み立てた文字列                                 |
-
-#### `body` のフォーマット
-
-Must Fix:
-
-```
-🚨 **Must Fix**
-
-- 問題: <問題文>
-- 理由: <理由文>
-- 提案: <提案文>
-```
-
-#### 行番号ヘッダが壊れているブロックの扱い
+| `body`          | 上の Must Fix body フォーマット                                    |
 
 見出しに `:L<番号>` が欠落している、もしくは空のコードブロック (`` ### `` 以降が空) のブロックは**除外**する。GitHub API はこれらを 422 で拒否するため、payload に含めない。
 
-#### 空セクションの扱い
-
-- `$must_fix` が空配列になっても構わない
-- `$good_points` が空文字列なら body から `## 良い点` セクションを省略する
-- `$summary` が空になることは想定しない（`/pr-codex:review` のテンプレートで必ず出力されるため）。万一空ならユーザーに通知して処理を中断する
-
-Step 3.5 で範囲外コメントをレビュー body 末尾へ退避するため、各指摘ブロックの元の見出し行と本文（GitHub API 用に整形する前の Markdown）も Claude 側のメモリ上に保持する。
+fallback path でも Step 3.5 用に、各指摘ブロックの元の見出し行と本文（GitHub API 用に整形する前の Markdown）を Claude 側のメモリ上に保持する。
 
 ### Step 3.5: 行範囲検証
 
-GitHub Reviews API は PR diff の新ファイル側 hunk 範囲外の `line` を 422 `Line could not be resolved` で拒否するため、payload 構築前に `pr.diff` からコメント可能行範囲を抽出し、インラインコメント候補を検証する。
+GitHub Reviews API は PR diff の新ファイル側 hunk 範囲外の `line` を 422 `Line could not be resolved` で拒否するため、payload 構築前に `pr.diff` からコメント可能行範囲を抽出し、Step 3/3b で得たインラインコメント候補を検証する。
 
 - いつ使うか: Step 3 で `$must_fix` 配列を作成した直後、Step 4 の payload 構築前に必ず実行する
 - 判定条件: `pr.diff.ranges.txt` が作成される
@@ -175,7 +243,7 @@ awk '
 - 除外したエントリを `$out_of_range_comments` 配列として保持する
 - `$out_of_range_comments` には、元の見出し行、元の本文、種別 (`Must Fix`) を保持する
 - Step 4 のレビュー body 末尾に `## 行コメント不可 (diff 範囲外)` セクションを追加し、除外した各エントリの元の見出し行と本文を転記する
-- 除外後の `$must_fix` の相対順は、元の review.md の登場順を保つ
+- 除外後の `$must_fix` の相対順は、`findings.verified.json` がある場合はその配列順、fallback 時は元の `review.md` の登場順を保つ
 
 既存の正常系 PR で全指摘が範囲内の場合、`$out_of_range_comments` は空配列となり、Step 4 以降の payload は従来と同じ内容になる。
 
@@ -211,7 +279,7 @@ awk '
     - 理由: <理由文>
     - 提案: <提案文>
     ```
-- `comments`: `$must_fix` 配列のみ（元の登場順を保つ）。各要素は以下のキーを含む:
+- `comments`: `$must_fix` 配列のみ（`findings.verified.json` がある場合はその順序、fallback 時は元の登場順を保つ）。各要素は以下のキーを含む:
   - `path` (必須)
   - `line` (必須)
   - `side` (`"RIGHT"`)
@@ -224,25 +292,29 @@ payload は Write ツールで `~/claude-loop-pr-codex/$dir_name/review-payload.
 
 ### Step 4.5: 投稿前 Codex セルフレビュー
 
-Claude が生成した `review-payload.json` を Codex CLI に独立検証させ、Must Fix 以外の混入や行範囲外コメントを検出する。Step 5（承認プロンプト）の直前で必ず実行する。
+Claude が生成した `review-payload.json` を Codex CLI に独立検証させ、`findings.verified.json`（存在する場合）または `review.md` fallback との不整合、Must Fix 以外の混入、schema/side 違反、行範囲外コメントを検出する。Step 5（承認プロンプト）の直前で必ず実行する。`findings.verified.json` が存在する場合は、検証プロンプトに `$CLAUDE_PLUGIN_ROOT/schemas/findings.v1.json` の**絶対パス**（Step 3 で解決した `schema_path`）と同梱 validator の絶対パス（`validator_path`）を埋め込み、`--cd ~/claude-loop-pr-codex/$dir_name` 配下に `schemas/` が無くても Codex が schema 実体を読めるようにする。
 
 #### 検証観点
 
 Codex は以下の観点で payload を確認する:
 
-1. `payload.comments[]` の各要素が `review.md` の `## 重大な問題 (Must Fix)` セクション内の `### path:L<行番号>` 見出しに対応するか
-2. `## 改善提案 (Should Fix)` / `## 軽微な指摘 (Nit)` / `## 補足` セクション由来のエントリが混入していないか
+1. `findings.verified.json` が存在する場合は `payload.comments[]` の各要素が `findings[].severity == "must_fix"` の finding に対応し、存在しない場合は `review.md` の `## 重大な問題 (Must Fix)` セクション内の `### path:L<行番号>` 見出しに対応するか
+2. `findings.verified.json` が存在する場合は `should_fix` / `nit` / `note` finding が、fallback 時は `## 改善提案 (Should Fix)` / `## 軽微な指摘 (Nit)` / `## 補足` セクション由来のエントリが混入していないか
 3. 各 `comments[]` の `path` が `metadata.json.files[]` に含まれるか
 4. 各 `comments[]` の `path` と `line`（および `start_line`）が `pr.diff.ranges.txt` の同一 path の hunk 範囲内に収まるか
 5. `event` が「Must Fix が1件以上→REQUEST_CHANGES / 0件→COMMENT」ルールに従っているか
 6. `body` の冒頭が `review.md` の `## 総評` セクション本文と一致するか
 7. `body` 中に `## 良い点` セクションがあれば、`review.md` の `## 良い点` 本文と一致するか
+8. `findings.verified.json` が存在する場合、そこにある Must Fix 件数と `review.md` の Must Fix 見出し件数が一致するか
+9. `findings.verified.json` が存在する場合、`schema_path` / `validator_path` の実体を読んで同梱 validator validation を通っており、Must Fix に `location.side != RIGHT` が混入していないか
+10. `findings.verified.json` が存在する場合、全 finding で `id == fingerprint` が成り立ち、正準 fingerprint 再計算値とも一致するか
 
 #### コマンド
 
 - いつ使うか: Step 4 で `review-payload.json` を生成した直後、Step 5 の承認プロンプト前に必ず実行する
-- 判定条件: 標準出力に `VERDICT: PASS` または `VERDICT: FAIL` の行が含まれる
+- 判定条件: 標準出力に VERDICT: PASS または VERDICT: FAIL の行が含まれる
 - 次アクション: PASS なら Step 5 へ進む。FAIL なら標準出力の指摘内容を読み取り、payload を再生成して再度本ステップを実行する（最大 3 回まで）。3 回連続 FAIL なら処理中断してユーザーへ通知
+- `{SCHEMA_PATH}` は Step 2.5 で保持した `schema_path`、`{VALIDATOR_PATH}` は `validator_path` の絶対パスに置換される。Bash ツールに渡す前に Claude 側で prompt 内の両プレースホルダを絶対パス文字列へ置換する
 
 ```bash
 codex --ask-for-approval never exec \
@@ -256,21 +328,28 @@ codex --ask-for-approval never exec \
 あなたは GitHub PR レビュー投稿前の独立検証エージェントです。Claude が生成した review-payload.json を読み、以下の観点で検証してください。判定が完了したら PASS / FAIL のいずれかを最終行に明記してください。
 
 目的は、GitHub Reviews API に投稿する直前の payload から、Must Fix 以外の混入・範囲外コメント・event 判定ミスを検出して誤投稿を防ぐことです。
-完了条件は、検証対象ファイルをすべて読み、各観点の PASS / FAIL 理由を示し、最終行に `VERDICT: PASS` または `VERDICT: FAIL` を単独で出力することです。
+完了条件は、検証対象ファイルをすべて読み、各観点の PASS / FAIL 理由を示し、最終行に VERDICT: PASS または VERDICT: FAIL を単独で出力することです。
 
 ## 検証対象ファイル
 - review-payload.json: 投稿予定の GitHub Reviews API payload
+- findings.verified.json: canonical findings（存在する場合のみ source of truth）
+- {SCHEMA_PATH}: canonical findings schema（絶対パス。存在する場合のみ findings validation に使う）
+- {VALIDATOR_PATH}: 同梱 validator（絶対パス。存在する場合のみ findings validation に使う）
 - review.md: 統合レビューの全文
 - pr.diff.ranges.txt: コメント可能な hunk 範囲一覧
 - metadata.json: 対象 PR のメタデータ（files 配列を含む）
 
 ## 検証観点
-1. payload.comments[] の各要素が review.md の '## 重大な問題 (Must Fix)' セクション内の '### path:L<行番号>' 見出しに対応すること。Must Fix セクション以外（'## 改善提案 (Should Fix)' / '## 軽微な指摘 (Nit)' / '## 補足'）由来のエントリが含まれていないこと
+1. findings.verified.json が存在する場合は payload.comments[] の各要素が findings[].severity == 'must_fix' の finding に対応すること。存在しない場合は review.md の '## 重大な問題 (Must Fix)' セクション内の '### path:L<行番号>' 見出しに対応すること。Must Fix 以外（findings の should_fix / nit / note、または review.md の '## 改善提案 (Should Fix)' / '## 軽微な指摘 (Nit)' / '## 補足'）由来のエントリが含まれていないこと。findings.verified.json が存在する場合は、M1 posting contract として severity != 'must_fix' の finding に posting.post_policy == 'inline' が含まれていないことも確認する
 2. payload.comments[] の各 path が metadata.json.files[] に含まれること
 3. payload.comments[] の各エントリで、path と line（および start_line）が pr.diff.ranges.txt の同一 path の hunk 範囲内に収まること（複数行は両端が同一 hunk）
 4. payload.event が 'Must Fix が1件以上 → REQUEST_CHANGES / 0件 → COMMENT' のルールに従うこと
 5. payload.body の冒頭が review.md の '## 総評' セクション本文と一致すること（先頭・末尾の空白を除く）
 6. payload.body 中の '## 良い点' セクションがある場合、review.md の '## 良い点' 本文と一致すること
+7. findings.verified.json が存在する場合、そこにある Must Fix 件数と review.md の Must Fix 見出し件数が一致すること
+8. findings.verified.json が存在する場合、top-level pr.repository / pr.number / pr.head_sha / pr.base_sha が metadata.json の repository_full_name / pr_number / head_sha / base_sha と一致し、metadata.json.repository_full_name が投稿先 org/repository と一致すること
+9. findings.verified.json が存在する場合、絶対パス {SCHEMA_PATH} の schema 実体と {VALIDATOR_PATH} の validator 実体を読み、可能なら python3 {VALIDATOR_PATH} --schema {SCHEMA_PATH} --data findings.verified.json --metadata metadata.json を実行して適合していることを確認する。実行できない場合も同梱 validator と同じ条件（required / enum / additionalProperties / allOf / if/then / format / range / fingerprint 再計算 / metadata.json との PR context 一致）で手動検証し、Must Fix finding の location.side がすべて RIGHT であることを確認する。schema または validator 実体を読めない場合は PASS ではなく FAIL とする
+10. findings.verified.json が存在する場合、全 finding で id == fingerprint が成り立ち、同梱 validator と同じ正準アルゴリズムで再計算した fingerprint と一致すること
 
 ## 出力フォーマット
 最初に各観点の検証結果を箇条書きで列挙し、最終行に必ず以下のいずれかを単独で出力してください:
@@ -304,6 +383,7 @@ FAIL の場合は VERDICT: FAIL の直前に '違反一覧' セクションを�
 ```
 対象 PR: <$pr_url> (<$title>)
 event: <REQUEST_CHANGES | COMMENT>
+findings source: ~/claude-loop-pr-codex/<$dir_name>/findings.verified.json (fallback 時のみ review.md parser)
 review file: ~/claude-loop-pr-codex/<$dir_name>/review.md
 body プレビュー:
   <$summary の先頭 200 文字。長ければ "..." で省略>
@@ -389,6 +469,13 @@ mv ~/claude-loop-pr-codex/$dir_name ~/claude-loop-pr-codex/sent/$dir_name
 ## エラーハンドリング
 
 - 対象ディレクトリなし → 「投稿対象の completed レビューなし」と報告して正常終了（非エラー）
+- `findings.verified.json` が空 / JSON parse 失敗 / top-level object でない / `findings[]` 不在または非配列 → ユーザーに通知して処理中断（fallback へは切り替えない、`sent/` 移動もしない）
+- `findings.verified.json` が存在するのに `schema_version != findings.v1` → ユーザーに通知して処理中断
+- `findings.verified.json` の schema / fingerprint validation が同梱 validator + `schemas/findings.v1.json` で失敗 → ユーザーに通知して処理中断（fallback へは切り替えない）
+- `findings.verified.json.pr.*` が `metadata.json` の投稿先 repo / PR number / head/base SHA と一致しない → ユーザーに通知して処理中断（fallback へは切り替えない）
+- `findings.verified.json` の Must Fix 件数と `review.md` の Must Fix 見出し件数が不一致 → ユーザーに通知して処理中断（fallback へは切り替えない）
+- `findings.verified.json` の Must Fix に `location.side != RIGHT` が含まれる → ユーザーに通知して処理中断（M1 では old-side 投稿を扱わない）
+- `findings.verified.json` の Must Fix に `posting.post_policy != inline` または `explanation_postable != true` が含まれる → ユーザーに通知して処理中断（M1 では安全に自動投稿しない）
 - `review.md` に Must Fix が一件も無い → それでも `event: COMMENT` + body (総評 + 良い点) のみで投稿する（インラインコメント配列は空）
 - `review.md` の `## 総評` セクションが空 or 見つからない → ユーザーに通知して処理中断。`sent/` 移動は行わない
 - Step 3.5 で `pr.diff.ranges.txt` が空 → インラインコメント候補はすべて body 末尾の `## 行コメント不可 (diff 範囲外)` に移動し、`comments` 配列には含めない
@@ -402,13 +489,15 @@ mv ~/claude-loop-pr-codex/$dir_name ~/claude-loop-pr-codex/sent/$dir_name
 1. 各テンプレートは 1 テンプレート = 1 シェル実行単位として扱う
 2. テンプレートの改変は変数置換のみ許可する。フラグ、引数順、引用符、リダイレクトはテンプレート記載どおりに使う
 3. シェル演算子はテンプレート中に明示された `|` `<` `>` `2>` `&&` のみ許可する
-4. payload JSON の生成は Write ツールで行う（`jq -n` によるインラインでの複雑な配列組み立ては使わない）
-5. `$()` / `for` / `while` / `xargs` / ヒアドキュメントは使わない
-6. `mv` は `sent/` への移動以外では使わない
-7. `gh` の write 系操作は `gh api --method POST .../reviews` のみとし、`gh pr review` / `gh pr comment` / `gh pr merge` などは使わない
-8. 1 回の実行で処理する対象ディレクトリは 1 件のみとする
-9. 投稿前の Step 5 承認プロンプトは必須。自動投稿はしない
-10. Step 4.5 の Codex セルフレビューは **必須**。スキップしてはならない。`VERDICT: PASS` を確認するまで Step 5 に進まない
+4. `findings.verified.json` が存在する場合はそれを payload の一次入力とし、`review.md` parser は fallback に限定する。parse failure / shape failure / validator failure / `location.side != RIGHT` / 件数不一致 / posting policy 不整合時に fallback へ自動切替してはならない
+5. payload JSON の生成は Write ツールで行う（`jq -n` によるインラインでの複雑な配列組み立ては使わない）
+6. `$()` / `for` / `while` / `xargs` / ヒアドキュメントは使わない
+7. `mv` は `sent/` への移動以外では使わない
+8. `gh` の write 系操作は `gh api --method POST .../reviews` のみとし、`gh pr review` / `gh pr comment` / `gh pr merge` などは使わない
+9. 1 回の実行で処理する対象ディレクトリは 1 件のみとする
+10. 投稿前の Step 5 承認プロンプトは必須。自動投稿はしない
+11. `findings.verified.json` が存在する場合は Step 3 の `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings.py ...` を **必ず**実行する。validator 失敗時に payload 生成や Markdown fallback へ進んではならない
+12. Step 4.5 の Codex セルフレビューは **必須**。スキップしてはならない。`VERDICT: PASS` を確認するまで Step 5 に進まない。schema 検証観点では `$CLAUDE_PLUGIN_ROOT/schemas/findings.v1.json` の絶対パスを prompt に埋め込み、`--cd` 配下の相対 `schemas/` には依存しない
 
 ## ファイル構成
 
@@ -417,6 +506,8 @@ mv ~/claude-loop-pr-codex/$dir_name ~/claude-loop-pr-codex/sent/$dir_name
 ```
 $CLAUDE_PLUGIN_ROOT/skills/send/
   └── SKILL.md                ← 本ファイル
+$CLAUDE_PLUGIN_ROOT/tasks/
+  └── validate_findings.py    ← primary path の schema / fingerprint / format / range validator
 ```
 
 実行時の作業ディレクトリ (投稿前):
@@ -426,6 +517,8 @@ $CLAUDE_PLUGIN_ROOT/skills/send/
   └── $org-$repository-$pr_number/
         ├── status.json            ← state:completed
         ├── metadata.json
+        ├── findings.verified.json  ← primary input (`schemas/findings.v1.json`)
+        ├── validation-report.json  ← review 側の副成果物（あれば保持）
         ├── review.md              ← 投稿元
         ├── pr.diff
         ├── pr.diff.ranges.txt     ← Step 3.5 で生成するコメント可能行範囲
@@ -445,6 +538,8 @@ $CLAUDE_PLUGIN_ROOT/skills/send/
         └── $org-$repository-$pr_number/
               ├── status.json
               ├── metadata.json
+              ├── findings.verified.json
+              ├── validation-report.json
               ├── review.md
               ├── review-payload.json    ← 追加: 投稿した payload
               ├── review-response.json   ← 追加: gh api のレスポンス (.html_url 等を含む)
