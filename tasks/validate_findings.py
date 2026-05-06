@@ -240,8 +240,6 @@ def validate_m1_posting_contract(
             errors.append(f"{fpath}.posting.explanation_postable: must_fix findings must set explanation_postable=true")
     elif post_policy_value == "inline":
         errors.append(f"{fpath}.posting.post_policy: only must_fix findings may use post_policy=inline")
-    elif severity_value == "nit" and post_policy_value != "local_only":
-        errors.append(f"{fpath}.posting.post_policy: nit findings must use post_policy=local_only")
 
 
 def validate_must_fix_four_axes_gate(

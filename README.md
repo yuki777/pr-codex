@@ -84,13 +84,20 @@ cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
 
 1. `~/claude-loop-pr-codex/` 配下から `status.json` が `state:completed` でかつ `review.md` が存在するディレクトリを1件選定する（名前昇順の先頭1件）
 2. `findings.verified.json` を一次入力として `Must Fix` を抽出し、`review.md` から `## 総評` / `## 良い点` を body に使う（移行期間は Markdown parser を fallback として残すが、`findings.verified.json` が存在するのに Must Fix 件数が `review.md` と一致しない場合は中断する）
-3. GitHub Reviews API への payload サマリをユーザーに提示し、明示的な承認を得る
-4. 承認後、`gh api --method POST .../reviews` で投稿（`event` は Must Fix ありなら `REQUEST_CHANGES`、なければ `COMMENT`。`APPROVE` は自動では出さない）
-5. 投稿成功後、対象ディレクトリを `~/claude-loop-pr-codex/sent/$org-$repo-$pr-$head_sha_short/` に移動する（同一 PR でも HEAD 更新後の再投稿履歴が衝突しないよう、`head_sha` の先頭 7 文字を suffix に付ける）
+3. `Should Fix` のうち `post_policy: body_summary` の候補がある場合、上位 3 件を body の `## 非ブロッキング改善 (Should Fix)` に含めるかを確認する（default: no）
+4. `Nit` は PR に投稿せず、primary path では `nits.md` にローカル artifact として書き出す（0 件なら作成しない）
+5. GitHub Reviews API への payload サマリをユーザーに提示し、明示的な承認を得る
+6. 承認後、`gh api --method POST .../reviews` で投稿（`event` は Must Fix ありなら `REQUEST_CHANGES`、なければ `COMMENT`。`APPROVE` は自動では出さない）
+7. 投稿成功後、対象ディレクトリを `~/claude-loop-pr-codex/sent/$org-$repo-$pr-$head_sha_short/` に移動する（同一 PR でも HEAD 更新後の再投稿履歴が衝突しないよう、`head_sha` の先頭 7 文字を suffix に付ける）
 
 `/loop` には載せず、対話実行で使う。1回の実行で1件のみ処理する。
 
-投稿ポリシーは低ノイズを既定にする。Must Fix は従来どおり inline review comment として投稿する。Should Fix はデフォルトではローカルのみで、明示 opt-in した場合だけ上位 3 件を body summary に含める。Nit は nits.md ローカル artifact のみで、GitHub には投稿しない。
+### Should Fix / Nit の取り扱い
+
+- `Must Fix` は従来どおり GitHub review の inline comment として投稿される
+- `Should Fix` は自動では投稿されない。手動実行時に `yes` を選ぶと、author が見落としやすい非ブロッキング改善だけを上位 3 件まで PR body に短く同梱できる
+- `Nit` はノイズ抑制のため PR には載せず、`nits.md` に控えとして残す。投稿後は `sent/` 配下の履歴ディレクトリで確認できる
+- `findings.verified.json` がない fallback path では、従来どおり `Should Fix` / `Nit` / 補足を投稿 payload に含めない
 
 ## Hermes Agent 自動化 (Phase 0)
 
@@ -121,13 +128,14 @@ Phase 0 は read-only observer です。GitHub への自動コメント、label/
   │     ├── findings.verified.json # canonical findings (`schemas/findings.v1.json`)
   │     ├── validation-report.json # validation の副成果物（canonical findings とは分離）
   │     ├── review.md             # 統合レビュー（最終成果物）
-  │     ├── nits.md               # Nit ローカル artifact（GitHub には投稿しない）
+  │     ├── nits.md               # Nit がある場合のみ。PR には投稿しない控え
   │     ├── claude.log
   │     └── codex.log
   └── sent/                       # /pr-codex:send で投稿済み
         └── $org-$repo-$pr-$head_sha_short/ # 投稿後にここへ移動される
               ├── findings.verified.json
               ├── review.md
+              ├── nits.md               # Nit があった場合のみ
               ├── review-payload.json   # 投稿した GitHub Reviews API の payload
               ├── review-response.json  # gh api のレスポンス（.html_url 等）
               └── ... (他ファイルも一緒に保管される)

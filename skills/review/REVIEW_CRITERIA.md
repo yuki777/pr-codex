@@ -119,14 +119,6 @@ trigger path が再現できなくても `corroborated` かつ `impact_explained
 `explanation_postable=false` になるが、`verified` でも説明品質が
 低ければ `explanation_postable=false` にできる。
 
-## 非ブロッキング改善 (Should Fix)
-Should Fix は GitHub noise を増やさず signal を残すため、既定では `posting.post_policy=local_only` とする。明示的に body summary へ opt-in する場合だけ `posting.post_policy=body_summary` を使い、Must Fix セクションより下に短く載せられる形式へ整える。
-
-- body summary 候補は上位 3 件まで
-- 1 件あたり 3 行以内
-- 形式は path + 改善内容 1 行 + 提案 1 行 を基本にする
-- Nit は `posting.post_policy=local_only` のままローカル artifact に残し、GitHub には投稿しない
-
 ## 出力フォーマット
 レビュー結果は以下の形式で出力すること:
 
@@ -153,6 +145,16 @@ Should Fix は GitHub noise を増やさず signal を残すため、既定で�
 
 ### 改善提案 (Should Fix)
 修正が強く推奨される問題。同じフォーマットで記載。
+
+#### body summary 整形ルール
+
+`/pr-codex:send` でユーザーが明示 opt-in した場合のみ、`severity == "should_fix" && posting.post_policy == "body_summary"` の finding を PR body の `## 非ブロッキング改善 (Should Fix)` に要約してよい。整形ルールは以下とする:
+
+- 上位 3 件まで。上位判定は `findings.verified.json` の `findings[]` 配列順をそのまま使う
+- 1 件あたり 3 行以内: `path:L<行>`、改善内容 1 行、提案 1 行
+- カテゴリ別グルーピングは行わず、単純な箇条書きにする
+- body 内の配置は `## 良い点` の下、`## 行コメント不可 (diff 範囲外)` の上とする
+- Nit / 補足はこのセクションに混ぜない
 
 ### 軽微な指摘 (Nit)
 スタイルや好みに関する軽微な指摘。簡潔に記載（必ず `path/to/file.ext:L<行番号>` 表記を付与）。
