@@ -292,7 +292,11 @@ def build_breakdown(expected_findings: list[dict[str, Any]], actuals: list[dict[
                 counts["known_bug_matched"] += 1
         target = contributes_to_axes_target(expected, actual)
         exact_ok = axes_exact(expected, actual)
-        acceptable_ok = axes_acceptable(expected, actual) and severity_is_acceptable(expected, actual.get("severity") if actual is not None else None)
+        acceptable_ok = (
+            axes_acceptable(expected, actual)
+            and severity_is_acceptable(expected, actual.get("severity") if actual is not None else None)
+            and evidence_ok(expected, actual)
+        )
         if target:
             counts["axes_target"] += 1
             counts["exact_pass"] += 1 if exact_ok else 0
@@ -355,6 +359,29 @@ def gate_checks(scoring_gate: Any, metrics: dict[str, float]) -> list[dict[str, 
     return checks
 
 
+def validate_fixture_context(expected: dict[str, Any], actual: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    source = expected.get("source")
+    pr = actual.get("pr")
+    if not isinstance(source, dict) or not isinstance(pr, dict):
+        return ["expected.source and actual.pr must be objects"]
+    comparisons = [
+        ("repository", source.get("repository"), pr.get("repository")),
+        ("pr_number", source.get("pr_number"), pr.get("number")),
+        ("base_sha", source.get("base_sha"), pr.get("base_sha")),
+        ("head_sha", source.get("head_sha"), pr.get("head_sha")),
+    ]
+    for label, expected_value, actual_value in comparisons:
+        if expected_value != actual_value:
+            errors.append(f"context.{label}: expected {expected_value!r}, actual {actual_value!r}")
+    if source.get("merge_commit_sha") is not None and pr.get("merge_commit_sha") is not None and source.get("merge_commit_sha") != pr.get("merge_commit_sha"):
+        errors.append(
+            "context.merge_commit_sha: "
+            f"expected {source.get('merge_commit_sha')!r}, actual {pr.get('merge_commit_sha')!r}"
+        )
+    return errors
+
+
 def score_fixture(expected: dict[str, Any], actual: dict[str, Any], evaluated_at: str) -> dict[str, Any]:
     expected_findings = [item for item in expected.get("expected_findings", []) if isinstance(item, dict)]
     actuals = [item for item in actual.get("findings", []) if isinstance(item, dict)]
@@ -412,6 +439,7 @@ def main() -> int:
 
     errors = [f"expected: {error}" for error in validate_expected_findings(expected)]
     errors.extend(f"actual: {error}" for error in validate_findings_artifact(findings_schema, actual))
+    errors.extend(f"context: {error}" for error in validate_fixture_context(expected, actual))
     if errors:
         print("INVALID fixture scoring inputs", file=sys.stderr)
         for error in errors:

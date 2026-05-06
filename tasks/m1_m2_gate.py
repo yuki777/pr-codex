@@ -31,6 +31,11 @@ CRITERIA_ORDER = [
     "loop_completion_rate",
     "fixture_scoring_gate",
 ]
+EXPECTED_FIXTURE_IDS = {
+    "bear-sunday-pr164-small",
+    "bear-sunday-pr143-medium",
+    "bear-sunday-pr171-large",
+}
 
 
 def load_json(path: Path) -> Any:
@@ -46,6 +51,10 @@ def utc_now() -> str:
 
 def is_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def is_rate(value: Any) -> bool:
+    return is_number(value) and 0 <= float(value) <= 1
 
 
 def criterion(name: str, status: str, evidence: dict[str, Any]) -> dict[str, Any]:
@@ -78,11 +87,11 @@ def status_must_fix_consistency(inputs: dict[str, Any]) -> dict[str, Any]:
 def status_step_4_5(inputs: dict[str, Any]) -> dict[str, Any]:
     baseline = inputs.get("step_4_5_pass_rate_baseline")
     current = inputs.get("step_4_5_pass_rate_current")
-    if not is_number(baseline) or not is_number(current):
+    if not is_rate(baseline) or not is_rate(current):
         return criterion(
             "step_4_5_pass_rate",
             "unknown",
-            {"baseline": baseline, "current": current, "reason": "baseline/current missing or invalid"},
+            {"baseline": baseline, "current": current, "reason": "baseline/current missing or not a rate in [0, 1]"},
         )
     threshold = round(float(baseline) - 0.05, 4)
     return criterion(
@@ -104,11 +113,11 @@ def status_run_plan(inputs: dict[str, Any]) -> dict[str, Any]:
 def status_loop_completion(inputs: dict[str, Any]) -> dict[str, Any]:
     baseline = inputs.get("loop_completion_rate_baseline")
     current = inputs.get("loop_completion_rate_current")
-    if not is_number(baseline) or not is_number(current):
+    if not is_rate(baseline) or not is_rate(current):
         return criterion(
             "loop_completion_rate",
             "unknown",
-            {"baseline": baseline, "current": current, "reason": "baseline/current missing or invalid"},
+            {"baseline": baseline, "current": current, "reason": "baseline/current missing or not a rate in [0, 1]"},
         )
     return criterion(
         "loop_completion_rate",
@@ -120,6 +129,11 @@ def status_loop_completion(inputs: dict[str, Any]) -> dict[str, Any]:
 def status_fixture_scoring(score_reports: list[dict[str, Any]]) -> dict[str, Any]:
     if not score_reports:
         return criterion("fixture_scoring_gate", "unknown", {"reason": "no score reports supplied", "records": []})
+    fixture_ids = [report.get("fixture_id") for report in score_reports]
+    duplicate_ids = sorted({fixture_id for fixture_id in fixture_ids if fixture_ids.count(fixture_id) > 1})
+    supplied_ids = {fixture_id for fixture_id in fixture_ids if isinstance(fixture_id, str)}
+    missing_ids = sorted(EXPECTED_FIXTURE_IDS - supplied_ids)
+    unknown_ids = sorted(supplied_ids - EXPECTED_FIXTURE_IDS)
     records = [
         {
             "fixture_id": report.get("fixture_id"),
@@ -130,8 +144,16 @@ def status_fixture_scoring(score_reports: list[dict[str, Any]]) -> dict[str, Any
         }
         for report in score_reports
     ]
-    passed = all(report.get("gate_pass") is True for report in score_reports)
-    return criterion("fixture_scoring_gate", "pass" if passed else "fail", {"records": records})
+    structure_ok = not duplicate_ids and not missing_ids and not unknown_ids
+    passed = structure_ok and all(report.get("gate_pass") is True for report in score_reports)
+    evidence = {"records": records}
+    if missing_ids:
+        evidence["missing_fixture_ids"] = missing_ids
+    if duplicate_ids:
+        evidence["duplicate_fixture_ids"] = duplicate_ids
+    if unknown_ids:
+        evidence["unknown_fixture_ids"] = unknown_ids
+    return criterion("fixture_scoring_gate", "pass" if passed else "fail", evidence)
 
 
 def overall(criteria: list[dict[str, Any]]) -> str:

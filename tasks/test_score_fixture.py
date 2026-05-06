@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import copy
 import subprocess
 import sys
 import tempfile
@@ -16,7 +17,7 @@ SCORE_PATH = TASKS / "score_fixture.py"
 SCORE_SCHEMA_PATH = ROOT / "schemas" / "score-report.v1.json"
 sys.path.insert(0, str(TASKS))
 
-from score_fixture import load_json, score_fixture  # noqa: E402
+from score_fixture import load_json, score_fixture, validate_fixture_context  # noqa: E402
 from validate_score_report import validate_score_report  # noqa: E402
 
 EVALUATED_AT = "2026-05-06T00:00:00Z"
@@ -71,6 +72,44 @@ class ScoreFixtureTest(unittest.TestCase):
         row = report["breakdown"][0]
         self.assertFalse(row["axes_diff"]["impactful"]["actual"] == row["axes_diff"]["impactful"]["expected"])
         self.assertTrue(row["axes_diff"]["impactful"]["acceptable"])
+
+    def test_insufficient_evidence_fails_acceptable_scoring(self) -> None:
+        expected = load_json(ROOT / "fixtures" / "small" / "expected-findings.json")
+        actual = copy.deepcopy(load_json(ROOT / "fixtures" / "small" / "scoring-stubs" / "perfect.findings.verified.json"))
+        finding = actual["findings"][0]
+        finding["severity"] = "nit"
+        finding["evidence_level"] = "suspicion"
+        finding["posting"] = {
+            "post_policy": "local_only",
+            "explanation_postable": False,
+            "not_postable_reason": "low_evidence_suspicion",
+            "audience": "human_reviewer",
+        }
+        report = score_fixture(expected, actual, EVALUATED_AT)
+        self.assertFalse(report["gate_pass"])
+        self.assertEqual(report["acceptable_pass_rate"], 0.0)
+        self.assertFalse(report["breakdown"][0]["evidence_level_ok"])
+
+    def test_score_report_validator_rejects_contradictory_report(self) -> None:
+        report = score("small", "perfect")
+        report["counts"]["acceptable_pass"] = 0
+        report["gate_pass"] = True
+        errors = validate_score_report(report)
+        self.assertTrue(any("acceptable_pass_rate" in error for error in errors))
+        self.assertTrue(any("counts.acceptable_pass" in error for error in errors))
+
+    def test_score_report_validator_rejects_gate_pass_mismatch(self) -> None:
+        report = score("small", "missed-known-bug")
+        report["gate_pass"] = True
+        errors = validate_score_report(report)
+        self.assertIn("$.gate_pass: must equal all(gate_checks[].passed)", errors)
+
+    def test_fixture_context_must_match_before_scoring(self) -> None:
+        expected = load_json(ROOT / "fixtures" / "small" / "expected-findings.json")
+        actual = copy.deepcopy(load_json(ROOT / "fixtures" / "small" / "scoring-stubs" / "perfect.findings.verified.json"))
+        actual["pr"]["number"] = 999
+        errors = validate_fixture_context(expected, actual)
+        self.assertTrue(any("context.pr_number" in error for error in errors))
 
     def test_cli_writes_valid_score_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

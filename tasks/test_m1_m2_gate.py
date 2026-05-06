@@ -52,7 +52,11 @@ class M1M2GateTest(unittest.TestCase):
         self.assertTrue(all(item["status"] == "pass" for item in report["criteria"]))
 
     def test_missing_operational_inputs_are_unknown_not_fail(self) -> None:
-        report = build_report([perfect_score()], {"schema_version": "m1-m2-inputs.v1"}, EVALUATED_AT)
+        report = build_report(
+            [perfect_score("small"), perfect_score("medium"), perfect_score("large")],
+            {"schema_version": "m1-m2-inputs.v1"},
+            EVALUATED_AT,
+        )
         by_name = self.criteria_by_name(report)
         self.assertEqual(by_name["payload_compat_422"]["status"], "unknown")
         self.assertEqual(by_name["fixture_scoring_gate"]["status"], "pass")
@@ -70,7 +74,7 @@ class M1M2GateTest(unittest.TestCase):
             with self.subTest(criterion=criterion):
                 inputs = passing_inputs()
                 inputs.update(mutation)
-                report = build_report([perfect_score()], inputs, EVALUATED_AT)
+                report = build_report([perfect_score("small"), perfect_score("medium"), perfect_score("large")], inputs, EVALUATED_AT)
                 by_name = self.criteria_by_name(report)
                 self.assertEqual(by_name[criterion]["status"], "fail")
                 self.assertEqual(report["overall_status"], "fail")
@@ -79,10 +83,35 @@ class M1M2GateTest(unittest.TestCase):
         expected = load_json(ROOT / "fixtures" / "small" / "expected-findings.json")
         actual = load_json(ROOT / "fixtures" / "small" / "scoring-stubs" / "missed-known-bug.findings.verified.json")
         failing_score = score_fixture(expected, actual, EVALUATED_AT)
-        report = build_report([perfect_score(), failing_score], passing_inputs(), EVALUATED_AT)
+        report = build_report([failing_score, perfect_score("medium"), perfect_score("large")], passing_inputs(), EVALUATED_AT)
         by_name = self.criteria_by_name(report)
         self.assertEqual(by_name["fixture_scoring_gate"]["status"], "fail")
         self.assertEqual(report["overall_status"], "fail")
+
+    def test_fixture_scoring_requires_exact_expected_fixture_set(self) -> None:
+        cases = {
+            "missing": [perfect_score("small"), perfect_score("medium")],
+            "duplicate": [perfect_score("small"), perfect_score("small"), perfect_score("large")],
+            "unknown": [dict(perfect_score("small"), fixture_id="unknown-fixture"), perfect_score("medium"), perfect_score("large")],
+        }
+        for name, score_reports in cases.items():
+            with self.subTest(name=name):
+                report = build_report(score_reports, passing_inputs(), EVALUATED_AT)
+                by_name = self.criteria_by_name(report)
+                self.assertEqual(by_name["fixture_scoring_gate"]["status"], "fail")
+                self.assertEqual(report["overall_status"], "fail")
+
+    def test_impossible_operational_rates_are_unknown_not_pass(self) -> None:
+        inputs = passing_inputs()
+        inputs["step_4_5_pass_rate_baseline"] = 1.5
+        inputs["step_4_5_pass_rate_current"] = 1.46
+        inputs["loop_completion_rate_baseline"] = -0.1
+        inputs["loop_completion_rate_current"] = -0.05
+        report = build_report([perfect_score("small"), perfect_score("medium"), perfect_score("large")], inputs, EVALUATED_AT)
+        by_name = self.criteria_by_name(report)
+        self.assertEqual(by_name["step_4_5_pass_rate"]["status"], "unknown")
+        self.assertEqual(by_name["loop_completion_rate"]["status"], "unknown")
+        self.assertEqual(report["overall_status"], "blocked_by_unknowns")
 
     def test_no_score_reports_makes_fixture_scoring_unknown(self) -> None:
         report = build_report([], passing_inputs(), EVALUATED_AT)
@@ -93,8 +122,11 @@ class M1M2GateTest(unittest.TestCase):
     def test_cli_writes_valid_gate_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
-            score_path = tmp_path / "score-small.json"
-            score_path.write_text(json.dumps(perfect_score(), ensure_ascii=True), encoding="utf-8")
+            score_paths = []
+            for size in ("small", "medium", "large"):
+                score_path = tmp_path / f"score-{size}.json"
+                score_path.write_text(json.dumps(perfect_score(size), ensure_ascii=True), encoding="utf-8")
+                score_paths.append(score_path)
             inputs_path = tmp_path / "m1-m2-inputs.json"
             inputs_path.write_text(json.dumps(passing_inputs(), ensure_ascii=True), encoding="utf-8")
             out = tmp_path / "m1-m2-gate.json"
@@ -103,7 +135,7 @@ class M1M2GateTest(unittest.TestCase):
                     sys.executable,
                     str(GATE_PATH),
                     "--score-reports",
-                    str(score_path),
+                    *[str(path) for path in score_paths],
                     "--inputs",
                     str(inputs_path),
                     "--out",

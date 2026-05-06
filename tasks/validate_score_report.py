@@ -78,6 +78,16 @@ def number_0_1(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= float(value) <= 1
 
 
+def rate(numerator: int, denominator: int, empty_value: float = 1.0) -> float:
+    if denominator == 0:
+        return empty_value
+    return round(numerator / denominator, 4)
+
+
+def int_or_negative(value: Any) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) else -1
+
+
 def is_rfc3339(value: Any) -> bool:
     if not isinstance(value, str) or not value:
         return False
@@ -249,7 +259,88 @@ def validate_score_report(data: Any) -> list[str]:
     validate_counts(errors, data.get("counts"))
     validate_unmatched_actuals(errors, data.get("unmatched_actuals"))
     validate_breakdown(errors, data.get("breakdown"))
+    validate_internal_consistency(errors, data)
     return errors
+
+
+def validate_internal_consistency(errors: list[str], data: dict[str, Any]) -> None:
+    counts = data.get("counts")
+    breakdown = data.get("breakdown")
+    gate_checks = data.get("gate_checks")
+    if isinstance(counts, dict):
+        expected_rates = {
+            "exact_pass_rate": rate(int_or_negative(counts.get("exact_pass")), int_or_negative(counts.get("axes_target"))),
+            "acceptable_pass_rate": rate(int_or_negative(counts.get("acceptable_pass")), int_or_negative(counts.get("axes_target"))),
+            "false_positive_rate": rate(
+                int_or_negative(counts.get("false_positive_promoted")),
+                int_or_negative(counts.get("known_false_positive_trap")),
+                empty_value=0.0,
+            ),
+            "recall_known_bug": rate(int_or_negative(counts.get("known_bug_matched")), int_or_negative(counts.get("known_bug"))),
+        }
+        for key, expected in expected_rates.items():
+            if number_0_1(data.get(key)) and data.get(key) != expected:
+                errors.append(f"$.{key}: must equal counts-derived value {expected}")
+
+    if isinstance(breakdown, list) and all(isinstance(item, dict) for item in breakdown) and isinstance(counts, dict):
+        target_rows = [
+            item
+            for item in breakdown
+            if item.get("expected_outcome") == "known_bug"
+            or (item.get("expected_outcome") == "acceptable_risk" and item.get("match_status") == "matched")
+        ]
+        breakdown_counts = {
+            "axes_target": len(target_rows),
+            "exact_pass": sum(1 for item in target_rows if row_axes_exact(item)),
+            "acceptable_pass": sum(1 for item in target_rows if row_acceptable(item)),
+            "known_bug": sum(1 for item in breakdown if item.get("expected_outcome") == "known_bug"),
+            "known_bug_matched": sum(
+                1
+                for item in breakdown
+                if item.get("expected_outcome") == "known_bug" and item.get("match_status") == "matched"
+            ),
+            "known_false_positive_trap": sum(1 for item in breakdown if item.get("expected_outcome") == "known_false_positive_trap"),
+            "false_positive_promoted": sum(1 for item in breakdown if item.get("match_status") == "false_positive_promoted"),
+        }
+        for key, expected in breakdown_counts.items():
+            if non_negative_int(counts.get(key)) and counts.get(key) != expected:
+                errors.append(f"$.counts.{key}: must equal breakdown-derived value {expected}")
+
+    if isinstance(gate_checks, list) and all(isinstance(item, dict) for item in gate_checks):
+        expected_gate_pass = all(item.get("passed") is True for item in gate_checks)
+        if isinstance(data.get("gate_pass"), bool) and data.get("gate_pass") is not expected_gate_pass:
+            errors.append("$.gate_pass: must equal all(gate_checks[].passed)")
+        for index, item in enumerate(gate_checks):
+            name = item.get("name")
+            actual = item.get("actual")
+            threshold = item.get("threshold")
+            passed = item.get("passed")
+            if not isinstance(name, str) or not isinstance(actual, (int, float)) or not isinstance(threshold, (int, float)) or not isinstance(passed, bool):
+                continue
+            expected_passed = actual <= threshold if name.endswith("_max") else actual >= threshold
+            if passed is not expected_passed:
+                errors.append(f"$.gate_checks[{index}].passed: must match actual/threshold comparison")
+
+
+def row_axes_exact(item: dict[str, Any]) -> bool:
+    axes = item.get("axes_diff")
+    return isinstance(axes, dict) and bool(axes) and all(
+        isinstance(diff, dict) and diff.get("actual") == diff.get("expected") and diff.get("actual") is not None
+        for diff in axes.values()
+    )
+
+
+def row_acceptable(item: dict[str, Any]) -> bool:
+    axes = item.get("axes_diff")
+    severity = item.get("severity_diff")
+    return (
+        isinstance(axes, dict)
+        and bool(axes)
+        and all(isinstance(diff, dict) and diff.get("acceptable") is True for diff in axes.values())
+        and isinstance(severity, dict)
+        and severity.get("acceptable") is True
+        and item.get("evidence_level_ok") is True
+    )
 
 
 def main() -> int:
