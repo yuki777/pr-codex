@@ -48,7 +48,7 @@ SENSITIVE_KEY_FRAGMENTS = (
 )
 REDACTED_SENSITIVE_VALUE = "[redacted sensitive review-round content]"
 SENSITIVE_VALUE_PATTERNS = (
-    ("raw-log marker", re.compile(r"\braw[\s_-]?logs?\s*[:=]", re.IGNORECASE)),
+    ("raw-log marker", re.compile(r"\braw[\s_-]?logs?\b", re.IGNORECASE)),
     (
         "authorization header",
         re.compile(r"\bauthorization\s*[:=]\s*(?:bearer|basic)\s+\S+", re.IGNORECASE),

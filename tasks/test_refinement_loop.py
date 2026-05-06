@@ -151,13 +151,18 @@ class RefinementLoopTest(unittest.TestCase):
 
     def test_sensitive_candidate_values_are_redacted_before_artifact_write(self) -> None:
         raw_candidate = {
-            "finding_id": "failing-id",
+            "finding_id": "SECRET_TOKEN=abc123",
+            "fingerprint": "OPENAI_API_KEY=abc123",
             "title": "Authorization: Bearer abc123",
+            "path": "raw_log: captured/path",
             "reason": "verifier_fail",
             "detail": "RAW_LOG: SECRET_TOKEN=abc123 should not persist",
         }
         sanitized = sanitize_local_candidate(raw_candidate)
+        self.assertEqual(sanitized["finding_id"], REDACTED_SENSITIVE_VALUE)
+        self.assertEqual(sanitized["fingerprint"], REDACTED_SENSITIVE_VALUE)
         self.assertEqual(sanitized["title"], REDACTED_SENSITIVE_VALUE)
+        self.assertEqual(sanitized["path"], REDACTED_SENSITIVE_VALUE)
         self.assertEqual(sanitized["detail"], REDACTED_SENSITIVE_VALUE)
 
         artifact = build_review_rounds_artifact(
@@ -174,7 +179,10 @@ class RefinementLoopTest(unittest.TestCase):
             generated_at="2026-05-06T00:00:00Z",
         )
         rejected = artifact["rounds"][0]["rejected_candidates"][0]
+        self.assertEqual(rejected["finding_id"], REDACTED_SENSITIVE_VALUE)
+        self.assertEqual(rejected["fingerprint"], REDACTED_SENSITIVE_VALUE)
         self.assertEqual(rejected["title"], REDACTED_SENSITIVE_VALUE)
+        self.assertEqual(rejected["path"], REDACTED_SENSITIVE_VALUE)
         self.assertEqual(rejected["detail"], REDACTED_SENSITIVE_VALUE)
         self.assertNotIn("abc123", json.dumps(artifact))
         self.assertEqual(validate_review_rounds_artifact(artifact), [])
@@ -378,6 +386,15 @@ class RefinementLoopTest(unittest.TestCase):
             ),
             "detail-private-key": lambda artifact: artifact["rounds"][0]["rejected_candidates"][0].update(
                 detail="-----BEGIN PRIVATE KEY----- MIIEvQIBADAN"
+            ),
+            "path-raw-log": lambda artifact: artifact["rounds"][0]["rejected_candidates"][0].update(
+                path="raw log verifier excerpt"
+            ),
+            "finding-id-token": lambda artifact: artifact["rounds"][0]["rejected_candidates"][0].update(
+                finding_id="SECRET_TOKEN=abc123"
+            ),
+            "fingerprint-api-key": lambda artifact: artifact["rounds"][0]["rejected_candidates"][0].update(
+                fingerprint="OPENAI_API_KEY=abc123"
             ),
         }
         for name, mutate in cases.items():
