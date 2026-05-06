@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
 import re
 import sys
@@ -47,6 +48,7 @@ SENSITIVE_KEY_FRAGMENTS = (
     "private_key",
 )
 REDACTED_SENSITIVE_VALUE = "[redacted sensitive review-round content]"
+REDACTED_IDENTIFIER_PREFIX = "redacted-id-sha256:"
 SENSITIVE_VALUE_PATTERNS = (
     ("raw-log marker", re.compile(r"\braw[\s_-]?logs?\b", re.IGNORECASE)),
     (
@@ -247,8 +249,23 @@ def _sensitive_value_reason(value: str) -> str | None:
     return next((reason for reason, pattern in SENSITIVE_VALUE_PATTERNS if pattern.search(value)), None)
 
 
+def _normalise_artifact_string(value: str) -> str:
+    return " ".join(value.split())[:500]
+
+
+def _redacted_identifier(value: str) -> str:
+    return f"{REDACTED_IDENTIFIER_PREFIX}{hashlib.sha256(value.encode('utf-8')).hexdigest()}"
+
+
+def _safe_identifier_value(value: str) -> str:
+    normalized = _normalise_artifact_string(value)
+    if _sensitive_value_reason(normalized) is not None:
+        return _redacted_identifier(normalized)
+    return normalized
+
+
 def _redact_sensitive_value(value: str) -> str:
-    normalized = " ".join(value.split())[:500]
+    normalized = _normalise_artifact_string(value)
     if _sensitive_value_reason(normalized) is not None:
         return REDACTED_SENSITIVE_VALUE
     return normalized
@@ -268,7 +285,11 @@ def sanitize_local_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
             continue
         value = candidate[key]
         if isinstance(value, str):
-            value = _redact_sensitive_value(value)
+            value = (
+                _safe_identifier_value(value)
+                if key in {"finding_id", "fingerprint"}
+                else _redact_sensitive_value(value)
+            )
         sanitized[key] = value
     if "finding_id" not in sanitized and isinstance(sanitized.get("fingerprint"), str) and sanitized["fingerprint"]:
         sanitized["finding_id"] = sanitized["fingerprint"]
@@ -374,13 +395,21 @@ def rejected_candidate_ids(artifact: dict[str, Any]) -> set[str]:
     return rejected
 
 
+def _finding_identifier_values(finding: dict[str, Any]) -> set[str]:
+    identifiers: set[str] = set()
+    for value in (finding.get("id"), finding.get("fingerprint")):
+        if isinstance(value, str) and value:
+            identifiers.add(_safe_identifier_value(value))
+    return identifiers
+
+
 def filter_postable_findings(findings: list[dict[str, Any]], artifact: dict[str, Any]) -> list[dict[str, Any]]:
     """Remove verifier-failed/local-only candidates from publishable findings."""
 
     rejected = rejected_candidate_ids(artifact)
     postable: list[dict[str, Any]] = []
     for finding in findings:
-        identifiers = {value for value in (finding.get("id"), finding.get("fingerprint")) if isinstance(value, str)}
+        identifiers = _finding_identifier_values(finding)
         if identifiers & rejected:
             continue
         postable.append(finding)
@@ -612,6 +641,8 @@ def validate_review_rounds_artifact(data: dict[str, Any], schema: dict[str, Any]
                     errors.append(f"{cpath}: sensitive/raw key is not allowed: {key}")
                 value = candidate.get(key)
                 if isinstance(value, str):
+                    if key in {"finding_id", "fingerprint"} and value == REDACTED_SENSITIVE_VALUE:
+                        errors.append(f"{cpath}.{key}: redacted identifier must use a stable surrogate")
                     sensitive_reason = _sensitive_value_reason(value)
                     if sensitive_reason is not None:
                         errors.append(

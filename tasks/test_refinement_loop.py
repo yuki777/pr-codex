@@ -20,6 +20,7 @@ sys.path.insert(0, str(TASKS))
 
 from refinement_loop import (  # noqa: E402
     HaltingPolicy,
+    REDACTED_IDENTIFIER_PREFIX,
     REDACTED_SENSITIVE_VALUE,
     build_review_rounds_artifact,
     evaluate_halting,
@@ -159,8 +160,9 @@ class RefinementLoopTest(unittest.TestCase):
             "detail": "RAW_LOG: SECRET_TOKEN=abc123 should not persist",
         }
         sanitized = sanitize_local_candidate(raw_candidate)
-        self.assertEqual(sanitized["finding_id"], REDACTED_SENSITIVE_VALUE)
-        self.assertEqual(sanitized["fingerprint"], REDACTED_SENSITIVE_VALUE)
+        self.assertTrue(sanitized["finding_id"].startswith(REDACTED_IDENTIFIER_PREFIX))
+        self.assertTrue(sanitized["fingerprint"].startswith(REDACTED_IDENTIFIER_PREFIX))
+        self.assertNotEqual(sanitized["finding_id"], sanitized["fingerprint"])
         self.assertEqual(sanitized["title"], REDACTED_SENSITIVE_VALUE)
         self.assertEqual(sanitized["path"], REDACTED_SENSITIVE_VALUE)
         self.assertEqual(sanitized["detail"], REDACTED_SENSITIVE_VALUE)
@@ -179,13 +181,44 @@ class RefinementLoopTest(unittest.TestCase):
             generated_at="2026-05-06T00:00:00Z",
         )
         rejected = artifact["rounds"][0]["rejected_candidates"][0]
-        self.assertEqual(rejected["finding_id"], REDACTED_SENSITIVE_VALUE)
-        self.assertEqual(rejected["fingerprint"], REDACTED_SENSITIVE_VALUE)
+        self.assertEqual(rejected["finding_id"], sanitized["finding_id"])
+        self.assertEqual(rejected["fingerprint"], sanitized["fingerprint"])
         self.assertEqual(rejected["title"], REDACTED_SENSITIVE_VALUE)
         self.assertEqual(rejected["path"], REDACTED_SENSITIVE_VALUE)
         self.assertEqual(rejected["detail"], REDACTED_SENSITIVE_VALUE)
         self.assertNotIn("abc123", json.dumps(artifact))
         self.assertEqual(validate_review_rounds_artifact(artifact), [])
+
+    def test_sensitive_identifier_surrogates_still_suppress_posting(self) -> None:
+        artifact = build_review_rounds_artifact(
+            policy=policy(),
+            rounds=[
+                {
+                    "new_evidence_count": 1,
+                    "verifier_fail_count": 1,
+                    "rejected_candidates": [
+                        {
+                            "finding_id": "SECRET_TOKEN=abc123",
+                            "fingerprint": "OPENAI_API_KEY=abc123",
+                            "title": "Sensitive identifier candidate",
+                            "reason": "verifier_fail",
+                        }
+                    ],
+                }
+            ],
+            elapsed_ms=100,
+            active_candidates_count=1,
+            generated_at="2026-05-06T00:00:00Z",
+        )
+        rejected = artifact["rounds"][0]["rejected_candidates"][0]
+        self.assertTrue(rejected["finding_id"].startswith(REDACTED_IDENTIFIER_PREFIX))
+        self.assertTrue(rejected["fingerprint"].startswith(REDACTED_IDENTIFIER_PREFIX))
+        findings = [
+            {"id": "SECRET_TOKEN=abc123", "fingerprint": "unrelated", "title": "must stay local by id"},
+            {"id": "passing-id", "fingerprint": "OPENAI_API_KEY=abc123", "title": "must stay local by fingerprint"},
+            {"id": "passing-id", "fingerprint": "passing-fingerprint", "title": "can post"},
+        ]
+        self.assertEqual([item["title"] for item in filter_postable_findings(findings, artifact)], ["can post"])
 
     def test_review_rounds_artifact_validates_with_cli(self) -> None:
         artifact = self.valid_review_rounds_artifact()
@@ -407,6 +440,13 @@ class RefinementLoopTest(unittest.TestCase):
         artifact = self.valid_review_rounds_artifact()
         artifact["rounds"][0]["contradiction_signatures"] = ["Authorization: Bearer abc123"]
         self.assert_review_rounds_cli_invalid(artifact, "sensitive/raw value is not allowed")
+
+    def test_review_rounds_validator_rejects_placeholder_redacted_identifiers(self) -> None:
+        for key in ("finding_id", "fingerprint"):
+            with self.subTest(key=key):
+                artifact = self.valid_review_rounds_artifact()
+                artifact["rounds"][0]["rejected_candidates"][0][key] = REDACTED_SENSITIVE_VALUE
+                self.assert_review_rounds_cli_invalid(artifact, "redacted identifier must use a stable surrogate")
 
     def test_docs_and_schemas_expose_round_metrics_for_f11(self) -> None:
         readme = (ROOT / "fixtures" / "README.md").read_text(encoding="utf-8")
