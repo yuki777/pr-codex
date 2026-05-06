@@ -525,11 +525,11 @@ Codex CLI を使い、同じPRをレビューさせる。Bash ツールで以下
 - timeout: `1200000`
 
 ```bash
-codex --ask-for-approval never exec \
+codex \
+  --ask-for-approval never \
   -m gpt-5.5 \
-  --sandbox read-only \
-  --color never \
-  --ephemeral \
+  -c sandbox_mode=read-only \
+  exec \
   --skip-git-repo-check \
   --cd ~/claude-loop-pr-codex/$org-$repository-$pr_number \
   "
@@ -566,21 +566,20 @@ pr.diff が存在しない／空の場合は 'PR_DIFF_UNAVAILABLE' の1行だけ
 
 フラグの説明:
 
-- `--ask-for-approval never` — 承認プロンプトを無効化し非対話で実行する（**必ず `exec` の前に置く**。`exec` の後に置くと受け付けられない）
-- `exec` — 非対話サブコマンド。プロンプトは位置引数として渡す（Codex の `-p` は `--profile` のため使わない）
-- `-m gpt-5.5` — Codex CLI の実行モデルを GPT-5.5 に固定する。`model_reasoning_effort` はこのスキルでは上書きせず、未設定時は GPT-5.5 側の既定に任せる
-- `--sandbox read-only` — シェル実行を read-only サンドボックスに固定し、ローカルファイル書き込みを禁止する（レビュー専用）
-- `--color never` — ANSI カラーエスケープを出力せず、Markdown をそのまま保存できるようにする
-- `--ephemeral` — セッションファイルをディスクに残さず、ワーキングディレクトリを汚さない
-- `--skip-git-repo-check` — clone ディレクトリが浅く git 判定に引っかかっても実行を継続する
-- `--cd` — PR 作業ディレクトリ (`pr.diff` と `clone-codex/` が同居) を作業ルートに固定する。Codex は `pr.diff` を一次情報源として使える
+- `--ask-for-approval never` — 承認プロンプトを無効化し非対話で実行する。global flag のため `exec` の前に置く（`exec` の後ろに付けると `unexpected argument` で拒否される）
+- `-m gpt-5.5` — Codex CLI の実行モデルを GPT-5.5 に固定する。global flag のため `exec` の前に置く。`model_reasoning_effort` はこのスキルでは上書きせず、ユーザー config の値を使う
+- `-c sandbox_mode=read-only` — シェル実行を read-only サンドボックスに固定し、ローカルファイル書き込みを禁止する（レビュー専用）。`--sandbox read-only` と等価だが、config override として明示するため `-c` に統一する
+- `exec` — 非対話サブコマンド。プロンプトは位置引数として渡す（Codex の `-p` は `--profile` のため使わない）。この時点ではすでに global flag は前置されている
+- `--skip-git-repo-check` — clone ディレクトリが浅く git 判定に引っかかっても実行を継続する。`exec` サブコマンド側の option のため、`exec` の後ろ、かつ prompt の前に置く
+- `-C, --cd` — PR 作業ディレクトリ (`pr.diff` と `clone-codex/` が同居) を作業ルートに固定する。`exec` サブコマンド側の option として `exec` の後ろに置く。Codex は `pr.diff` を一次情報源として使える
 - `< /dev/null` — stdin を `/dev/null` に接続し、即 EOF を返す。`codex exec` は stdin から追加入力を読む仕様のため、`run_in_background: true` で起動すると「Reading additional input from stdin...」のまま停止することがある。これを確実に防ぐ
 
 MCP について:
 
-- `~/.codex/config.toml` に設定済みの MCP（`github-mcp-server` / `backlog-mcp-server` / `docbase-mcp-server` 等）は `codex exec` から自動で利用される
-- `--sandbox read-only` は shell / filesystem のみを制限する。GitHub MCP の write tool（issue コメント投稿、PR 更新等）は sandbox では抑制されない
+- Step 4b はレビュー精度向上のため、`~/.codex/config.toml` に設定済みの MCP（`github-mcp-server` / `backlog-mcp-server` / `docbase-mcp-server` 等）が有効なら read 系ツールを利用できる設計のままとする
+- `-c sandbox_mode=read-only` は shell / filesystem のみを制限する。GitHub MCP の write tool（issue コメント投稿、PR 更新等）は sandbox では抑制されない
 - 上記の prompt でも write 系 MCP の禁止を明示しているが、実効的な制御は MCP 側で担保すること。具体的には、MCP トークンを read-only 権限に絞るか、`~/.codex/config.toml` で write 系ツールを登録しない／無効化する
+- ユーザー config の古い MCP 設定による起動エラーを避けるための `-c 'mcp_servers={}'` は、MCP が不要な `/pr-codex:send` の Step 4.5 preflight に限定して使う
 
 #### 4c: レビュー結果の統合
 
