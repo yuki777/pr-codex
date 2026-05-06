@@ -170,7 +170,7 @@ class ValidatePreflightResultTest(unittest.TestCase):
             "### RESULT_JSON\n"
             "VERDICT: FAIL\n"
         )
-        with self.assertRaisesRegex(ValueError, "after final RESULT_JSON heading"):
+        with self.assertRaisesRegex(ValueError, "immediately after final RESULT_JSON heading"):
             extract_result_json(markdown)
 
     def test_extract_result_json_requires_matching_final_verdict(self) -> None:
@@ -192,6 +192,24 @@ class ValidatePreflightResultTest(unittest.TestCase):
             "trailing text\n"
         )
         with self.assertRaisesRegex(ValueError, "final VERDICT line"):
+            extract_result_json(markdown)
+
+    def test_extract_result_json_rejects_extra_fence_after_result_block(self) -> None:
+        fail_result = copy.deepcopy(valid_result())
+        fail_result["verdict"] = "FAIL"
+        fail_result["stages"]["semantic_preflight"]["status"] = "FAIL"
+        fail_result["violations"] = [human_semantic_violation()]
+        fail_result["requires_human_count"] = 1
+        markdown = (
+            "### RESULT_JSON\n```json\n"
+            + json.dumps(fail_result)
+            + "\n```\n"
+            "```json\n"
+            + json.dumps(valid_result())
+            + "\n```\n"
+            "VERDICT: PASS\n"
+        )
+        with self.assertRaisesRegex(ValueError, "followed only by the final VERDICT"):
             extract_result_json(markdown)
 
     def test_cli_extracts_and_validates_markdown(self) -> None:
@@ -250,12 +268,24 @@ class ValidatePreflightResultTest(unittest.TestCase):
     def test_auto_fixable_classification_counts_only_error_violations(self) -> None:
         errors = [auto_fixable_range_violation(), human_semantic_violation()]
         self.assertEqual(expected_counts(errors), (1, 1))
-        warning = copy.deepcopy(auto_fixable_range_violation())
-        warning["severity"] = "warning"
+        warning = {
+            "stage": "semantic_preflight",
+            "rule": "cluster_representative_missing_until_f6",
+            "finding_id": "abc123",
+            "detail": "F6 cluster metadata is not present yet; record as warning only.",
+            "severity": "warning",
+            "auto_fixable": False,
+            "requires_review_regeneration": False,
+        }
         result = valid_result()
         result["violations"] = [warning]
         self.assertEqual(validate_preflight_result(result), [])
 
+    def test_known_rule_cannot_be_downgraded_to_warning(self) -> None:
+        result = valid_result()
+        result["violations"] = [human_semantic_violation()]
+        result["violations"][0]["severity"] = "warning"
+        self.assert_invalid_without_crash(result, "known rule counterargument_succeeded must use severity=error")
 
     def test_known_error_rule_classification_is_enforced(self) -> None:
         result = valid_result()
@@ -305,6 +335,8 @@ class ValidatePreflightResultTest(unittest.TestCase):
             "<  ~/claude-loop-pr-codex/$dir_name/preflight-prompt.md",
             "final `VERDICT:` line",
             "一致しなければ",
+            "既知 rule は severity=error",
+            "RESULT_JSON` の直後に fenced JSON",
         ):
             self.assertIn(snippet, skill)
         self.assertIn('top-level `verdict` は `PASS` / `FAIL` のみ', skill)

@@ -77,7 +77,7 @@ RULE_CLASSIFICATION: dict[str, tuple[str, bool, bool]] = {
 }
 
 RESULT_JSON_HEADING_RE = re.compile(r"^###\s+RESULT_JSON\s*$", re.MULTILINE)
-JSON_FENCE_RE = re.compile(r"```json\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
+IMMEDIATE_JSON_FENCE_RE = re.compile(r"\A\s*```json\s*(?P<json>.*?)\s*```(?P<tail>.*)\Z", re.DOTALL | re.IGNORECASE)
 FINAL_VERDICT_RE = re.compile(r"^VERDICT:\s*(PASS|FAIL)\s*$")
 
 
@@ -142,10 +142,13 @@ def extract_result_json(markdown: str) -> dict[str, Any]:
 
     final_verdict = extract_final_verdict(markdown)
     search_area = markdown[matches[-1].end() :]
-    json_blocks = JSON_FENCE_RE.findall(search_area)
-    if not json_blocks:
-        raise ValueError("RESULT_JSON fenced json block not found after final RESULT_JSON heading")
-    raw_json = json_blocks[-1]
+    match = IMMEDIATE_JSON_FENCE_RE.match(search_area)
+    if not match:
+        raise ValueError("RESULT_JSON fenced json block must appear immediately after final RESULT_JSON heading")
+    tail_lines = [line.strip() for line in match.group("tail").splitlines() if line.strip()]
+    if tail_lines != [f"VERDICT: {final_verdict}"]:
+        raise ValueError("RESULT_JSON fenced json block must be followed only by the final VERDICT line")
+    raw_json = match.group("json")
     try:
         data = json.loads(raw_json)
     except json.JSONDecodeError as exc:
@@ -222,6 +225,8 @@ def validate_violations(errors: list[str], data: dict[str, Any]) -> None:
                     errors.append(f"{path}.rule: unknown error rule {rule}")
             else:
                 expected_stage, expected_auto_fixable, expected_requires_regeneration = classification
+                if violation.get("severity") != "error":
+                    errors.append(f"{path}.severity: known rule {rule} must use severity=error")
                 if violation.get("stage") != expected_stage:
                     errors.append(f"{path}.stage: rule {rule} must use stage={expected_stage}")
                 if violation.get("auto_fixable") is not expected_auto_fixable:

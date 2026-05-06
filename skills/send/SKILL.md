@@ -440,7 +440,7 @@ Codex は `preflight-codex.md` の末尾付近に `### RESULT_JSON` 見出しと
 - 各 stage は前段の結論に依存せず、上記入力ファイルだけを根拠に検証する
 - finding に対する判断は、当該 finding 抜粋・pr.diff・pr.diff.ranges.txt・metadata.json のみを参照する。前ラウンドの結論や他 finding の結論だけに依存しない
 - violation の rule / auto_fixable / requires_review_regeneration は prompt 内の分類表に必ず従う
-- severity == 'warning' は将来拡張用。M1 では warning だけなら verdict は PASS、auto_fixable_count / requires_human_count に数えない
+- 既知 rule は severity=error とする。severity == 'warning' は分類表に無い将来拡張用 rule のみで使い、M1 では warning だけなら verdict は PASS、auto_fixable_count / requires_human_count に数えない
 
 ## STAGE 1: schema_validation
 以下を確認し、STAGE 1: PASS または STAGE 1: FAIL を出力してください。
@@ -491,7 +491,7 @@ Codex は `preflight-codex.md` の末尾付近に `### RESULT_JSON` 見出しと
 ## 出力フォーマット
 1. Stage ごとに検証内容と `STAGE 1: PASS` / `STAGE 1: FAIL` のような判定を書く
 2. `### 違反一覧` に、violation ごとの stage / rule / finding_id または comment_index / detail / auto_fixable / requires_review_regeneration を列挙する。違反がなければ「なし」
-3. `### RESULT_JSON` の直後に fenced JSON を出力する。JSON は {PREFLIGHT_SCHEMA_PATH} の schema に従い、可能なら `python3 {PREFLIGHT_VALIDATOR_PATH} --schema {PREFLIGHT_SCHEMA_PATH} --from-markdown preflight-codex.md` と同じ契約を満たす形にする
+3. `### RESULT_JSON` の直後に fenced JSON を 1 個だけ出力する。JSON fence の後は最終 `VERDICT:` line 以外の本文や追加 JSON fence を出力しない。JSON は {PREFLIGHT_SCHEMA_PATH} の schema に従い、可能なら `python3 {PREFLIGHT_VALIDATOR_PATH} --schema {PREFLIGHT_SCHEMA_PATH} --from-markdown preflight-codex.md` と同じ契約を満たす形にする
 4. 最終行に必ず `VERDICT: PASS` または `VERDICT: FAIL` を単独で出力する
 
 RESULT_JSON の必須形（実際の出力ではこの object を fenced JSON として出力する）:
@@ -514,7 +514,7 @@ RESULT_JSON の必須形（実際の出力ではこの object を fenced JSON �
 #### Codex verifier コマンド
 
 - いつ使うか: `preflight-prompt.md` を Write ツールで作成した直後、Step 5 の承認プロンプト前に必ず実行する
-- 判定条件: `preflight-codex.md` の最後の非空行に `VERDICT: PASS` または `VERDICT: FAIL` があり、`### RESULT_JSON` 直後の fenced JSON の `verdict` と一致し、次の `preflight-result.json` 抽出/検証コマンドが終了コード 0 で成功する
+- 判定条件: `preflight-codex.md` の最後の非空行に `VERDICT: PASS` または `VERDICT: FAIL` があり、最後の `### RESULT_JSON` 直後に fenced JSON が 1 個だけあり、その `verdict` と一致し、次の `preflight-result.json` 抽出/検証コマンドが終了コード 0 で成功する
 - 次アクション: `preflight-result.json.verdict == "PASS"` なら Step 5 へ進む。`FAIL` なら下記の失敗時処理へ進む。Codex 実行または JSON 抽出/検証が失敗した場合は FAIL と同等に扱い、payload 修正では直せない出力崩れとして再試行対象にする（最大 3 回）
 - prompt は `exec` の `-` 引数と stdin redirection で渡す。Bash ツールへ渡すコマンド文字列に prompt 本文を直接埋め込んではならない
 
@@ -545,7 +545,7 @@ codex \
 
 - いつ使うか: 上の Codex verifier コマンドが終了した直後に必ず実行する
 - 判定条件: 終了コード 0 かつ `preflight-result.json` が非空で、final `VERDICT:` line と `preflight-result.json.verdict` が一致し（一致しなければ失敗）、`schema_version == "preflight-result.v1"` / `verdict in {"PASS","FAIL"}` / 4 stage / violation count の cross-field validation を満たす
-- 次アクション: 成功なら `preflight-result.json` を Read ツールで取得し、`verdict` と count を確認する。`RESULT_JSON` 見出し欠落、最後の `RESULT_JSON` 見出し後の JSON fence 欠落、final `VERDICT:` line との不一致、または schema/cross-field validation 失敗時は Codex 出力が構造化契約に違反したものとして Step 4.5 FAIL と扱い、最大 3 回まで再試行する
+- 次アクション: 成功なら `preflight-result.json` を Read ツールで取得し、`verdict` と count を確認する。`RESULT_JSON` 見出し欠落、最後の `RESULT_JSON` 見出し後の JSON fence 欠落、追加 JSON fence / 余分な本文、final `VERDICT:` line との不一致、または schema/cross-field validation 失敗時は Codex 出力が構造化契約に違反したものとして Step 4.5 FAIL と扱い、最大 3 回まで再試行する
 
 ```bash
 python3 $preflight_validator_path --schema $preflight_schema_path --from-markdown ~/claude-loop-pr-codex/$dir_name/preflight-codex.md --emit-json > ~/claude-loop-pr-codex/$dir_name/preflight-result.json && test -s ~/claude-loop-pr-codex/$dir_name/preflight-result.json
@@ -707,7 +707,7 @@ test ! -d ~/claude-loop-pr-codex/$dir_name && test -d ~/claude-loop-pr-codex/sen
 - `review.md` に Must Fix が一件も無い → それでも `event: COMMENT` + body (総評 + 良い点 + opt-in された Should Fix body summary) のみで投稿する（インラインコメント配列は空）
 - `review.md` の `## 総評` セクションが空 or 見つからない → ユーザーに通知して処理中断。`sent/` 移動は行わない
 - Step 3.5 で `pr.diff.ranges.txt` が空 → インラインコメント候補はすべて body 末尾の `## 行コメント不可 (diff 範囲外)` に移動し、`comments` 配列には含めない
-- Step 4.5 の Codex verifier が `RESULT_JSON` を出力しない、最後の `RESULT_JSON` 見出しが dangling、final `VERDICT:` line と JSON verdict が一致しない、または `tasks/validate_preflight_result.py` が `preflight-result.json` validation に失敗 → 構造化 preflight 失敗として最大 3 回まで再試行し、解消しなければ投稿を中止
+- Step 4.5 の Codex verifier が `RESULT_JSON` を出力しない、最後の `RESULT_JSON` 見出しが dangling、`RESULT_JSON` 後に追加 JSON fence / 余分な本文を出す、final `VERDICT:` line と JSON verdict が一致しない、または `tasks/validate_preflight_result.py` が `preflight-result.json` validation に失敗 → 構造化 preflight 失敗として最大 3 回まで再試行し、解消しなければ投稿を中止
 - Step 4.5 の `preflight-result.json.verdict == "FAIL"` かつ `requires_human_count > 0` → review 側の再生成が必要として即中断し、`preflight-result.json` / `preflight-codex.md` のパスと違反一覧を提示
 - `gh api` 422/403/404 → Step 8 の失敗報告で分岐し、`sent/` 移動は行わない
 - Step 7 で `sent/$dir_name-$head_sha_short/` がすでに存在 → ユーザーに通知して処理中断（投稿はすでに完了している点に注意）。`sent/` 移動は行わず、`review-response.json` を残した状態で終了する
