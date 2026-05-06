@@ -219,7 +219,11 @@ def _normalize_text_list(value: Any, *, max_chars: int = 120, max_items: int = M
     return normalized, sorted(set(redactions))
 
 
-def _normalize_issue_ref(value: Any) -> str | None:
+def _same_repo(owner_repo: str, repo: str) -> bool:
+    return owner_repo.strip().lower() == repo.strip().lower()
+
+
+def _normalize_issue_ref(value: Any, *, repo: str) -> str | None:
     if value in (None, ""):
         return None
     if isinstance(value, int):
@@ -231,21 +235,24 @@ def _normalize_issue_ref(value: Any) -> str | None:
         return f"#{text}"
     if text.startswith("#") and text[1:].isdigit():
         return text
-    marker = "/issues/"
-    if "github.com/" in text and marker in text:
-        number = text.rsplit(marker, 1)[-1].split("/", 1)[0].split("#", 1)[0]
-        if number.isdigit():
-            return f"#{number}"
+    url_match = re.search(
+        r"(?i)\bgithub\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/issues/(\d+)\b",
+        text,
+    )
+    if url_match:
+        owner_repo = f"{url_match.group(1)}/{url_match.group(2)}"
+        return f"#{url_match.group(3)}" if _same_repo(owner_repo, repo) else None
     if "/" in text and "#" in text:
         owner_repo, number = text.rsplit("#", 1)
         if owner_repo and number.isdigit() and re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", owner_repo):
-            return f"{owner_repo}#{number}"
+            return f"#{number}" if _same_repo(owner_repo, repo) else None
     return None
 
 
 def _normalize_issue_refs(
     value: Any,
     *,
+    repo: str,
     field: str,
     omissions: list[dict[str, str]],
     max_items: int = MAX_LIST_ITEMS,
@@ -255,7 +262,7 @@ def _normalize_issue_refs(
     items = value if isinstance(value, (list, tuple, set)) else [value]
     refs: list[str] = []
     for item in items:
-        ref = _normalize_issue_ref(item)
+        ref = _normalize_issue_ref(item, repo=repo)
         if not ref:
             _append_omission(omissions, field, "invalid_issue_ref")
             continue
@@ -278,7 +285,7 @@ def _bool_or_none(value: Any) -> bool | None:
     return None
 
 
-def render_issue_triage_body(payload: dict[str, Any]) -> dict[str, Any]:
+def render_issue_triage_body(payload: dict[str, Any], *, repo: str = DEFAULT_REPO) -> dict[str, Any]:
     """Render the scrubbed body without the sentinel and report safety metadata."""
 
     redactions: list[str] = []
@@ -322,21 +329,25 @@ def render_issue_triage_body(payload: dict[str, Any]) -> dict[str, Any]:
     ready = _bool_or_none(_first_present(payload, ("ready",)))
     blocked_by = _normalize_issue_refs(
         _first_present(payload, ("blocked_by",)),
+        repo=repo,
         field="blocked_by",
         omissions=policy_omissions,
     )
     dependencies = _normalize_issue_refs(
         _first_present(payload, ("dependencies", "depends_on")),
+        repo=repo,
         field="dependencies",
         omissions=policy_omissions,
     )
     duplicate_of = _normalize_issue_refs(
         _first_present(payload, ("duplicate_of",)),
+        repo=repo,
         field="duplicate_of",
         omissions=policy_omissions,
     )
     related = _normalize_issue_refs(
         _first_present(payload, ("related_issues", "related")),
+        repo=repo,
         field="related_issues",
         omissions=policy_omissions,
     )
@@ -453,7 +464,7 @@ def build_publication_plan(
     comments: Iterable[dict[str, Any]],
     state: dict[str, Any],
 ) -> dict[str, Any]:
-    rendered = render_issue_triage_body(payload)
+    rendered = render_issue_triage_body(payload, repo=repo)
     if not rendered["has_public_substance"]:
         omission_reasons = {item["reason"] for item in rendered["policy_omissions"]}
         if rendered["redactions"] and omission_reasons <= {"redacted_content"}:

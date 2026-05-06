@@ -118,7 +118,7 @@ def scrub_for_public(text: str | None, *, max_chars: int = 800) -> tuple[str, li
         ),
         (
             re.compile(
-                r"\b(?:AWS|GH|OPENAI|DISCORD|HERMES|PR_CODEX)_[A-Z_]*(?:TOKEN|KEY|SECRET|PASSWORD)\s*[:=]\s*\S+",
+                r"\b(?:AWS|GH|OPENAI|DISCORD|HERMES|PR_CODEX)_[A-Z0-9_]+\s*[:=]\s*\S+",
                 re.I,
             ),
             "[REDACTED_ENV_SECRET]",

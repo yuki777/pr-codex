@@ -258,6 +258,68 @@ class IssueTriagerPublishTests(unittest.TestCase):
         self.assertEqual(report["skip_reason"], "all-redacted")
         self.assertEqual(len(client.posted), 0)
 
+    def test_protected_prefix_pat_assignment_is_redacted_from_next_action(self):
+        state = self.empty_state()
+        client = FakeIssueCommentClient()
+
+        report = publisher.publish_issue_triage(
+            self.base_payload("Use GH_PAT=fine-grained-value to publish."),
+            state=state,
+            client=client,
+            dry_run=False,
+            sink="github",
+            env=self.enabled_env(),
+        )
+
+        self.assertEqual(report["action"], "published")
+        self.assertEqual(len(client.posted), 1)
+        body = client.posted[0]["body"]
+        self.assertNotIn("GH_PAT", body)
+        self.assertNotIn("fine-grained-value", body)
+        self.assertIn("env_secret", report["redactions"])
+        self.assertIn(
+            {"field": "recommended_next_action", "reason": "redacted_content"},
+            report["policy_omissions"],
+        )
+
+    def test_cross_repo_issue_refs_are_omitted_before_publication(self):
+        state = self.empty_state()
+        client = FakeIssueCommentClient()
+
+        report = publisher.publish_issue_triage(
+            {
+                **self.base_payload(),
+                "dependencies": [
+                    28,
+                    "yuki777/pr-codex#29",
+                    "private-org/private-repo#7",
+                    "https://github.com/private-org/private-repo/issues/8",
+                    "https://github.com/yuki777/pr-codex/issues/30",
+                ],
+                "related_issues": ["#31", "private-org/private-repo#9"],
+            },
+            state=state,
+            repo="yuki777/pr-codex",
+            client=client,
+            dry_run=False,
+            sink="github",
+            env=self.enabled_env(),
+        )
+
+        self.assertEqual(report["action"], "published")
+        self.assertEqual(len(client.posted), 1)
+        body = client.posted[0]["body"]
+        self.assertIn("Dependencies: #28, #29, #30", body)
+        self.assertIn("related: #31", body)
+        self.assertNotIn("private-org", body)
+        self.assertNotIn("private-repo", body)
+        self.assertNotIn("#7", body)
+        self.assertNotIn("#8", body)
+        self.assertNotIn("#9", body)
+        omitted_fields = [item["field"] for item in report["policy_omissions"]]
+        self.assertGreaterEqual(omitted_fields.count("dependencies"), 2)
+        self.assertIn("related_issues", omitted_fields)
+
     def test_non_allowlisted_public_fields_do_not_publish_by_themselves(self):
         state = self.empty_state()
         client = FakeIssueCommentClient()
