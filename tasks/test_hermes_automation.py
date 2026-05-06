@@ -230,6 +230,14 @@ class HermesWatcherTests(unittest.TestCase):
         events = watch.collect_events(snapshot, state, repo="yuki777/pr-codex", detected_at="2026-05-06T01:01:00Z")
         self.assertEqual([event.task.idempotency_key for event in events], ["issue_comment:new:#25:12"])
 
+    def test_feedback_metadata_includes_github_app_slug(self):
+        item = {
+            "id": 13,
+            "body": "feedback",
+            "performed_via_github_app": {"slug": "pr-codex-hermes", "name": "pr-codex-hermes"},
+        }
+        self.assertEqual(watch.minimize_feedback_item(item)["github_app"], "pr-codex-hermes")
+
     def test_fetch_paginated_list_accumulates_all_pages(self):
         calls: list[str] = []
         original = watch.gh_json
@@ -364,6 +372,13 @@ class InstallerScriptTests(unittest.TestCase):
             self.assertNotIn("~/.hermes", command)
             if job["name"] != "pr-codex-kanban-health":
                 self.assertIn('--state "$PR_CODEX_HERMES_ROOT/automation/pr-codex/state.json"', command)
+
+    def test_review_triager_profile_does_not_trust_marker_only(self):
+        text = (ROOT / "hermes" / "profiles" / "review-triager.md").read_text()
+        self.assertIn("trusted", text)
+        self.assertIn("author/app", text)
+        self.assertIn("Do not classify feedback as no-action solely", text)
+        self.assertNotIn("Ignore Hermes auto-comments containing", text)
 
 
 class HealthTests(unittest.TestCase):
