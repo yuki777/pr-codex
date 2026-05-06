@@ -120,6 +120,7 @@ Phase 0 は read-only observer です。GitHub への自動コメント、label/
   ├── $org-$repo-$pr/             # 進行中 / 未投稿のレビュー
   │     ├── status.json           # 実行状態（running / completed / failed）
   │     ├── metadata.json         # PR情報（org, repo, pr_number, head_sha 等）
+  │     ├── run-plan.json         # preflight 指標と M2 routing_decision（ローカル専用）
   │     ├── pr.diff               # PR 差分 (unified diff)
   │     ├── pr.diff.ranges.txt    # GitHub inline comment 可能範囲
   │     ├── clone-claude/         # Claude Code 用 shallow clone
@@ -172,6 +173,18 @@ mv ~/claude-loop-pr-codex/sent/yuki777-pr-codex-24 \
 - review 側は `findings.verified.json` を completed 前に同梱 validator `tasks/validate_findings.py` で `schemas/findings.v1.json` へ検証し、send 側も同じ validator に失敗したら Markdown fallback せず中断する
 - schema 自体は `location.side` に `LEFT` も残すが、M1 の send workflow は `RIGHT` のみ受け付ける
 - `tasks/validate_findings.py` は JSON shape / enum / conditional rule / RFC3339 date-time / URI / `end_line >= start_line` / `id == fingerprint` / fingerprint 再計算 / `metadata.json` との PR context 一致を stdlib-only で検証する
+
+### Run-plan artifact schema
+
+- `/pr-codex:review` はローカル artifact として `run-plan.json` を生成し、`schemas/run-plan.schema.json` で検証する。GitHub review body / inline comment payload / SARIF には `routing_decision` を含めない
+- M2/F8 では USD 推定・価格表・実プロバイダ名・実モデル名を扱わない。M3 で USD / 価格表を追加する場合も、公開 artifact へ出す情報は sanitize する
+- `routing_decision.budget_class` は `small` / `medium` / `large` の 3 値。`files_changed`、`lines_added + lines_removed`、`risk_tags` のうち `security` / `data_migration` 件数だけから決定論的に算出する
+- `routing_decision.route` は M2 では `"claude+codex"` 固定。`selected_hunters` は互換性のため残し、F4 (#40) の specialist routing で route enum を拡張する hook として扱う
+- `routing_decision.model_profile` は `"standard"` / `"deep"` / `"focused-fallback"` の logical profile のみ。provider/model 名や private config path は書かない
+- `routing_decision.rationale` は 240 文字以内の決定論的な事実列（例: `files_changed=N, total_lines=M, risk_tags=[...], depth=deep, mode=standard`）に限定し、LLM 自由生成文を入れない
+- M1 で生成済みの旧 `run-plan.json` には `routing_decision` がないため、M2 partial 以降の strict schema では再生成が必要。production consumer はまだないため migration script は不要
+- Timeout 完了率の実測比較は #36 (F11 regression eval) の fixture/eval 完了後に行う。本リポジトリ内の回帰確認は `python3 tasks/validate_run_plan.py` と `python3 -m unittest discover -s tasks -p "test_*.py"` を流し、routing fields と既存 timeout proxy が悪化していないことを確認する
+- Budget class はレビュー観点や Must Fix 検出を抑制するためには使わない。`focused-fallback` でも security / bug / test を優先しつつレビュー自体は継続する
 
 
 ## Preflight result schema
