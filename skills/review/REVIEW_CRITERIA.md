@@ -119,6 +119,14 @@ trigger path が再現できなくても `corroborated` かつ `impact_explained
 `explanation_postable=false` になるが、`verified` でも説明品質が
 低ければ `explanation_postable=false` にできる。
 
+## 非ブロッキング改善 (Should Fix)
+Should Fix は GitHub noise を増やさず signal を残すため、既定では `posting.post_policy=local_only` とする。明示的に body summary へ opt-in する場合だけ `posting.post_policy=body_summary` を使い、Must Fix セクションより下に短く載せられる形式へ整える。
+
+- body summary 候補は上位 3 件まで
+- 1 件あたり 3 行以内
+- 形式は path + 改善内容 1 行 + 提案 1 行 を基本にする
+- Nit は `posting.post_policy=local_only` のままローカル artifact に残し、GitHub には投稿しない
+
 ## 出力フォーマット
 レビュー結果は以下の形式で出力すること:
 

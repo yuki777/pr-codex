@@ -90,6 +90,8 @@ cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
 
 `/loop` には載せず、対話実行で使う。1回の実行で1件のみ処理する。
 
+投稿ポリシーは低ノイズを既定にする。Must Fix は従来どおり inline review comment として投稿する。Should Fix はデフォルトではローカルのみで、明示 opt-in した場合だけ上位 3 件を body summary に含める。Nit は nits.md ローカル artifact のみで、GitHub には投稿しない。
+
 ## Hermes Agent 自動化 (Phase 0)
 
 Issue #28 の Phase 0 実装として、`hermes/` 配下に pr-codex 専用の Hermes Kanban + cron + 複数 profile 用テンプレートと監視スクリプトを追加しています。
@@ -119,6 +121,7 @@ Phase 0 は read-only observer です。GitHub への自動コメント、label/
   │     ├── findings.verified.json # canonical findings (`schemas/findings.v1.json`)
   │     ├── validation-report.json # validation の副成果物（canonical findings とは分離）
   │     ├── review.md             # 統合レビュー（最終成果物）
+  │     ├── nits.md               # Nit ローカル artifact（GitHub には投稿しない）
   │     ├── claude.log
   │     └── codex.log
   └── sent/                       # /pr-codex:send で投稿済み

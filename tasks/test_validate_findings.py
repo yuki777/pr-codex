@@ -254,6 +254,47 @@ class ValidateFindingsTest(unittest.TestCase):
                 mutate(artifact["findings"][0])
                 self.assert_invalid_without_crash(artifact, expected_fragment)
 
+    def test_nonblocking_post_policy_contract_preserves_signal_conservatively(self) -> None:
+        valid_cases = {
+            "should-fix-default-local-only": lambda f: (
+                f.update(severity="should_fix", evidence_level="corroborated"),
+                f["posting"].update(post_policy="local_only", explanation_postable=True, audience="human_reviewer"),
+            ),
+            "should-fix-opt-in-body-summary": lambda f: (
+                f.update(severity="should_fix", evidence_level="corroborated"),
+                f["posting"].update(post_policy="body_summary", explanation_postable=True),
+            ),
+            "nit-local-artifact-only": lambda f: (
+                f.update(severity="nit", evidence_level="corroborated"),
+                f["posting"].update(post_policy="local_only", explanation_postable=True, audience="human_reviewer"),
+            ),
+            "supplemental-note-body-summary": lambda f: (
+                f.update(severity="note", evidence_level="corroborated"),
+                f["posting"].update(post_policy="body_summary", explanation_postable=True),
+            ),
+        }
+        for name, mutate in valid_cases.items():
+            with self.subTest(name=name):
+                artifact = copy.deepcopy(valid_artifact())
+                mutate(artifact["findings"][0])
+                self.assertEqual(validate_artifact(self.schema, artifact), [])
+
+        invalid_cases = {
+            "nit-body-summary": (
+                lambda f: (f.update(severity="nit"), f["posting"].update(post_policy="body_summary")),
+                "nit findings must use post_policy=local_only",
+            ),
+            "nit-suppress": (
+                lambda f: (f.update(severity="nit"), f["posting"].update(post_policy="suppress")),
+                "nit findings must use post_policy=local_only",
+            ),
+        }
+        for name, (mutate, expected_fragment) in invalid_cases.items():
+            with self.subTest(name=name):
+                artifact = copy.deepcopy(valid_artifact())
+                mutate(artifact["findings"][0])
+                self.assert_invalid_without_crash(artifact, expected_fragment)
+
     def test_must_fix_four_axes_gate_is_validator_enforced(self) -> None:
         gate_message = (
             "must_fix requires axes={real,triggerable,impactful}=yes "

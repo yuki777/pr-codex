@@ -126,6 +126,10 @@ Claude 側でメモリ上に以下を抽出する:
   - すべての finding で `id == fingerprint` が成り立ち、同梱 validator が正準アルゴリズムで再計算した fingerprint と一致すること
   - `findings[]` のうち `severity == "must_fix"` の要素を `$must_fix` 配列として抽出する
   - M1 の投稿 contract として、`severity != "must_fix"` の finding に `posting.post_policy == "inline"` が含まれないことを確認する
+  - `severity == "should_fix"` はデフォルト `posting.post_policy == "local_only"` としてローカル artifact に残し、GitHub payload には含めない
+  - `posting.post_policy == "body_summary"` の Should Fix だけを opt-in body summary 候補にする。body summary 候補は上位 3 件まで、1 件あたり 3 行以内に要約して保持する
+  - `severity == "nit"` は常に `posting.post_policy == "local_only"` として扱い、PR payload には含めない。Nit は `nits.md` にローカル artifact として保存する
+  - `severity == "note"` かつ `posting.post_policy == "body_summary"` の短い補足は body 前提欄候補として保持する
 
 #### `findings.verified.json` から抽出するフィールド
 
@@ -399,7 +403,9 @@ review file: ~/claude-loop-pr-codex/<$dir_name>/review.md
 body プレビュー:
   <$summary の先頭 200 文字。長ければ "..." で省略>
 インラインコメント: Must Fix N 件
-（Should Fix / Nit / 議論項目は投稿対象外のため payload に含めず、review.md にのみ残ります）
+Should Fix body summary: default no（候補は上位 3 件まで。yes / y / はい で明示承認された場合のみ body に含める。default: no）
+Nit は nits.md のみに保存し、GitHub には投稿しません
+（Should Fix / Nit / 議論項目は投稿対象外のため payload に含めず、review.md にのみ残ります。ただし明示 opt-in された Should Fix body summary は review body の補足としてだけ含めます）
 行範囲外で除外したインラインコメント (Must Fix のみ): K 件
   - <path>:L<line> (本文末尾の「行コメント不可」セクションに移動)
 payload: ~/claude-loop-pr-codex/<$dir_name>/review-payload.json
@@ -483,6 +489,7 @@ test ! -d ~/claude-loop-pr-codex/$dir_name && test -d ~/claude-loop-pr-codex/sen
 - 投稿した review の URL: `$review_url`
 - 選択した `event`
 - インラインコメント件数 (Must Fix のみ)
+- Nit ローカル artifact: `nits.md`（Nit は GitHub に投稿しない）
 - 行範囲外で除外したインラインコメント件数
 - 移動先: `~/claude-loop-pr-codex/sent/$dir_name-$head_sha_short`
 
@@ -553,7 +560,9 @@ $CLAUDE_PLUGIN_ROOT/tasks/
         ├── metadata.json
         ├── findings.verified.json  ← primary input (`schemas/findings.v1.json`)
         ├── validation-report.json  ← review 側の副成果物（あれば保持）
-        ├── review.md              ← 投稿元
+        ├── review.md               ← 統合レビュー（投稿 body の元）
+        ├── nits.md                 ← Nit ローカル artifact（GitHub には投稿しない）
+        ├── review-payload.json     ← Step 4 で生成する投稿 payload
         ├── pr.diff
         ├── pr.diff.ranges.txt     ← Step 3.5 で生成するコメント可能行範囲
         ├── claude-review.md
@@ -575,6 +584,7 @@ $CLAUDE_PLUGIN_ROOT/tasks/
               ├── findings.verified.json
               ├── validation-report.json
               ├── review.md
+              ├── nits.md
               ├── review-payload.json    ← 追加: 投稿した payload
               ├── review-response.json   ← 追加: gh api のレスポンス (.html_url 等を含む)
               ├── pr.diff
