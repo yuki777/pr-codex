@@ -16,7 +16,7 @@ GitHub PRを **Claude Code** と **Codex CLI** の2者レビュー方式で自�
 - Codex CLI (`codex-cli 0.128.0` 以上、`codex --ask-for-approval never -m gpt-5.5 ... exec` が使えること)
 - GitHub CLI (`gh`)
 - `jq`（SKILL.md 内の全テンプレートで利用する。macOS 標準では未インストール）
-- `python3`（同梱 validator `tasks/validate_findings.py` / `tasks/validate_preflight_result.py` で `findings.verified.json` と `preflight-result.json` を検証するため）
+- `python3`（同梱 validator `tasks/validate_candidates.py` / `tasks/validate_findings.py` / `tasks/validate_status.py` / `tasks/validate_preflight_result.py` で `findings.candidates.json` / `findings.verified.json` / `status.json` / `preflight-result.json` を検証するため）
 
 ## セットアップ
 
@@ -68,9 +68,14 @@ cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
 1. **PR候補の取得** — GitHub Search API で `review-requested` のPRを一覧取得
 2. **候補の選定** — 未レビュー・失敗・追加コミットありの最初の1件を選定
 3. **作業ディレクトリの準備** — PRブランチを各ツール用に個別に shallow clone
-4. **2者レビュー実行** — Claude Code と Codex CLI が並行してレビュー
-5. **結果の統合** — 両者の指摘を比較・議論し、`findings.verified.json` と `review.md` を生成
-6. **結果報告** — レビュー結果の要約をユーザーに報告
+4. **stage 化されたレビュー実行** — 既存 Step を logical stage として扱う（ranker / hunter / verifier / explainer）
+   - ranker: `run-plan.json` で PR risk/area と実行方針を分類
+   - hunter: Claude Code と Codex CLI が並行して広めに候補を集め、`findings.candidates.json` を残す
+   - verifier: 4軸 + evidence ladder + counterexample で絞り込み、`findings.verified.json` を canonical artifact にする
+   - explainer: verified findings から `review.md` と local-only artifact を派生生成する
+5. **結果報告** — レビュー結果の要約をユーザーに報告
+
+Stage ごとの責務、input/output artifact、halting 条件は [`skills/review/STAGES.md`](skills/review/STAGES.md) を参照してください。
 
 ## レビューの投稿
 
@@ -124,8 +129,9 @@ Phase 0 は read-only observer です。GitHub への自動コメント、label/
   │     ├── pr.diff.ranges.txt    # GitHub inline comment 可能範囲
   │     ├── clone-claude/         # Claude Code 用 shallow clone
   │     ├── clone-codex/          # Codex CLI 用 shallow clone
-  │     ├── claude-review.md      # Claude Code の生レビュー
-  │     ├── codex-review.md       # Codex CLI の生レビュー
+  │     ├── claude-review.md      # Claude Code の生レビュー (hunter)
+  │     ├── codex-review.md       # Codex CLI の生レビュー (hunter)
+  │     ├── findings.candidates.json # hunter → verifier 境界の候補 (`schemas/findings.candidates.v1.json`)
   │     ├── findings.verified.json # canonical findings (`schemas/findings.v1.json`)
   │     ├── validation-report.json # validation の副成果物（canonical findings とは分離）
   │     ├── review.md             # 統合レビュー（最終成果物）
@@ -138,6 +144,7 @@ Phase 0 は read-only observer です。GitHub への自動コメント、label/
   │     └── codex.log
   └── sent/                       # /pr-codex:send で投稿済み
         └── $org-$repo-$pr-$head_sha_short/ # 投稿後にここへ移動される
+              ├── findings.candidates.json
               ├── findings.verified.json
               ├── review.md
               ├── nits.md               # Nit があった場合のみ
@@ -162,6 +169,7 @@ mv ~/claude-loop-pr-codex/sent/yuki777-pr-codex-24 \
 
 ## Schema
 
+- hunter → verifier 境界の debug artifact は `schemas/findings.candidates.v1.json` (JSON Schema Draft 2020-12) で定義する。`findings.candidates.json` は `id == fingerprint` や 4軸 / evidence / posting policy を要求せず、verifier が canonical findings へ揃える
 - canonical runtime artifact は `schemas/findings.v1.json` (JSON Schema Draft 2020-12) で定義する
 - `findings.verified.json` は top-level `generated_at` を持ち、per-finding `created_at` は持たない
 - `findings.verified.json.pr.repository` は **投稿先の base repo** (`owner/repo`) に固定する。fork PR でも head repo ではなく、`metadata.json.repository_full_name` および `/pr-codex:send` の投稿先 `$org/$repository` と一致させる
@@ -169,7 +177,8 @@ mv ~/claude-loop-pr-codex/sent/yuki777-pr-codex-24 \
 - `category` は schema enum（`bug` / `security` / `performance` / `tests` / `design` / `code_quality` / `consistency` / `runtime_error`）に固定し、自由文字列の揺れを `fingerprint` に入れない
 - `fingerprint` の入力は `path` / `category` / `normalized_title` / `primary_symbol` に固定し、`line` は含めない
 - JSON Schema Draft 2020-12 単体では sibling equality (`id == fingerprint`) を標準機能だけで強制しにくいため、この等値は **review/send workflow の必須 runtime gate** として扱う
-- review 側は `findings.verified.json` を completed 前に同梱 validator `tasks/validate_findings.py` で `schemas/findings.v1.json` へ検証し、send 側も同じ validator に失敗したら Markdown fallback せず中断する
+- review 側は `findings.candidates.json` を completed 前に `tasks/validate_candidates.py` で、`findings.verified.json` を completed 前に同梱 validator `tasks/validate_findings.py` で検証し、send 側も `findings.verified.json` の validator に失敗したら Markdown fallback せず中断する
+- `status.json` は `stage` / `failed_stage` を optional に持ち、F4 以降の新規実行では failed 時に ranker / hunter / verifier / explainer のどこで停止したかを残す
 - schema 自体は `location.side` に `LEFT` も残すが、M1 の send workflow は `RIGHT` のみ受け付ける
 - `tasks/validate_findings.py` は JSON shape / enum / conditional rule / RFC3339 date-time / URI / `end_line >= start_line` / `id == fingerprint` / fingerprint 再計算 / `metadata.json` との PR context 一致を stdlib-only で検証する
 
