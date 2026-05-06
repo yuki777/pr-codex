@@ -90,6 +90,19 @@ cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
 
 `/loop` には載せず、対話実行で使う。1回の実行で1件のみ処理する。
 
+## Hermes Agent 自動化 (Phase 0)
+
+Issue #28 の Phase 0 実装として、`hermes/` 配下に pr-codex 専用の Hermes Kanban + cron + 複数 profile 用テンプレートと監視スクリプトを追加しています。
+
+- `hermes/profiles/` — `issue-triager` / `pr-reviewer` / `review-triager` / `developer` / `sheriff` の profile 方針
+- `hermes/scripts/pr_codex_watch.py` — GitHub の Issue / PR / review 差分を polling し、冪等に Kanban task 化
+- `hermes/scripts/pr_codex_kanban_health.py` — blocked / stale / retry / ready 放置 task の検出
+- `hermes/scripts/pr_codex_daily_digest.py` — daily digest 生成
+- `hermes/install_phase0.sh` — ローカルの `~/.hermes/` へ profile/script/board/state を導入する補助スクリプト
+- `hermes/pr-codex.phase0.json` — board/profile/cron/safety の Phase 0 設定
+
+Phase 0 は read-only observer です。GitHub への自動コメント、label/milestone/assignee 変更、push、approve、merge は行いません。詳細は [`hermes/README.md`](hermes/README.md) を参照してください。
+
 ## ファイル構成
 
 ```
