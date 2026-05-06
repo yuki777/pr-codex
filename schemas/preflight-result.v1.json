@@ -78,8 +78,7 @@
         "status": {
           "enum": [
             "PASS",
-            "FAIL",
-            "SKIPPED"
+            "FAIL"
           ]
         },
         "note": {

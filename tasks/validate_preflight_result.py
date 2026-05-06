@@ -32,7 +32,7 @@ STAGES = [
     "payload_consistency",
 ]
 STAGE_SET = set(STAGES)
-STAGE_STATUSES = {"PASS", "FAIL", "SKIPPED"}
+STAGE_STATUSES = {"PASS", "FAIL"}
 VERDICTS = {"PASS", "FAIL"}
 SEVERITIES = {"error", "warning"}
 TOP_LEVEL_KEYS = {
@@ -157,7 +157,7 @@ def validate_stage_results(errors: list[str], data: dict[str, Any]) -> None:
         if "status" not in item:
             errors.append(f"{path}: missing required properties: status")
         elif item.get("status") not in STAGE_STATUSES:
-            errors.append(f"{path}.status: must be PASS, FAIL, or SKIPPED")
+            errors.append(f"{path}.status: must be PASS or FAIL")
         if "note" in item and not isinstance(item["note"], str):
             errors.append(f"{path}.note: must be a string")
 

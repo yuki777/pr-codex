@@ -331,23 +331,14 @@ Codex は `preflight-codex.md` の末尾付近に `### RESULT_JSON` 見出しと
 }
 ```
 
-#### Codex verifier コマンド
+#### Codex verifier prompt file
 
-- いつ使うか: Step 4 で `review-payload.json` を生成した直後、Step 5 の承認プロンプト前に必ず実行する
-- 判定条件: `preflight-codex.md` に `VERDICT: PASS` または `VERDICT: FAIL` の最終行があり、次の `preflight-result.json` 抽出/検証コマンドが終了コード 0 で成功する
-- 次アクション: `preflight-result.json.verdict == "PASS"` なら Step 5 へ進む。`FAIL` なら下記の失敗時処理へ進む。Codex 実行または JSON 抽出/検証が失敗した場合は FAIL と同等に扱い、payload 修正では直せない出力崩れとして再試行対象にする（最大 3 回）
-- `{SCHEMA_PATH}` / `{VALIDATOR_PATH}` / `{PREFLIGHT_SCHEMA_PATH}` / `{PREFLIGHT_VALIDATOR_PATH}` は Step 2.5 で保持した絶対パスへ Claude 側で置換する
+- いつ使うか: Step 4 で `review-payload.json` を生成した直後、Codex verifier コマンドの直前に必ず作成する
+- 作成方法: Write ツールで `~/claude-loop-pr-codex/$dir_name/preflight-prompt.md` に以下の prompt 本文を書き出す。`file_path` は `~` と `$dir_name` を実値へ展開した絶対パスで渡す
+- 置換ルール: `{SCHEMA_PATH}` / `{VALIDATOR_PATH}` / `{PREFLIGHT_SCHEMA_PATH}` / `{PREFLIGHT_VALIDATOR_PATH}` は Step 2.5 で保持した絶対パスへ Claude 側で置換してから書き出す。shell で prompt 本文を展開してはならない
+- 理由: prompt 本文には Markdown backtick や JSON double quote が含まれるため、shell の double-quoted argument として渡すと command substitution / quote 分割で壊れる。prompt file + stdin 経由に固定し、shell は本文を解釈しない
 
-```bash
-codex \
-  --ask-for-approval never \
-  -m gpt-5.5 \
-  -c sandbox_mode=read-only \
-  exec \
-  --ignore-user-config \
-  --skip-git-repo-check \
-  --cd ~/claude-loop-pr-codex/$dir_name \
-  "
+```markdown
 あなたは GitHub PR レビュー投稿前の独立検証エージェントです。Claude が生成した review-payload.json を読み、4 stage verifier pipeline として検証してください。最後に人間可読の違反一覧、RESULT_JSON の fenced JSON、そして最終行の VERDICT: PASS または VERDICT: FAIL を必ず出力してください。
 
 目的は、GitHub Reviews API に投稿する直前の payload から、schema 不整合・範囲外コメント・semantic false positive・event/body 不整合を検出して誤投稿を防ぐことです。top-level verdict は PASS / FAIL のみで、PASS_WITH_WARNINGS は使いません。
@@ -438,8 +429,26 @@ RESULT_JSON の必須形（実際の出力ではこの object を fenced JSON �
   "requires_human_count": 0,
   "generated_at": "2026-05-06T00:00:00Z"
 }
-" \
-  <  /dev/null \
+```
+
+#### Codex verifier コマンド
+
+- いつ使うか: `preflight-prompt.md` を Write ツールで作成した直後、Step 5 の承認プロンプト前に必ず実行する
+- 判定条件: `preflight-codex.md` に `VERDICT: PASS` または `VERDICT: FAIL` の最終行があり、次の `preflight-result.json` 抽出/検証コマンドが終了コード 0 で成功する
+- 次アクション: `preflight-result.json.verdict == "PASS"` なら Step 5 へ進む。`FAIL` なら下記の失敗時処理へ進む。Codex 実行または JSON 抽出/検証が失敗した場合は FAIL と同等に扱い、payload 修正では直せない出力崩れとして再試行対象にする（最大 3 回）
+- prompt は `exec` の `-` 引数と stdin redirection で渡す。Bash ツールへ渡すコマンド文字列に prompt 本文を直接埋め込んではならない
+
+```bash
+codex \
+  --ask-for-approval never \
+  -m gpt-5.5 \
+  -c sandbox_mode=read-only \
+  exec \
+  --ignore-user-config \
+  --skip-git-repo-check \
+  --cd ~/claude-loop-pr-codex/$dir_name \
+  - \
+  <  ~/claude-loop-pr-codex/$dir_name/preflight-prompt.md \
   >  ~/claude-loop-pr-codex/$dir_name/preflight-codex.md \
   2> ~/claude-loop-pr-codex/$dir_name/preflight-codex.log
 ```
@@ -626,7 +635,7 @@ test ! -d ~/claude-loop-pr-codex/$dir_name && test -d ~/claude-loop-pr-codex/sen
 2. テンプレートの改変は変数置換のみ許可する。フラグ、引数順、引用符、リダイレクトはテンプレート記載どおりに使う
 3. シェル演算子はテンプレート中に明示された `|` `<` `>` `2>` `&&` のみ許可する
 4. `findings.verified.json` は必須の一次入力とし、`review.md` parser fallback は使わない。parse failure / shape failure / validator failure / `location.side != RIGHT` / 件数不一致 / posting policy 不整合時に Markdown fallback へ自動切替してはならない
-5. payload JSON の生成は Write ツールで行う（`jq -n` によるインラインでの複雑な配列組み立ては使わない）
+5. payload JSON と `preflight-prompt.md` の生成は Write ツールで行う（`jq -n` によるインラインでの複雑な配列組み立てや shell 文字列内 prompt 埋め込みは使わない）
 6. `$()` / `for` / `while` / `xargs` / ヒアドキュメントは使わない
 7. `mv` は `sent/` への移動以外では使わない
 8. `gh` の write 系操作は `gh api --method POST .../reviews` のみとし、`gh pr review` / `gh pr comment` / `gh pr merge` などは使わない
@@ -665,6 +674,7 @@ $CLAUDE_PLUGIN_ROOT/schemas/
         ├── claude-review.md
         ├── codex-review.md
         ├── claude.log
+        ├── preflight-prompt.md     ← Step 4.5 の Codex verifier prompt（Write ツールで生成）
         ├── preflight-codex.md      ← Step 4.5 の人間可読 verifier 結果（VERDICT: PASS/FAIL）
         ├── preflight-result.json   ← Step 4.5 の構造化 verifier 結果 (`schemas/preflight-result.v1.json`)
         ├── preflight-codex.log     ← Codex 実行時の stderr
@@ -689,6 +699,7 @@ $CLAUDE_PLUGIN_ROOT/schemas/
               ├── claude-review.md
               ├── codex-review.md
               ├── claude.log
+              ├── preflight-prompt.md
               ├── preflight-codex.md
               ├── preflight-result.json
               ├── preflight-codex.log

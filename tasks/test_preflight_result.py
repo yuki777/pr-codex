@@ -85,6 +85,11 @@ class ValidatePreflightResultTest(unittest.TestCase):
     def test_valid_pass_result(self) -> None:
         self.assertEqual(validate_preflight_result(valid_result()), [])
 
+    def test_skipped_stage_is_invalid_for_final_preflight_result(self) -> None:
+        result = valid_result()
+        result["stages"]["schema_validation"]["status"] = "SKIPPED"
+        self.assert_invalid_without_crash(result, "$.stages.schema_validation.status: must be PASS or FAIL")
+
     def test_warning_does_not_create_intermediate_verdict(self) -> None:
         result = valid_result()
         result["violations"] = [
@@ -234,10 +239,15 @@ class ValidatePreflightResultTest(unittest.TestCase):
             "counterargument_succeeded",
             "反証成功 = 不採用 / FAIL",
             "preflight-result.json",
+            "preflight-prompt.md",
             "Markdown fallback は使わない",
+            "shell で prompt 本文を展開してはならない",
+            "<  ~/claude-loop-pr-codex/$dir_name/preflight-prompt.md",
         ):
             self.assertIn(snippet, skill)
         self.assertIn('top-level `verdict` は `PASS` / `FAIL` のみ', skill)
+        unsafe_shell_prompt_prefix = "--cd ~/claude-loop-pr-codex/$dir_name " + chr(92) + '\n  "'
+        self.assertNotIn(unsafe_shell_prompt_prefix, skill)
 
     def test_result_is_not_mutated_by_validation(self) -> None:
         result = valid_result()

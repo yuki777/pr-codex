@@ -120,6 +120,7 @@ Phase 0 は read-only observer です。GitHub への自動コメント、label/
   │     ├── findings.verified.json # canonical findings (`schemas/findings.v1.json`)
   │     ├── validation-report.json # validation の副成果物（canonical findings とは分離）
   │     ├── review.md             # 統合レビュー（最終成果物）
+  │     ├── preflight-prompt.md   # /pr-codex:send Step 4.5 の Codex verifier prompt
   │     ├── preflight-codex.md    # /pr-codex:send Step 4.5 の人間可読 verifier 結果
   │     ├── preflight-result.json # /pr-codex:send Step 4.5 の構造化 verifier 結果
   │     ├── preflight-codex.log
@@ -131,6 +132,7 @@ Phase 0 は read-only observer です。GitHub への自動コメント、label/
               ├── review.md
               ├── review-payload.json   # 投稿した GitHub Reviews API の payload
               ├── review-response.json  # gh api のレスポンス（.html_url 等）
+              ├── preflight-prompt.md
               ├── preflight-codex.md
               ├── preflight-result.json
               └── ... (他ファイルも一緒に保管される)
