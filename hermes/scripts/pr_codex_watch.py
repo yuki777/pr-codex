@@ -552,10 +552,28 @@ query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
     return threads
 
 
+def paginated_path(path: str, *, page: int, per_page: int = 100) -> str:
+    separator = "&" if "?" in path else "?"
+    return f"{path}{separator}per_page={per_page}&page={page}"
+
+
+def fetch_paginated_list(path: str, *, per_page: int = 100) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    page = 1
+    while True:
+        payload = gh_json([paginated_path(path, page=page, per_page=per_page)]) or []
+        if not isinstance(payload, list):
+            raise RuntimeError(f"expected list response for paginated GitHub endpoint: {path}")
+        items.extend(payload)
+        if len(payload) < per_page:
+            return items
+        page += 1
+
+
 def fetch_snapshot(repo: str, *, include_threads: bool = True) -> dict[str, Any]:
     owner, name = split_repo(repo)
-    issues = gh_json([f"repos/{owner}/{name}/issues?state=open&per_page=100"]) or []
-    pulls = gh_json([f"repos/{owner}/{name}/pulls?state=open&per_page=100"]) or []
+    issues = fetch_paginated_list(f"repos/{owner}/{name}/issues?state=open")
+    pulls = fetch_paginated_list(f"repos/{owner}/{name}/pulls?state=open")
 
     issue_comments: dict[int, list[dict[str, Any]]] = {}
     for issue in issues:
@@ -563,7 +581,7 @@ def fetch_snapshot(repo: str, *, include_threads: bool = True) -> dict[str, Any]
             continue
         number = int(issue["number"])
         if int(issue.get("comments") or 0) > 0:
-            issue_comments[number] = gh_json([f"repos/{owner}/{name}/issues/{number}/comments?per_page=100"]) or []
+            issue_comments[number] = fetch_paginated_list(f"repos/{owner}/{name}/issues/{number}/comments")
         else:
             issue_comments[number] = []
 
@@ -573,9 +591,9 @@ def fetch_snapshot(repo: str, *, include_threads: bool = True) -> dict[str, Any]
     review_threads: dict[int, list[dict[str, Any]]] = {}
     for pr in pulls:
         number = int(pr["number"])
-        reviews[number] = gh_json([f"repos/{owner}/{name}/pulls/{number}/reviews?per_page=100"]) or []
-        pr_issue_comments[number] = gh_json([f"repos/{owner}/{name}/issues/{number}/comments?per_page=100"]) or []
-        review_comments[number] = gh_json([f"repos/{owner}/{name}/pulls/{number}/comments?per_page=100"]) or []
+        reviews[number] = fetch_paginated_list(f"repos/{owner}/{name}/pulls/{number}/reviews")
+        pr_issue_comments[number] = fetch_paginated_list(f"repos/{owner}/{name}/issues/{number}/comments")
+        review_comments[number] = fetch_paginated_list(f"repos/{owner}/{name}/pulls/{number}/comments")
         if include_threads:
             try:
                 review_threads[number] = fetch_review_threads(owner, name, number)

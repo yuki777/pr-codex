@@ -42,6 +42,10 @@ if ! command -v gh >/dev/null 2>&1; then
   echo "error: gh is required" >&2
   exit 1
 fi
+if ! gh api user >/dev/null 2>&1; then
+  echo "error: gh is installed but cannot call GitHub API; run gh auth login or set GH_TOKEN" >&2
+  exit 1
+fi
 if ! command -v hermes >/dev/null 2>&1; then
   echo "error: hermes is required for installation; scripts can still be reviewed in the repo" >&2
   exit 1
@@ -89,10 +93,25 @@ WATCH_PROMPT="Run the local Phase 0 watcher command and report a concise summary
 HEALTH_PROMPT="Run the local Phase 0 Kanban health command and report only anomalies: python3 $HERMES_HOME/scripts/pr_codex_kanban_health.py --repo $REPO --board $BOARD --tenant $TENANT --sink hermes --json"
 DIGEST_PROMPT="Run the local Phase 0 daily digest command and deliver the summary: python3 $HERMES_HOME/scripts/pr_codex_daily_digest.py --repo $REPO --board $BOARD --tenant $TENANT --sink hermes --json"
 
+cron_exists() {
+  hermes -p sheriff cron list 2>/dev/null | grep -F -- "$1" >/dev/null 2>&1
+}
+
+create_cron_once() {
+  name="$1"
+  schedule="$2"
+  prompt="$3"
+  if cron_exists "$name"; then
+    echo "cron $name already exists; skipping"
+  else
+    hermes -p sheriff cron create "$schedule" "$prompt" --name "$name"
+  fi
+}
+
 if [ "$WITH_CRON" -eq 1 ]; then
-  hermes -p sheriff cron create "every 10m" "$WATCH_PROMPT" --name "pr-codex-watch-github"
-  hermes -p sheriff cron create "every 30m" "$HEALTH_PROMPT" --name "pr-codex-kanban-health"
-  hermes -p sheriff cron create "0 9 * * *" "$DIGEST_PROMPT" --name "pr-codex-daily-digest"
+  create_cron_once "pr-codex-watch-github" "every 10m" "$WATCH_PROMPT"
+  create_cron_once "pr-codex-kanban-health" "every 30m" "$HEALTH_PROMPT"
+  create_cron_once "pr-codex-daily-digest" "0 9 * * *" "$DIGEST_PROMPT"
 else
   cat <<EOF
 

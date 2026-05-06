@@ -25,14 +25,14 @@ from _pr_codex_common import (  # type: ignore[import-not-found]
     today_utc,
     utcnow_iso,
 )
-from pr_codex_watch import split_repo  # type: ignore[import-not-found]
+from pr_codex_watch import fetch_paginated_list, split_repo  # type: ignore[import-not-found]
 
 
 def fetch_digest_snapshot(repo: str) -> dict[str, Any]:
     owner, name = split_repo(repo)
-    issues = gh_json([f"repos/{owner}/{name}/issues?state=open&per_page=100"]) or []
+    issues = fetch_paginated_list(f"repos/{owner}/{name}/issues?state=open")
     open_issues = [issue for issue in issues if "pull_request" not in issue]
-    pulls = gh_json([f"repos/{owner}/{name}/pulls?state=open&per_page=100"]) or []
+    pulls = fetch_paginated_list(f"repos/{owner}/{name}/pulls?state=open")
     check_runs: dict[int, dict[str, int]] = {}
     for pr in pulls:
         sha = (pr.get("head") or {}).get("sha")
