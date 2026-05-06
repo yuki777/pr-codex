@@ -321,8 +321,8 @@ codex \
   --ask-for-approval never \
   -m gpt-5.5 \
   -c sandbox_mode=read-only \
-  -c 'mcp_servers={}' \
   exec \
+  --ignore-user-config \
   --skip-git-repo-check \
   --cd ~/claude-loop-pr-codex/$dir_name \
   "
@@ -367,8 +367,8 @@ FAIL の場合は VERDICT: FAIL の直前に '違反一覧' セクションを�
 フラグの説明:
 
 - `--ask-for-approval never` / `-m gpt-5.5` / `-c ...` は global flag のため、すべて `exec` の前に置く
-- `-c sandbox_mode=read-only` — シェル実行を read-only サンドボックスに固定する。`--sandbox read-only` と等価だが、`-c 'mcp_servers={}'` と並べて config override に統一する
-- `-c 'mcp_servers={}'` — 投稿前検証中のみ MCP サーバーを無効化し、ユーザー config の古い MCP 設定による起動エラーを避ける。Step 4.5 preflight はローカル成果物検証だけで MCP を必要としない
+- `-c sandbox_mode=read-only` — シェル実行を read-only サンドボックスに固定する。`--sandbox read-only` と等価だが、config override として明示するため `-c` に統一する
+- `--ignore-user-config` — 投稿前検証中のみ `$CODEX_HOME/config.toml` / `~/.codex/config.toml` を読み込まない。auth は引き続き `CODEX_HOME` を使うため、古い MCP 設定や無効な `model_reasoning_effort` による config 検証エラーから Step 4.5 preflight を切り離せる
 - `--skip-git-repo-check` / `-C, --cd` は `exec` サブコマンド側の option のため、`exec` の後ろ、かつ prompt の前に置く
 - `--color never` / `--ephemeral` はテンプレートを簡素化するため使わない。カラーは TTY 自動判定に任せ、セッション保存挙動は config 側に委ねる
 

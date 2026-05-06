@@ -579,7 +579,7 @@ MCP について:
 - Step 4b はレビュー精度向上のため、`~/.codex/config.toml` に設定済みの MCP（`github-mcp-server` / `backlog-mcp-server` / `docbase-mcp-server` 等）が有効なら read 系ツールを利用できる設計のままとする
 - `-c sandbox_mode=read-only` は shell / filesystem のみを制限する。GitHub MCP の write tool（issue コメント投稿、PR 更新等）は sandbox では抑制されない
 - 上記の prompt でも write 系 MCP の禁止を明示しているが、実効的な制御は MCP 側で担保すること。具体的には、MCP トークンを read-only 権限に絞るか、`~/.codex/config.toml` で write 系ツールを登録しない／無効化する
-- ユーザー config の古い MCP 設定による起動エラーを避けるための `-c 'mcp_servers={}'` は、MCP が不要な `/pr-codex:send` の Step 4.5 preflight に限定して使う
+- ユーザー config の古い MCP 設定による起動エラーを避けるための `--ignore-user-config` は、MCP が不要な `/pr-codex:send` の Step 4.5 preflight に限定して使う
 
 #### 4c: レビュー結果の統合
 
