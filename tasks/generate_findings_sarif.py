@@ -39,9 +39,11 @@ FINGERPRINT_RE = re.compile(r"^[0-9a-f]{64}$")
 POSIX_ABSOLUTE_PATH_RE = re.compile(r"(?<![\w:])(?:/Users/[^\s:`)]+|/home/[^\s:`)]+|/private/var/[^\s:`)]+)")
 WINDOWS_DRIVE_ABSOLUTE_PATH_RE = re.compile(r"(?<![\w/])(?:[A-Za-z]:[\\/][^\s:`)]+)")
 WINDOWS_UNC_ABSOLUTE_PATH_RE = re.compile(r"\\\\[^\s\\/:*?\"<>|]+\\[^\s\\/:*?\"<>|]+(?:\\[^\s:`)]+)*")
-FILE_URI_RE = re.compile(r"\bfile://[^\s:`)]+|\bfile:/[^\s:`)]+")
+FILE_URI_RE = re.compile(r"\bfile:/+[^\s`)]+")
+UNSAFE_SCRUBBED_FILE_URI_SUFFIX_RE = re.compile(r"<absolute-path>:(?:/Users/[^\s:`)]+|/home/[^\s:`)]+|/private/var/[^\s:`)]+)")
 ABSOLUTE_PATH_PATTERNS = (
     FILE_URI_RE,
+    UNSAFE_SCRUBBED_FILE_URI_SUFFIX_RE,
     WINDOWS_UNC_ABSOLUTE_PATH_RE,
     WINDOWS_DRIVE_ABSOLUTE_PATH_RE,
     POSIX_ABSOLUTE_PATH_RE,

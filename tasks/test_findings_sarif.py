@@ -181,6 +181,8 @@ class FindingsSarifTest(unittest.TestCase):
         self.assertNotIn(r"C:\Users\alice", message)
         self.assertNotIn(r"\\buildbox\share", message)
         self.assertNotIn("file:///C:/Users/alice", message)
+        self.assertNotIn(":/Users/alice", message)
+        self.assertNotIn("/Users/alice", message)
 
         invalid_location = copy.deepcopy(finding)
         invalid_location["location"] = {"path": r"C:\Users\alice\repo\src\App.php", "start_line": 10, "side": "RIGHT"}
@@ -433,6 +435,13 @@ class FindingsSarifTest(unittest.TestCase):
         errors = validate_findings_sarif(self.schema, sarif, findings=artifact)
         self.assertTrue(any("message.text: must not leak host absolute paths" in error for error in errors), errors)
         self.assertTrue(any("artifactLocation.uri: must be a repository-relative URI path" in error for error in errors), errors)
+
+    def test_validator_rejects_unsafely_scrubbed_file_uri_suffixes(self) -> None:
+        artifact = canonical_artifact()
+        sarif = build_sarif(artifact, metadata=metadata(), ranges={"src/App.php": [(1, 20)]})
+        sarif["runs"][0]["results"][0]["message"]["text"] = "Leaked <absolute-path>:/Users/alice/repo/secret.txt"
+        errors = validate_findings_sarif(self.schema, sarif, findings=artifact)
+        self.assertTrue(any("message.text: must not leak host absolute paths" in error for error in errors), errors)
 
     def test_validator_rederives_guid_severity_and_post_policy_from_canonical(self) -> None:
         local_only = make_finding(
