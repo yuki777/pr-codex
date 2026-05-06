@@ -207,6 +207,8 @@ allow-list:
 - duplicate/related Issue numbers; arbitrary dependency prose is omitted
 - dependencies and ready/blocked status
 - recommended next action in 1–3 short lines
+- generic Kanban/triage summaries are not publishable; they remain internal
+  metadata unless a later policy adds a separately vetted public field
 
 The scrubber removes or masks secrets, API keys, tokens, credentials, Bearer
 headers, env secrets, local private paths (`/Users/...`, `/home/...`,

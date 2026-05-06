@@ -26,6 +26,8 @@ Allowed public comment content is restricted to this whitelist:
   inferred schema → validator/gate → workflow → docs ordering
 - ready / blocked status
 - recommended next action, summarized in 1–3 short lines
+- generic Kanban/triage summaries are not public content; keep them in Kanban
+  metadata unless a later policy adds a separate vetted public field
 
 Never publish these details. The publisher must scrub or skip instead:
 

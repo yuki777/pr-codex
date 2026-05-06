@@ -362,15 +362,8 @@ def render_issue_triage_body(payload: dict[str, Any]) -> dict[str, Any]:
         lines.append(f"- Ready/blocked: `{status}`")
         public_values_for_substance.append(status)
 
-    summary_text = _policy_text_value(
-        _first_present(payload, ("public_summary", "summary")),
-        field="public_summary",
-        omissions=policy_omissions,
-        redactions=redactions,
-    )
-    if summary_text:
-        lines.extend(["", f"Summary: {summary_text}"])
-        public_values_for_substance.append(summary_text)
+    if _first_present(payload, ("public_summary", "summary")) not in (None, ""):
+        _append_omission(omissions=policy_omissions, field="summary", reason="not_allowlisted")
 
     next_action_text = _policy_text_value(
         _first_present(payload, ("recommended_next_action", "next_action")),
