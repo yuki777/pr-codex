@@ -10,6 +10,8 @@
   "state_path": "$PR_CODEX_HERMES_ROOT/automation/pr-codex/state.json",
   "outbox_path": "$PR_CODEX_HERMES_ROOT/automation/pr-codex/tasks.jsonl",
   "github_auto_marker_prefix": "<!-- hermes-auto:",
+  "github_auto_marker_trusted_authors_env": "PR_CODEX_HERMES_AUTO_AUTHORS",
+  "github_auto_marker_trusted_apps_env": "PR_CODEX_HERMES_AUTO_APPS",
   "profiles": [
     "issue-triager",
     "pr-reviewer",

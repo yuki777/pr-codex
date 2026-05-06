@@ -54,6 +54,79 @@ def contains_hermes_marker(text: str | None) -> bool:
     return HERMES_AUTO_MARKER in (text or "")
 
 
+def split_csv_env(value: str | None) -> set[str]:
+    return {item.strip().lower() for item in (value or "").split(",") if item.strip()}
+
+
+def repo_owner(repo: str) -> str | None:
+    owner, _, _ = (repo or "").partition("/")
+    return owner or None
+
+
+def trusted_hermes_auto_authors(repo: str) -> set[str]:
+    """Return logins trusted to have produced Hermes marker comments.
+
+    The marker is public and therefore never sufficient on its own.  Phase 0's
+    documented deployment uses the repository owner's GitHub auth for generated
+    comments, while operators can tighten or extend the allow-list with
+    ``PR_CODEX_HERMES_AUTO_AUTHORS``.
+    """
+
+    configured = split_csv_env(os.environ.get("PR_CODEX_HERMES_AUTO_AUTHORS"))
+    if configured:
+        return configured
+    owner = repo_owner(repo)
+    return {owner.lower()} if owner else set()
+
+
+def trusted_hermes_auto_apps() -> set[str]:
+    """Return GitHub App slugs trusted to have produced Hermes marker comments."""
+
+    return split_csv_env(os.environ.get("PR_CODEX_HERMES_AUTO_APPS"))
+
+
+def github_actor_login(item: dict[str, Any]) -> str | None:
+    user = item.get("user")
+    if isinstance(user, dict) and user.get("login"):
+        return str(user["login"]).lower()
+    author = item.get("author")
+    if isinstance(author, dict) and author.get("login"):
+        return str(author["login"]).lower()
+    return None
+
+
+def github_app_slug(item: dict[str, Any]) -> str | None:
+    app = item.get("performed_via_github_app") or item.get("app")
+    if isinstance(app, dict):
+        slug = app.get("slug") or app.get("name")
+        if slug:
+            return str(slug).lower()
+    return None
+
+
+def is_trusted_hermes_auto_item(
+    item: dict[str, Any],
+    *,
+    repo: str,
+    trusted_authors: set[str] | None = None,
+    trusted_apps: set[str] | None = None,
+) -> bool:
+    """Return True only for marker-bearing comments from trusted automation.
+
+    GitHub comment/review bodies are untrusted input.  A public marker string
+    alone must not suppress feedback tasks, otherwise any commenter could hide
+    actionable review feedback by pasting the sentinel.
+    """
+
+    if not contains_hermes_marker(item.get("body")):
+        return False
+    authors = trusted_hermes_auto_authors(repo) if trusted_authors is None else trusted_authors
+    apps = trusted_hermes_auto_apps() if trusted_apps is None else trusted_apps
+    actor = github_actor_login(item)
+    app = github_app_slug(item)
+    return bool((actor and actor in authors) or (app and app in apps))
+
+
 def short_sha(value: str | None, length: int = 7) -> str:
     if not value:
         return "unknown"

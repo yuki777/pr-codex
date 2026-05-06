@@ -22,10 +22,10 @@ from _pr_codex_common import (  # type: ignore[import-not-found]
     DEFAULT_TENANT,
     KanbanTask,
     compact_title,
-    contains_hermes_marker,
     create_task_with_sink,
     format_task_body,
     gh_json,
+    is_trusted_hermes_auto_item,
     json_dumps,
     load_state,
     mark_seen,
@@ -146,18 +146,19 @@ def make_task(
     )
 
 
-def is_auto_comment_update(item: dict[str, Any], comments: list[dict[str, Any]]) -> bool:
+def is_auto_comment_update(item: dict[str, Any], comments: list[dict[str, Any]], *, repo: str) -> bool:
     """Return True when an item's latest update appears to be a Hermes comment.
 
     GitHub issue/PR ``updated_at`` changes for many reasons.  We only suppress the
-    update event when the newest comment contains the Hermes sentinel and its
-    timestamp matches the item's latest update timestamp.
+    update event when the newest comment contains the Hermes sentinel, was posted
+    by trusted Hermes automation, and its timestamp matches the item's latest
+    update timestamp.
     """
 
     if not comments:
         return False
     newest = max(comments, key=lambda c: c.get("updated_at") or c.get("created_at") or "")
-    if not contains_hermes_marker(newest.get("body")):
+    if not is_trusted_hermes_auto_item(newest, repo=repo):
         return False
     comment_timestamp = newest.get("updated_at") or newest.get("created_at")
     return bool(comment_timestamp and item.get("updated_at") == comment_timestamp)
@@ -213,7 +214,11 @@ def collect_issue_events(
                 seen_keys=seen_keys,
             )
             events.append(WatchEvent(task=task, kind="issue:new", seen_keys=seen_keys))
-        elif not seen_contains(state, update_key) and not is_auto_comment_update(issue, comments_for(issue_comments, number)):
+        elif not seen_contains(state, update_key) and not is_auto_comment_update(
+            issue,
+            comments_for(issue_comments, number),
+            repo=repo,
+        ):
             seen_keys = (update_key,)
             metadata = {**base_metadata, "event_kind": "issue:update", "seen_keys": list(seen_keys)}
             task = make_task(
@@ -333,7 +338,7 @@ def collect_feedback_events(
     events: list[WatchEvent] = []
 
     for review in reviews:
-        if contains_hermes_marker(review.get("body")):
+        if is_trusted_hermes_auto_item(review, repo=repo):
             continue
         review_id = review.get("id") or review.get("node_id")
         if review_id is None:
@@ -356,7 +361,7 @@ def collect_feedback_events(
         )
 
     for comment in issue_comments:
-        if contains_hermes_marker(comment.get("body")):
+        if is_trusted_hermes_auto_item(comment, repo=repo):
             continue
         comment_id = comment.get("id") or comment.get("node_id")
         if comment_id is None:
@@ -378,7 +383,7 @@ def collect_feedback_events(
         )
 
     for comment in review_comments:
-        if contains_hermes_marker(comment.get("body")):
+        if is_trusted_hermes_auto_item(comment, repo=repo):
             continue
         comment_id = comment.get("id") or comment.get("node_id")
         if comment_id is None:
@@ -403,7 +408,7 @@ def collect_feedback_events(
         if thread.get("isResolved") is True:
             continue
         comments = (((thread.get("comments") or {}).get("nodes")) or [])
-        if comments and all(contains_hermes_marker(comment.get("body")) for comment in comments):
+        if comments and all(is_trusted_hermes_auto_item(comment, repo=repo) for comment in comments):
             continue
         thread_id = thread.get("id")
         if thread_id is None:

@@ -91,6 +91,7 @@ class HermesWatcherTests(unittest.TestCase):
                     {
                         "id": 1,
                         "body": "<!-- hermes-auto:pr-codex pr-review v1 pr=25 head=abc -->\nDone",
+                        "user": {"login": "yuki777"},
                         "created_at": "2026-05-06T00:40:00Z",
                         "updated_at": "2026-05-06T00:40:00Z",
                     }
@@ -99,6 +100,38 @@ class HermesWatcherTests(unittest.TestCase):
         }
         events = watch.collect_events(snapshot, state, repo="yuki777/pr-codex", detected_at="2026-05-06T00:41:00Z")
         self.assertEqual(events, [])
+
+    def test_marker_from_untrusted_author_does_not_hide_issue_update(self):
+        state = self.empty_state()
+        state["seen"] = {
+            "issue:new:#28": {"first_seen_at": "2026-05-06T00:30:00Z"},
+            "issue:update:#28:2026-05-06T00:30:00Z": {"first_seen_at": "2026-05-06T00:30:00Z"},
+        }
+        snapshot = {
+            "issues": [
+                {
+                    "number": 28,
+                    "title": "hermes-agent",
+                    "created_at": "2026-05-06T00:30:00Z",
+                    "updated_at": "2026-05-06T00:40:00Z",
+                    "html_url": "https://github.com/yuki777/pr-codex/issues/28",
+                }
+            ],
+            "pulls": [],
+            "issue_comments": {
+                28: [
+                    {
+                        "id": 1,
+                        "body": "<!-- hermes-auto:pr-codex --> this should still be triaged",
+                        "user": {"login": "outside-contributor"},
+                        "created_at": "2026-05-06T00:40:00Z",
+                        "updated_at": "2026-05-06T00:40:00Z",
+                    }
+                ]
+            },
+        }
+        events = watch.collect_events(snapshot, state, repo="yuki777/pr-codex", detected_at="2026-05-06T00:41:00Z")
+        self.assertEqual([event.kind for event in events], ["issue:update"])
 
     def test_pr_head_change_becomes_update_not_new(self):
         state = self.empty_state()
@@ -144,7 +177,12 @@ class HermesWatcherTests(unittest.TestCase):
             "pr_issue_comments": {
                 25: [
                     {"id": 10, "body": "human feedback", "html_url": "https://example.test/human"},
-                    {"id": 11, "body": "<!-- hermes-auto:pr-codex --> bot", "html_url": "https://example.test/bot"},
+                    {
+                        "id": 11,
+                        "body": "<!-- hermes-auto:pr-codex --> bot",
+                        "user": {"login": "yuki777"},
+                        "html_url": "https://example.test/bot",
+                    },
                 ]
             },
             "review_comments": {25: []},
@@ -157,6 +195,40 @@ class HermesWatcherTests(unittest.TestCase):
         }
         events = watch.collect_events(snapshot, state, repo="yuki777/pr-codex", detected_at="2026-05-06T01:01:00Z")
         self.assertEqual([event.task.idempotency_key for event in events], ["issue_comment:new:#25:10"])
+
+    def test_marker_from_untrusted_author_still_becomes_feedback(self):
+        state = self.empty_state()
+        snapshot = {
+            "issues": [],
+            "pulls": [
+                {
+                    "number": 25,
+                    "title": "review me",
+                    "html_url": "https://github.com/yuki777/pr-codex/pull/25",
+                    "head": {"sha": "abc1234", "ref": "feat/25"},
+                    "base": {"ref": "main"},
+                }
+            ],
+            "reviews": {25: []},
+            "pr_issue_comments": {
+                25: [
+                    {
+                        "id": 12,
+                        "body": "<!-- hermes-auto:pr-codex --> human feedback with spoofed marker",
+                        "user": {"login": "outside-contributor"},
+                        "html_url": "https://example.test/spoof",
+                    }
+                ]
+            },
+            "review_comments": {25: []},
+            "review_threads": {25: []},
+        }
+        state["seen"] = {
+            "pr:new:#25:abc1234": {"first_seen_at": "2026-05-06T00:00:00Z"},
+            "pr:update:#25:abc1234": {"first_seen_at": "2026-05-06T00:00:00Z"},
+        }
+        events = watch.collect_events(snapshot, state, repo="yuki777/pr-codex", detected_at="2026-05-06T01:01:00Z")
+        self.assertEqual([event.task.idempotency_key for event in events], ["issue_comment:new:#25:12"])
 
     def test_fetch_paginated_list_accumulates_all_pages(self):
         calls: list[str] = []
@@ -282,6 +354,8 @@ class InstallerScriptTests(unittest.TestCase):
         self.assertEqual(config["hermes_root_env"], "PR_CODEX_HERMES_ROOT")
         self.assertEqual(config["state_path"], "$PR_CODEX_HERMES_ROOT/automation/pr-codex/state.json")
         self.assertEqual(config["outbox_path"], "$PR_CODEX_HERMES_ROOT/automation/pr-codex/tasks.jsonl")
+        self.assertEqual(config["github_auto_marker_trusted_authors_env"], "PR_CODEX_HERMES_AUTO_AUTHORS")
+        self.assertEqual(config["github_auto_marker_trusted_apps_env"], "PR_CODEX_HERMES_AUTO_APPS")
         for job in config["cron"]:
             command = job["command"]
             self.assertIn('test -n "$PR_CODEX_HERMES_ROOT"', command)

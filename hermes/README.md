@@ -127,11 +127,22 @@ Metadata-only PR edits at the same head (title/body/base/draft changes) are not
 task-generating in Phase 0; use a later phase or a dedicated metadata watcher if
 that signal becomes operationally important.
 
-Comments containing the sentinel below are ignored so Hermes does not react to its
-own automated GitHub posts in later phases:
+Comments containing the sentinel below are ignored only when they were authored
+by trusted Hermes automation, so a public marker pasted by an external commenter
+does not hide actionable feedback:
 
 ```markdown
 <!-- hermes-auto:pr-codex pr-review v1 pr=25 head=<sha> -->
+```
+
+By default, the repository owner (`yuki777` for this repo) is the trusted comment
+author because the current GitHub auth posts automation comments as that user.
+Override or extend this with comma-separated environment variables when using a
+dedicated bot or GitHub App:
+
+```bash
+export PR_CODEX_HERMES_AUTO_AUTHORS="yuki777,pr-codex-bot"
+export PR_CODEX_HERMES_AUTO_APPS="pr-codex-hermes"
 ```
 
 ## Profile policy highlights
