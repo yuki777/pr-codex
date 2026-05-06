@@ -16,7 +16,7 @@ GitHub PRを **Claude Code** と **Codex CLI** の2者レビュー方式で自�
 - Codex CLI (`codex-cli 0.128.0` 以上、`codex --ask-for-approval never -m gpt-5.5 ... exec` が使えること)
 - GitHub CLI (`gh`)
 - `jq`（SKILL.md 内の全テンプレートで利用する。macOS 標準では未インストール）
-- `python3`（同梱 validator `tasks/validate_findings.py` で `findings.verified.json` を検証するため）
+- `python3`（同梱 validator `tasks/validate_findings.py` / `tasks/validate_preflight_result.py` で `findings.verified.json` と `preflight-result.json` を検証するため）
 
 ## セットアップ
 
@@ -82,13 +82,14 @@ cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
 
 `/pr-codex:send` の挙動:
 
-1. `~/claude-loop-pr-codex/` 配下から `status.json` が `state:completed` でかつ `review.md` が存在するディレクトリを1件選定する（名前昇順の先頭1件）
-2. `findings.verified.json` を一次入力として `Must Fix` を抽出し、`review.md` から `## 総評` / `## 良い点` を body に使う（移行期間は Markdown parser を fallback として残すが、`findings.verified.json` が存在するのに Must Fix 件数が `review.md` と一致しない場合は中断する）
+1. `~/claude-loop-pr-codex/` 配下から `status.json` が `state:completed` でかつ `findings.verified.json` / `review.md` が存在するディレクトリを1件選定する（名前昇順の先頭1件）
+2. `findings.verified.json` を必須の一次入力として `Must Fix` / `Should Fix` / `Nit` の投稿方針を抽出し、`review.md` から `## 総評` / `## 良い点` を body に使う（F13 以降は Markdown parser fallback へ切り替えず、欠落・schema 不整合・Must Fix 件数不一致なら中断する）
 3. `Should Fix` のうち `post_policy: body_summary` の候補がある場合、上位 3 件を body の `## 非ブロッキング改善 (Should Fix)` に含めるかを確認する（default: no）
 4. `Nit` は PR に投稿せず、primary path では `nits.md` にローカル artifact として書き出す（0 件なら作成しない）
-5. GitHub Reviews API への payload サマリをユーザーに提示し、明示的な承認を得る
-6. 承認後、`gh api --method POST .../reviews` で投稿（`event` は Must Fix ありなら `REQUEST_CHANGES`、なければ `COMMENT`。`APPROVE` は自動では出さない）
-7. 投稿成功後、対象ディレクトリを `~/claude-loop-pr-codex/sent/$org-$repo-$pr-$head_sha_short/` に移動する（同一 PR でも HEAD 更新後の再投稿履歴が衝突しないよう、`head_sha` の先頭 7 文字を suffix に付ける）
+5. Step 4.5 の verifier pipeline を schema / range / semantic / payload consistency の 4 stage で実行し、従来互換の `preflight-codex.md` に加えて `preflight-result.json` を保存する。semantic stage では Must Fix の反証、Should Fix body summary の対応関係、Nit の payload 混入を検証する
+6. GitHub Reviews API への payload サマリをユーザーに提示し、明示的な承認を得る
+7. 承認後、`gh api --method POST .../reviews` で投稿（`event` は Must Fix ありなら `REQUEST_CHANGES`、なければ `COMMENT`。`APPROVE` は自動では出さない）
+8. 投稿成功後、対象ディレクトリを `~/claude-loop-pr-codex/sent/$org-$repo-$pr-$head_sha_short/` に移動する（同一 PR でも HEAD 更新後の再投稿履歴が衝突しないよう、`head_sha` の先頭 7 文字を suffix に付ける）
 
 `/loop` には載せず、対話実行で使う。1回の実行で1件のみ処理する。
 
@@ -128,6 +129,10 @@ Phase 0 は read-only observer です。GitHub への自動コメント、label/
   │     ├── findings.verified.json # canonical findings (`schemas/findings.v1.json`)
   │     ├── validation-report.json # validation の副成果物（canonical findings とは分離）
   │     ├── review.md             # 統合レビュー（最終成果物）
+  │     ├── preflight-prompt.md   # /pr-codex:send Step 4.5 の Codex verifier prompt
+  │     ├── preflight-codex.md    # /pr-codex:send Step 4.5 の人間可読 verifier 結果
+  │     ├── preflight-result.json # /pr-codex:send Step 4.5 の構造化 verifier 結果
+  │     ├── preflight-codex.log
   │     ├── nits.md               # Nit がある場合のみ。PR には投稿しない控え
   │     ├── claude.log
   │     └── codex.log
@@ -138,6 +143,9 @@ Phase 0 は read-only observer です。GitHub への自動コメント、label/
               ├── nits.md               # Nit があった場合のみ
               ├── review-payload.json   # 投稿した GitHub Reviews API の payload
               ├── review-response.json  # gh api のレスポンス（.html_url 等）
+              ├── preflight-prompt.md
+              ├── preflight-codex.md
+              ├── preflight-result.json
               └── ... (他ファイルも一緒に保管される)
 ```
 
@@ -161,9 +169,18 @@ mv ~/claude-loop-pr-codex/sent/yuki777-pr-codex-24 \
 - `category` は schema enum（`bug` / `security` / `performance` / `tests` / `design` / `code_quality` / `consistency` / `runtime_error`）に固定し、自由文字列の揺れを `fingerprint` に入れない
 - `fingerprint` の入力は `path` / `category` / `normalized_title` / `primary_symbol` に固定し、`line` は含めない
 - JSON Schema Draft 2020-12 単体では sibling equality (`id == fingerprint`) を標準機能だけで強制しにくいため、この等値は **review/send workflow の必須 runtime gate** として扱う
-- review 側は `findings.verified.json` を completed 前に同梱 validator `tasks/validate_findings.py` で `schemas/findings.v1.json` へ検証し、send 側 primary path も同じ validator に失敗したら fallback せず中断する
+- review 側は `findings.verified.json` を completed 前に同梱 validator `tasks/validate_findings.py` で `schemas/findings.v1.json` へ検証し、send 側も同じ validator に失敗したら Markdown fallback せず中断する
 - schema 自体は `location.side` に `LEFT` も残すが、M1 の send workflow は `RIGHT` のみ受け付ける
 - `tasks/validate_findings.py` は JSON shape / enum / conditional rule / RFC3339 date-time / URI / `end_line >= start_line` / `id == fingerprint` / fingerprint 再計算 / `metadata.json` との PR context 一致を stdlib-only で検証する
+
+
+## Preflight result schema
+
+- `/pr-codex:send` Step 4.5 は `schemas/preflight-result.v1.json` に従う `preflight-result.json` を出力する
+- `verdict` は `PASS` / `FAIL` のみ。`PASS_WITH_WARNINGS` は導入せず、将来の非ブロッキング警告は `violations[].severity = "warning"` として表現する
+- `stages` は `schema_validation` / `range_validation` / `semantic_preflight` / `payload_consistency` の 4 stage を必ず含む
+- `violations[]` は `auto_fixable` と `requires_review_regeneration` を持ち、send 側で直せる payload ずれ（行範囲・event・body など）と review 再生成が必要な semantic/schema 不整合を分離する
+- `tasks/validate_preflight_result.py` は `preflight-codex.md` の `RESULT_JSON` ブロック抽出と `preflight-result.json` の cross-field validation を stdlib-only で行う
 
 ### fingerprint 正準アルゴリズム
 

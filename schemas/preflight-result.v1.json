@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/yuki777/pr-codex/main/schemas/preflight-result.v1.json",
+  "title": "pr-codex send preflight result v1",
+  "description": "Structured verifier pipeline result emitted by /pr-codex:send Step 4.5 before GitHub Reviews API submission. PASS_WITH_WARNINGS is intentionally not a verdict; warnings are represented as violations[].severity=warning.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "verdict",
+    "stages",
+    "violations",
+    "auto_fixable_count",
+    "requires_human_count",
+    "generated_at"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "preflight-result.v1"
+    },
+    "verdict": {
+      "enum": [
+        "PASS",
+        "FAIL"
+      ]
+    },
+    "stages": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_validation",
+        "range_validation",
+        "semantic_preflight",
+        "payload_consistency"
+      ],
+      "properties": {
+        "schema_validation": {
+          "$ref": "#/$defs/stage_result"
+        },
+        "range_validation": {
+          "$ref": "#/$defs/stage_result"
+        },
+        "semantic_preflight": {
+          "$ref": "#/$defs/stage_result"
+        },
+        "payload_consistency": {
+          "$ref": "#/$defs/stage_result"
+        }
+      }
+    },
+    "violations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/violation"
+      }
+    },
+    "auto_fixable_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "requires_human_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "$defs": {
+    "stage_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "PASS",
+            "FAIL"
+          ]
+        },
+        "note": {
+          "type": "string"
+        }
+      }
+    },
+    "violation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "stage",
+        "rule",
+        "detail",
+        "severity",
+        "auto_fixable",
+        "requires_review_regeneration"
+      ],
+      "properties": {
+        "stage": {
+          "enum": [
+            "schema_validation",
+            "range_validation",
+            "semantic_preflight",
+            "payload_consistency"
+          ]
+        },
+        "rule": {
+          "type": "string",
+          "minLength": 1
+        },
+        "finding_id": {
+          "type": "string"
+        },
+        "comment_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "detail": {
+          "type": "string",
+          "minLength": 1
+        },
+        "severity": {
+          "enum": [
+            "error",
+            "warning"
+          ]
+        },
+        "auto_fixable": {
+          "type": "boolean"
+        },
+        "requires_review_regeneration": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}
