@@ -158,6 +158,33 @@ class ValidateFindingsTest(unittest.TestCase):
         finding["posting"]["explanation_postable"] = True
         self.assert_invalid_without_crash(artifact, "must be false when evidence_level=suspicion")
 
+    def test_evidence_ladder_adoption_thresholds_are_validator_enforced(self) -> None:
+        cases = {
+            "must-fix-requires-verified": (
+                lambda f: f.update(evidence_level="corroborated"),
+                ".evidence_level: must_fix findings must use evidence_level=verified",
+            ),
+            "should-fix-requires-corroborated-or-higher": (
+                lambda f: (
+                    f.update(severity="should_fix", evidence_level="suspicion"),
+                    f.update(
+                        posting={
+                            "post_policy": "local_only",
+                            "explanation_postable": False,
+                            "not_postable_reason": "low_evidence_suspicion",
+                            "audience": "human_reviewer",
+                        }
+                    ),
+                ),
+                ".evidence_level: should_fix findings require evidence_level=corroborated or higher",
+            ),
+        }
+        for name, (mutate, expected_fragment) in cases.items():
+            with self.subTest(name=name):
+                artifact = copy.deepcopy(valid_artifact())
+                mutate(artifact["findings"][0])
+                self.assert_invalid_without_crash(artifact, expected_fragment)
+
     def test_axes_are_required(self) -> None:
         artifact = copy.deepcopy(valid_artifact())
         del artifact["findings"][0]["axes"]
@@ -264,13 +291,13 @@ class ValidateFindingsTest(unittest.TestCase):
                 mutate(artifact["findings"][0])
                 self.assert_invalid_without_crash(artifact, expected_fragment)
 
-    def test_general_no_must_fix_passes_when_specific_impact_is_explained(self) -> None:
+    def test_general_no_must_fix_passes_when_verified_specific_impact_is_explained(self) -> None:
         artifact = copy.deepcopy(valid_artifact())
         artifact["findings"][0]["axes"]["general"] = "no"
-        artifact["findings"][0]["evidence_level"] = "impact_explained"
+        artifact["findings"][0]["evidence_level"] = "verified"
         self.assertEqual(validate_artifact(self.schema, artifact), [])
 
-    def test_general_unknown_must_fix_passes_when_specific_impact_is_explained(self) -> None:
+    def test_general_unknown_must_fix_passes_when_verified_specific_impact_is_explained(self) -> None:
         artifact = copy.deepcopy(valid_artifact())
         artifact["findings"][0]["axes"]["general"] = "unknown"
         artifact["findings"][0]["evidence_level"] = "verified"

@@ -82,6 +82,43 @@ MCPが使える場合は、以下も取得してレビューに活用するこ�
 - 削除行に対する指摘は、削除位置の直後または直前の head 側に存在する行を `line` として指し、本文に「直前の削除に対する指摘」または「直後の削除に対する指摘」と明記する
 - head 側の行が直接特定できない場合は、`pr.diff` の hunk header `@@ -OLD,N +NEW,M @@` を使い、`+NEW` 側オフセットから head 行を逆算する
 
+## エビデンスラダーと採用基準
+
+各 finding には根拠の強さに応じて 5 段の `evidence_level` を 1 つだけ付ける。
+ラダー段階は決定論的に選び、1 つの finding で複数段の条件を満たす場合は最も高い到達段階に揃える。
+
+| Level | 名称 | 採用条件 |
+|---|---|---|
+| 1 | `suspicion` | hunter が候補として挙げただけ。具体的根拠なし |
+| 2 | `corroborated` | 静的解析・型・lint・他箇所のパターン・2 者の同一指摘で裏付け |
+| 3 | `trigger_path_identified` | head diff 上で発火条件が特定できる |
+| 4 | `impact_explained` | 影響範囲と修正方針が具体的に書ける |
+| 5 | `verified` | 反証検討を経て採用 (verifier / 再現テスト / CI / 静的解析で確認) |
+
+### 採用基準
+
+- **Must Fix**: 原則 `verified` 以上。例外規則 (下記) で救済された場合のみ昇格可
+- **Should Fix**: `corroborated` 以上
+- それ未満 (`suspicion` 単独): `## 補足` セクションへ退避し、GitHub には投稿しない
+
+### 例外規則 (verified への昇格)
+
+CI / type system / 既存 lint で検出される類の「明白な静的解析的バグ」は、
+trigger path が再現できなくても `corroborated` かつ `impact_explained` が
+両方揃えば `verified` 扱いにしてよい。
+
+ただし救済根拠は finding の `evidence[]` に **必ず**
+`type: static_analysis | ci_log | test` のいずれかで残すこと。
+`type: manual_review` のみでの昇格は禁止。
+
+### 説明品質との分離
+
+`explanation_postable: bool` は「説明品質 (この finding の説明が
+そのまま投稿可能か)」を表す独立フィールドであり、エビデンスラダーとは
+直交する。`evidence_level=suspicion` は schema 制約で必ず
+`explanation_postable=false` になるが、`verified` でも説明品質が
+低ければ `explanation_postable=false` にできる。
+
 ## 出力フォーマット
 レビュー結果は以下の形式で出力すること:
 
@@ -120,3 +157,4 @@ MCPが使える場合は、以下も取得してレビューに活用するこ�
 
 ## 重要
 遠慮は不要。「動くから良い」は理由にならない。プロダクションコードとして長期的に保守可能かどうかを基準に判断すること。曖昧な表現（「〜かもしれません」「〜した方がいいかも」）は避け、断定的に指摘すること。採用したい理由ではなく落とす理由を優先探索し、実発火・影響・横展開または specific-impact を確認できない指摘を Must Fix にしないこと。
+`evidence_level` の判定根拠は finding の reason / suggestion に明示すること。
