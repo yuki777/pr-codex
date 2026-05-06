@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import subprocess
 import sys
@@ -15,9 +16,10 @@ TASKS = ROOT / "tasks"
 GATE_PATH = TASKS / "m1_m2_gate.py"
 sys.path.insert(0, str(TASKS))
 
-from m1_m2_gate import EXPECTED_FIXTURE_SCORING_GATES, build_report, score_report_gate_consistent  # noqa: E402
+from m1_m2_gate import EXPECTED_FIXTURE_CONTRACTS, EXPECTED_FIXTURE_SCORING_GATES, build_report, score_report_gate_consistent  # noqa: E402
 from score_fixture import load_json, score_fixture  # noqa: E402
 from validate_m1_m2_gate import validate_m1_m2_gate  # noqa: E402
+from validate_score_report import validate_score_report  # noqa: E402
 
 EVALUATED_AT = "2026-05-06T00:00:00Z"
 
@@ -51,6 +53,9 @@ class M1M2GateTest(unittest.TestCase):
             expected = load_json(ROOT / "fixtures" / size / "expected-findings.json")
             actual[expected["fixture_id"]] = expected["scoring_gate"]
         self.assertEqual(actual, EXPECTED_FIXTURE_SCORING_GATES)
+        for fixture_id, contract in EXPECTED_FIXTURE_CONTRACTS.items():
+            self.assertRegex(contract["oracle_sha256"], r"^[0-9a-f]{64}$")
+            self.assertEqual(len(contract["expected_finding_ids"]), len(contract["expected_breakdown_rows"]))
 
     def test_all_pass_when_operational_inputs_and_fixture_scores_pass(self) -> None:
         report = build_report([perfect_score("small"), perfect_score("medium"), perfect_score("large")], passing_inputs(), EVALUATED_AT)
@@ -139,6 +144,33 @@ class M1M2GateTest(unittest.TestCase):
         by_name = self.criteria_by_name(report)
         self.assertEqual(by_name["fixture_scoring_gate"]["status"], "fail")
         self.assertEqual(report["overall_status"], "fail")
+
+    def test_fixture_gate_rejects_relabelled_score_reports(self) -> None:
+        small_report = perfect_score("small")
+        score_reports = []
+        for size in ("small", "medium", "large"):
+            expected = load_json(ROOT / "fixtures" / size / "expected-findings.json")
+            report = copy.deepcopy(small_report)
+            report["fixture_id"] = expected["fixture_id"]
+            report["scoring_gate"] = expected["scoring_gate"]
+            report["gate_checks"] = []
+            for name, threshold in expected["scoring_gate"].items():
+                metric_name = name.removesuffix("_min").removesuffix("_max")
+                actual = report[metric_name]
+                passed = actual <= threshold if name.endswith("_max") else actual >= threshold
+                report["gate_checks"].append(
+                    {"name": name, "actual": actual, "threshold": threshold, "passed": passed}
+                )
+            report["gate_pass"] = all(check["passed"] for check in report["gate_checks"])
+            score_reports.append(report)
+
+        self.assertEqual(validate_score_report(score_reports[1]), [])
+        self.assertFalse(score_report_gate_consistent(score_reports[1]))
+        report = build_report(score_reports, passing_inputs(), EVALUATED_AT)
+        by_name = self.criteria_by_name(report)
+        self.assertEqual(by_name["fixture_scoring_gate"]["status"], "fail")
+        self.assertEqual(report["overall_status"], "fail")
+        self.assertFalse(by_name["fixture_scoring_gate"]["evidence"]["records"][1]["oracle_sha256_match"])
 
     def test_fixture_scoring_requires_exact_expected_fixture_set(self) -> None:
         cases = {

@@ -9,6 +9,7 @@ while operational measurements are supplied by manual/deep eval runs.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from datetime import datetime, timezone
@@ -31,26 +32,6 @@ CRITERIA_ORDER = [
     "loop_completion_rate",
     "fixture_scoring_gate",
 ]
-EXPECTED_FIXTURE_IDS = {
-    "bear-sunday-pr164-small",
-    "bear-sunday-pr143-medium",
-    "bear-sunday-pr171-large",
-}
-EXPECTED_FIXTURE_SCORING_GATES = {
-    "bear-sunday-pr164-small": {
-        "acceptable_pass_rate_min": 0.8,
-        "false_positive_rate_max": 0.1,
-    },
-    "bear-sunday-pr143-medium": {
-        "exact_pass_rate_min": 0.5,
-        "acceptable_pass_rate_min": 0.8,
-        "false_positive_rate_max": 0.1,
-    },
-    "bear-sunday-pr171-large": {
-        "acceptable_pass_rate_min": 0.7,
-        "false_positive_rate_max": 0.15,
-    },
-}
 SCORE_GATE_METRICS = {
     "exact_pass_rate_min": ("exact_pass_rate", ">="),
     "acceptable_pass_rate_min": ("acceptable_pass_rate", ">="),
@@ -66,6 +47,34 @@ def load_json(path: Path) -> Any:
         raise ValueError(f"{path}: cannot read/parse JSON: {exc}") from exc
 
 
+def canonical_sha256(value: Any) -> str:
+    payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def load_fixture_contracts(fixtures_root: Path = ROOT / "fixtures") -> dict[str, dict[str, Any]]:
+    contracts: dict[str, dict[str, Any]] = {}
+    for path in sorted(fixtures_root.glob("*/expected-findings.json")):
+        data = load_json(path)
+        if not isinstance(data, dict) or not isinstance(data.get("fixture_id"), str):
+            continue
+        expected_findings = data.get("expected_findings")
+        if not isinstance(expected_findings, list):
+            continue
+        expected_rows = [
+            {"expected_id": str(item.get("id")), "expected_outcome": str(item.get("expected_outcome"))}
+            for item in expected_findings
+            if isinstance(item, dict)
+        ]
+        contracts[data["fixture_id"]] = {
+            "oracle_sha256": canonical_sha256(data),
+            "expected_finding_ids": [item["expected_id"] for item in expected_rows],
+            "expected_breakdown_rows": expected_rows,
+            "scoring_gate": normalized_scoring_gate(data.get("scoring_gate")),
+        }
+    return contracts
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
@@ -76,6 +85,24 @@ def is_number(value: Any) -> bool:
 
 def is_rate(value: Any) -> bool:
     return is_number(value) and 0 <= float(value) <= 1
+
+
+def normalized_scoring_gate(value: Any) -> dict[str, float]:
+    if not isinstance(value, dict):
+        return {}
+    gate: dict[str, float] = {}
+    for name in SCORE_GATE_METRICS:
+        threshold = value.get(name)
+        if is_rate(threshold):
+            gate[name] = round(float(threshold), 4)
+    return gate
+
+
+EXPECTED_FIXTURE_CONTRACTS = load_fixture_contracts()
+EXPECTED_FIXTURE_IDS = set(EXPECTED_FIXTURE_CONTRACTS)
+EXPECTED_FIXTURE_SCORING_GATES = {
+    fixture_id: contract["scoring_gate"] for fixture_id, contract in EXPECTED_FIXTURE_CONTRACTS.items()
+}
 
 
 def criterion(name: str, status: str, evidence: dict[str, Any]) -> dict[str, Any]:
@@ -162,6 +189,10 @@ def status_fixture_scoring(score_reports: list[dict[str, Any]]) -> dict[str, Any
             "gate_consistent": score_report_gate_consistent(report),
             "required_scoring_gate": EXPECTED_FIXTURE_SCORING_GATES.get(str(report.get("fixture_id")), {}),
             "reported_scoring_gate": report.get("scoring_gate"),
+            "oracle_sha256_match": report.get("oracle_sha256")
+            == EXPECTED_FIXTURE_CONTRACTS.get(str(report.get("fixture_id")), {}).get("oracle_sha256"),
+            "expected_finding_ids_match": report.get("expected_finding_ids")
+            == EXPECTED_FIXTURE_CONTRACTS.get(str(report.get("fixture_id")), {}).get("expected_finding_ids"),
             "acceptable_pass_rate": report.get("acceptable_pass_rate"),
             "false_positive_rate": report.get("false_positive_rate"),
             "recall_known_bug": report.get("recall_known_bug"),
@@ -182,9 +213,16 @@ def status_fixture_scoring(score_reports: list[dict[str, Any]]) -> dict[str, Any
 
 def score_report_gate_consistent(report: dict[str, Any]) -> bool:
     fixture_id = report.get("fixture_id")
-    if not isinstance(fixture_id, str) or fixture_id not in EXPECTED_FIXTURE_SCORING_GATES:
+    if not isinstance(fixture_id, str) or fixture_id not in EXPECTED_FIXTURE_CONTRACTS:
         return False
-    required_gate = EXPECTED_FIXTURE_SCORING_GATES[fixture_id]
+    contract = EXPECTED_FIXTURE_CONTRACTS[fixture_id]
+    if report.get("oracle_sha256") != contract["oracle_sha256"]:
+        return False
+    if report.get("expected_finding_ids") != contract["expected_finding_ids"]:
+        return False
+    if breakdown_rows(report.get("breakdown")) != contract["expected_breakdown_rows"]:
+        return False
+    required_gate = contract["scoring_gate"]
     raw_reported_gate = report.get("scoring_gate")
     if not isinstance(raw_reported_gate, dict) or set(raw_reported_gate) != set(required_gate):
         return False
@@ -221,15 +259,19 @@ def score_report_gate_consistent(report: dict[str, Any]) -> bool:
     return True
 
 
-def normalized_scoring_gate(value: Any) -> dict[str, float]:
-    if not isinstance(value, dict):
-        return {}
-    gate: dict[str, float] = {}
-    for name in SCORE_GATE_METRICS:
-        threshold = value.get(name)
-        if is_rate(threshold):
-            gate[name] = round(float(threshold), 4)
-    return gate
+def breakdown_rows(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    rows: list[dict[str, str]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            return []
+        expected_id = item.get("expected_id")
+        expected_outcome = item.get("expected_outcome")
+        if not isinstance(expected_id, str) or not isinstance(expected_outcome, str):
+            return []
+        rows.append({"expected_id": expected_id, "expected_outcome": expected_outcome})
+    return rows
 
 
 def overall(criteria: list[dict[str, Any]]) -> str:

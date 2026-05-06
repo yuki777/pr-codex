@@ -64,6 +64,24 @@ class ScoreFixtureTest(unittest.TestCase):
         self.assertEqual(len(report["unmatched_actuals"]), 1)
         self.assertEqual(report["unmatched_actuals"][0]["severity"], "must_fix")
 
+    def test_false_positive_trap_title_match_ignores_wrong_category(self) -> None:
+        expected = load_json(ROOT / "fixtures" / "small" / "expected-findings.json")
+        actual = copy.deepcopy(load_json(ROOT / "fixtures" / "small" / "scoring-stubs" / "perfect.findings.verified.json"))
+        trap = next(item for item in expected["expected_findings"] if item["expected_outcome"] == "known_false_positive_trap")
+        overpromotion = copy.deepcopy(actual["findings"][0])
+        overpromotion["severity"] = "must_fix"
+        overpromotion["category"] = "bug"
+        overpromotion["title"] = trap["title"]
+        overpromotion["problem"] = trap["title"]
+        overpromotion["fingerprint"] = "2" * 64
+        overpromotion["id"] = "2" * 64
+        actual["findings"].append(overpromotion)
+        report = score_fixture(expected, actual, EVALUATED_AT)
+        self.assertFalse(report["gate_pass"])
+        self.assertEqual(report["false_positive_rate"], 1.0)
+        trap_rows = [row for row in report["breakdown"] if row["expected_id"] == trap["id"]]
+        self.assertEqual(trap_rows[0]["match_status"], "false_positive_promoted")
+
     def test_partial_axes_drift_separates_exact_from_acceptable(self) -> None:
         report = score("small", "partial-axes-drift")
         self.assertTrue(report["gate_pass"])
@@ -111,6 +129,27 @@ class ScoreFixtureTest(unittest.TestCase):
         self.assertEqual(risk_rows[0]["match_status"], "matched")
         self.assertFalse(risk_rows[0]["severity_diff"]["acceptable"])
 
+    def test_acceptable_risk_title_match_ignores_wrong_category(self) -> None:
+        expected = load_json(ROOT / "fixtures" / "small" / "expected-findings.json")
+        actual = copy.deepcopy(load_json(ROOT / "fixtures" / "small" / "scoring-stubs" / "perfect.findings.verified.json"))
+        risk = next(item for item in expected["expected_findings"] if item["expected_outcome"] == "acceptable_risk")
+        overpromotion = copy.deepcopy(actual["findings"][0])
+        overpromotion["severity"] = "should_fix"
+        overpromotion["category"] = "design"
+        overpromotion["title"] = risk["title"]
+        overpromotion["problem"] = risk["title"]
+        overpromotion["evidence_level"] = "corroborated"
+        overpromotion["axes"] = {"real": "yes", "triggerable": "no", "impactful": "no", "general": "yes"}
+        overpromotion["fingerprint"] = "3" * 64
+        overpromotion["id"] = "3" * 64
+        actual["findings"].append(overpromotion)
+        report = score_fixture(expected, actual, EVALUATED_AT)
+        self.assertFalse(report["gate_pass"])
+        self.assertEqual(report["acceptable_pass_rate"], 0.5)
+        risk_rows = [row for row in report["breakdown"] if row["expected_id"] == risk["id"]]
+        self.assertEqual(risk_rows[0]["match_status"], "matched")
+        self.assertFalse(risk_rows[0]["severity_diff"]["acceptable"])
+
     def test_score_report_validator_rejects_contradictory_report(self) -> None:
         report = score("small", "perfect")
         report["counts"]["acceptable_pass"] = 0
@@ -137,6 +176,15 @@ class ScoreFixtureTest(unittest.TestCase):
 
     def test_score_report_includes_oracle_scoring_gate(self) -> None:
         report = score("medium", "perfect")
+        self.assertRegex(report["oracle_sha256"], r"^[0-9a-f]{64}$")
+        self.assertEqual(
+            report["expected_finding_ids"],
+            [
+                "removed-assert-undefined-index-risk",
+                "psalm-type-alias-no-runtime-validation",
+                "php74-compat-break-trap",
+            ],
+        )
         self.assertEqual(
             report["scoring_gate"],
             {

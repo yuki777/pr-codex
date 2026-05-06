@@ -174,7 +174,7 @@ python3 tasks/m1_m2_gate.py \
   --out artifacts/m1-m2-gate.json
 ```
 
-`m1-m2-gate.json` は `payload_compat_422` / `must_fix_count_consistency` / `step_4_5_pass_rate` / `run_plan_emitted` / `loop_completion_rate` / `fixture_scoring_gate` を `pass` / `fail` / `unknown` で記録し、総合結果を `pass` / `fail` / `blocked_by_unknowns` に集約する。`fixture_scoring_gate` は small / medium / large の3 fixture が揃っていることに加え、各 `score-report.v1` に埋め込まれた oracle 由来の `scoring_gate` と `gate_checks` の閾値が fixture ごとの固定値と一致することも確認する。
+`m1-m2-gate.json` は `payload_compat_422` / `must_fix_count_consistency` / `step_4_5_pass_rate` / `run_plan_emitted` / `loop_completion_rate` / `fixture_scoring_gate` を `pass` / `fail` / `unknown` で記録し、総合結果を `pass` / `fail` / `blocked_by_unknowns` に集約する。`fixture_scoring_gate` は small / medium / large の3 fixture が揃っていることに加え、各 `score-report.v1` に埋め込まれた oracle 由来の `scoring_gate` / `oracle_sha256` / `expected_finding_ids` と `gate_checks` の閾値が fixture ごとの固定 oracle と一致することも確認する。
 
 ## ファイル構成
 

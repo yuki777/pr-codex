@@ -10,6 +10,7 @@ whereas actual ids are deterministic fingerprints.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -71,6 +72,11 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def canonical_sha256(value: Any) -> str:
+    payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
 def rate(numerator: int, denominator: int, empty_value: float = 1.0) -> float:
     if denominator == 0:
         return empty_value
@@ -114,13 +120,10 @@ def choose_best_actual(expected: dict[str, Any], actuals: list[dict[str, Any]], 
 
 
 def keyword_candidate_indexes(expected: dict[str, Any], actuals: list[dict[str, Any]]) -> list[int]:
-    category = expected.get("category")
-    if not isinstance(category, str):
-        return []
     return [
         index
         for index, actual in enumerate(actuals)
-        if actual.get("category") == category and title_keyword_match(expected.get("title"), actual.get("title"))
+        if title_keyword_match(expected.get("title"), actual.get("title"))
     ]
 
 
@@ -143,8 +146,6 @@ def actual_matches_trap(expected: dict[str, Any], actual: dict[str, Any]) -> boo
     key = expected_key(expected)
     if key is not None and key == actual_key(actual):
         return True
-    if expected.get("category") != actual.get("category"):
-        return False
     return title_keyword_match(expected.get("title"), actual.get("title"))
 
 
@@ -388,6 +389,10 @@ def report_scoring_gate(scoring_gate: Any) -> dict[str, float]:
     return copied
 
 
+def expected_finding_ids(expected_findings: list[dict[str, Any]]) -> list[str]:
+    return [str(item.get("id")) for item in expected_findings]
+
+
 def validate_fixture_context(expected: dict[str, Any], actual: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     source = expected.get("source")
@@ -427,6 +432,8 @@ def score_fixture(expected: dict[str, Any], actual: dict[str, Any], evaluated_at
         "schema_version": "score-report.v1",
         "fixture_id": expected.get("fixture_id"),
         "evaluated_at": evaluated_at,
+        "oracle_sha256": canonical_sha256(expected),
+        "expected_finding_ids": expected_finding_ids(expected_findings),
         **metrics,
         "gate_pass": all(check["passed"] for check in checks),
         "scoring_gate": report_scoring_gate(expected.get("scoring_gate")),

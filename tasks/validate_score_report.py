@@ -20,6 +20,8 @@ TOP_KEYS = {
     "schema_version",
     "fixture_id",
     "evaluated_at",
+    "oracle_sha256",
+    "expected_finding_ids",
     "exact_pass_rate",
     "acceptable_pass_rate",
     "false_positive_rate",
@@ -146,6 +148,18 @@ def validate_gate_checks(errors: list[str], value: Any) -> None:
     duplicates = sorted({name for name in names if names.count(name) > 1})
     if duplicates:
         errors.append(f"$.gate_checks: duplicate checks: {', '.join(duplicates)}")
+
+
+def validate_expected_finding_ids(errors: list[str], value: Any) -> None:
+    if not isinstance(value, list) or not value:
+        errors.append("$.expected_finding_ids: must be a non-empty array")
+        return
+    for index, item in enumerate(value):
+        if not non_empty_string(item):
+            errors.append(f"$.expected_finding_ids[{index}]: must be a non-empty string")
+    duplicates = sorted({item for item in value if isinstance(item, str) and value.count(item) > 1})
+    if duplicates:
+        errors.append(f"$.expected_finding_ids: duplicate ids: {', '.join(duplicates)}")
 
 
 def validate_scoring_gate(errors: list[str], value: Any) -> None:
@@ -278,6 +292,9 @@ def validate_score_report(data: Any) -> list[str]:
         errors.append("$.fixture_id: must be a non-empty string")
     if "evaluated_at" in data and not is_rfc3339(data["evaluated_at"]):
         errors.append("$.evaluated_at: must be RFC3339 date-time with timezone")
+    if "oracle_sha256" in data and (not isinstance(data["oracle_sha256"], str) or not FINGERPRINT_RE.match(data["oracle_sha256"])):
+        errors.append("$.oracle_sha256: must be 64 lowercase hex")
+    validate_expected_finding_ids(errors, data.get("expected_finding_ids"))
     for key in RATE_KEYS:
         if key in data and not number_0_1(data[key]):
             errors.append(f"$.{key}: must be a number between 0 and 1")
@@ -295,6 +312,7 @@ def validate_score_report(data: Any) -> list[str]:
 def validate_internal_consistency(errors: list[str], data: dict[str, Any]) -> None:
     counts = data.get("counts")
     breakdown = data.get("breakdown")
+    expected_ids = data.get("expected_finding_ids")
     scoring_gate = data.get("scoring_gate")
     gate_checks = data.get("gate_checks")
     if isinstance(counts, dict):
@@ -313,6 +331,9 @@ def validate_internal_consistency(errors: list[str], data: dict[str, Any]) -> No
                 errors.append(f"$.{key}: must equal counts-derived value {expected}")
 
     if isinstance(breakdown, list) and all(isinstance(item, dict) for item in breakdown) and isinstance(counts, dict):
+        breakdown_ids = [item.get("expected_id") for item in breakdown]
+        if isinstance(expected_ids, list) and all(isinstance(item, str) for item in expected_ids) and breakdown_ids != expected_ids:
+            errors.append("$.expected_finding_ids: must equal breakdown[].expected_id order")
         target_rows = [
             item
             for item in breakdown
