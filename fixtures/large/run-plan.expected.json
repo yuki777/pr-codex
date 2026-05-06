@@ -18,5 +18,25 @@
   "estimated_stages": 4,
   "estimated_timeout_ms": 1200000,
   "actual_duration_ms": null,
-  "actual_tokens": null
+  "actual_tokens": null,
+  "review_loop": {
+    "halting_policy": {
+      "max_rounds": 3,
+      "time_budget_ms": 1200000,
+      "no_new_evidence_rounds": 1,
+      "repeated_contradiction_limit": 2,
+      "verifier_fail_policy": "local_artifact_only",
+      "insufficient_evidence_policy": "suppress_to_local_artifact"
+    },
+    "round_metrics": {
+      "rounds_completed": null,
+      "halt_reason": null,
+      "verifier_fail_candidates": null,
+      "suppressed_candidate_count": null,
+      "no_new_evidence_rounds": null,
+      "repeated_contradiction_events": null,
+      "insufficient_evidence_events": null,
+      "oscillation_detected": null
+    }
+  }
 }

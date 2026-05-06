@@ -1,0 +1,54 @@
+{
+  "schema_version": "eval-report.v1",
+  "generated_at": "2026-05-06T00:00:00Z",
+  "aggregate": {
+    "baseline": {
+      "score_metrics": {
+        "exact_pass_rate": 0.0,
+        "acceptable_pass_rate": 0.8,
+        "false_positive_rate": 0.1
+      },
+      "round_metrics": {
+        "enabled": false,
+        "rounds_completed": 1,
+        "max_rounds": 1,
+        "halt_reason": "all_candidates_verified",
+        "elapsed_ms": 0,
+        "time_budget_ms": 1200000,
+        "verifier_fail_candidates": 0,
+        "suppressed_candidate_count": 0,
+        "no_new_evidence_rounds": 0,
+        "repeated_contradiction_events": 0,
+        "insufficient_evidence_events": 0,
+        "oscillation_detected": false
+      }
+    },
+    "iterative": {
+      "score_metrics": {
+        "exact_pass_rate": 0.0,
+        "acceptable_pass_rate": 0.8,
+        "false_positive_rate": 0.1
+      },
+      "round_metrics": {
+        "enabled": true,
+        "rounds_completed": 2,
+        "max_rounds": 3,
+        "halt_reason": "no_new_evidence",
+        "elapsed_ms": 0,
+        "time_budget_ms": 1200000,
+        "verifier_fail_candidates": 1,
+        "suppressed_candidate_count": 1,
+        "no_new_evidence_rounds": 1,
+        "repeated_contradiction_events": 0,
+        "insufficient_evidence_events": 0,
+        "oscillation_detected": false
+      }
+    },
+    "delta": {
+      "acceptable_pass_rate": 0.0,
+      "false_positive_rate": 0.0,
+      "avg_rounds_completed": 1.0
+    }
+  },
+  "fixtures": []
+}

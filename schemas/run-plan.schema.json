@@ -18,7 +18,8 @@
     "estimated_stages",
     "estimated_timeout_ms",
     "actual_duration_ms",
-    "actual_tokens"
+    "actual_tokens",
+    "review_loop"
   ],
   "properties": {
     "files_changed": {
@@ -106,6 +107,131 @@
         "null"
       ],
       "minimum": 0
+    },
+    "review_loop": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "halting_policy",
+        "round_metrics"
+      ],
+      "properties": {
+        "halting_policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "max_rounds",
+            "time_budget_ms",
+            "no_new_evidence_rounds",
+            "repeated_contradiction_limit",
+            "verifier_fail_policy",
+            "insufficient_evidence_policy"
+          ],
+          "properties": {
+            "max_rounds": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "time_budget_ms": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "no_new_evidence_rounds": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "repeated_contradiction_limit": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "verifier_fail_policy": {
+              "const": "local_artifact_only"
+            },
+            "insufficient_evidence_policy": {
+              "const": "suppress_to_local_artifact"
+            }
+          }
+        },
+        "round_metrics": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "rounds_completed",
+            "halt_reason",
+            "verifier_fail_candidates",
+            "suppressed_candidate_count",
+            "no_new_evidence_rounds",
+            "repeated_contradiction_events",
+            "insufficient_evidence_events",
+            "oscillation_detected"
+          ],
+          "properties": {
+            "rounds_completed": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "halt_reason": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "enum": [
+                null,
+                "max_rounds",
+                "time_budget",
+                "no_new_evidence",
+                "repeated_contradiction",
+                "all_candidates_verified",
+                "no_active_candidates"
+              ]
+            },
+            "verifier_fail_candidates": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "suppressed_candidate_count": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "no_new_evidence_rounds": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "repeated_contradiction_events": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "insufficient_evidence_events": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "oscillation_detected": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          }
+        }
+      }
     }
   },
   "allOf": [

@@ -1,0 +1,183 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/yuki777/pr-codex/main/schemas/review-rounds.v1.json",
+  "title": "pr-codex review refinement rounds v1",
+  "description": "Local artifact for the /pr-codex:review refine/challenge/verify loop. Verifier FAIL and insufficient-evidence candidates remain local-only here and must not be posted to GitHub.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "generated_at",
+    "policy",
+    "rounds",
+    "halting",
+    "metrics"
+  ],
+  "properties": {
+    "schema_version": {"const": "review-rounds.v1"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "pr": {"$ref": "#/$defs/pr"},
+    "policy": {"$ref": "#/$defs/policy"},
+    "rounds": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/round"}
+    },
+    "halting": {"$ref": "#/$defs/halting"},
+    "metrics": {"$ref": "#/$defs/metrics"}
+  },
+  "$defs": {
+    "sha": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{7,64}$"
+    },
+    "non_empty_string": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F\\uD800-\\uDFFF]+$"
+    },
+    "pr": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "number", "base_sha", "head_sha"],
+      "properties": {
+        "repository": {"type": "string", "pattern": "^[^/\\s]+/[^/\\s]+$"},
+        "number": {"type": "integer", "minimum": 1},
+        "base_sha": {"$ref": "#/$defs/sha"},
+        "head_sha": {"$ref": "#/$defs/sha"},
+        "merge_commit_sha": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-fA-F]{7,64}$"
+        }
+      }
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_rounds",
+        "time_budget_ms",
+        "no_new_evidence_rounds",
+        "repeated_contradiction_limit",
+        "verifier_fail_policy",
+        "insufficient_evidence_policy"
+      ],
+      "properties": {
+        "max_rounds": {"type": "integer", "minimum": 1},
+        "time_budget_ms": {"type": "integer", "minimum": 0},
+        "no_new_evidence_rounds": {"type": "integer", "minimum": 1},
+        "repeated_contradiction_limit": {"type": "integer", "minimum": 1},
+        "verifier_fail_policy": {"const": "local_artifact_only"},
+        "insufficient_evidence_policy": {"const": "suppress_to_local_artifact"}
+      }
+    },
+    "round": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "round_index",
+        "actions",
+        "input_candidates_count",
+        "output_candidates_count",
+        "new_evidence_count",
+        "verifier_pass_count",
+        "verifier_fail_count",
+        "insufficient_evidence_count",
+        "contradiction_signatures",
+        "rejected_candidates"
+      ],
+      "properties": {
+        "round_index": {"type": "integer", "minimum": 1},
+        "actions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"enum": ["refine", "challenge", "verify"]}
+        },
+        "input_candidates_count": {"type": "integer", "minimum": 0},
+        "output_candidates_count": {"type": "integer", "minimum": 0},
+        "new_evidence_count": {"type": "integer", "minimum": 0},
+        "verifier_pass_count": {"type": "integer", "minimum": 0},
+        "verifier_fail_count": {"type": "integer", "minimum": 0},
+        "insufficient_evidence_count": {"type": "integer", "minimum": 0},
+        "contradiction_signatures": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/non_empty_string"}
+        },
+        "rejected_candidates": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/rejected_candidate"}
+        }
+      }
+    },
+    "rejected_candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["local_only", "title", "reason"],
+      "properties": {
+        "local_only": {"const": true},
+        "finding_id": {"type": "string"},
+        "fingerprint": {"type": "string"},
+        "title": {"$ref": "#/$defs/non_empty_string"},
+        "path": {"$ref": "#/$defs/non_empty_string"},
+        "line": {"type": "integer", "minimum": 1},
+        "reason": {
+          "enum": [
+            "verifier_fail",
+            "repeated_contradiction",
+            "insufficient_evidence",
+            "out_of_scope",
+            "duplicate",
+            "no_new_evidence"
+          ]
+        },
+        "detail": {"$ref": "#/$defs/non_empty_string"}
+      }
+    },
+    "halting": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["should_halt", "reason", "detail", "elapsed_ms", "triggered_at_round"],
+      "properties": {
+        "should_halt": {"type": "boolean"},
+        "reason": {
+          "type": ["string", "null"],
+          "enum": [
+            null,
+            "max_rounds",
+            "time_budget",
+            "no_new_evidence",
+            "repeated_contradiction",
+            "all_candidates_verified",
+            "no_active_candidates"
+          ]
+        },
+        "detail": {"type": "string"},
+        "elapsed_ms": {"type": "integer", "minimum": 0},
+        "triggered_at_round": {"type": "integer", "minimum": 0}
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "total_rounds",
+        "posted_candidate_count",
+        "verifier_fail_candidates",
+        "suppressed_candidate_count",
+        "no_new_evidence_rounds",
+        "repeated_contradiction_events",
+        "insufficient_evidence_events",
+        "oscillation_detected"
+      ],
+      "properties": {
+        "total_rounds": {"type": "integer", "minimum": 0},
+        "posted_candidate_count": {"type": "integer", "minimum": 0},
+        "verifier_fail_candidates": {"type": "integer", "minimum": 0},
+        "suppressed_candidate_count": {"type": "integer", "minimum": 0},
+        "no_new_evidence_rounds": {"type": "integer", "minimum": 0},
+        "repeated_contradiction_events": {"type": "integer", "minimum": 0},
+        "insufficient_evidence_events": {"type": "integer", "minimum": 0},
+        "oscillation_detected": {"type": "boolean"}
+      }
+    }
+  }
+}

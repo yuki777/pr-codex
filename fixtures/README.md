@@ -26,6 +26,7 @@ fixtures/
     metadata.json           # repo / pr_number / sha / license / frozen_patch_path
     expected-findings.json  # oracle (expected-findings.v1)
     README.md               # PR 要約 + 仕込み意図 + 想定 oracle カテゴリ
+  eval-report.example.json  # F11 eval-report.v1 の round_metrics 付き最小例
   medium/                   # PR #143
   large/                    # PR #171
 ```
@@ -37,6 +38,8 @@ oracle 評価結果は3指標を出す:
 - `exact_pass_rate` — `axes` が完全一致
 - `acceptable_pass_rate` — profile + acceptable_overrides 内に収まる
 - `false_positive_rate` — `expected_outcome=known_false_positive_trap` を Must Fix にしてしまった率
+
+F11 eval report (`schemas/eval-report.v1.json`) は、baseline と iterative run の差分を比較するため各 run に `round_metrics` を必ず含める。最低限の round metrics は `rounds_completed` / `max_rounds` / `halt_reason` / `elapsed_ms` / `time_budget_ms` / `verifier_fail_candidates` / `suppressed_candidate_count` / `no_new_evidence_rounds` / `repeated_contradiction_events` / `insufficient_evidence_events` / `oscillation_detected`。これにより F5 の round 有無で timeout 内完了率、false positive 率、oscillation 抑止の差分を fixture ごとに比較できる。
 
 **M1 gate**: `acceptable_pass_rate ≥ 0.8`, `false_positive_rate ≤ 0.1`
 
