@@ -22,8 +22,9 @@ from typing import Any, Iterable
 DEFAULT_REPO = "yuki777/pr-codex"
 DEFAULT_BOARD = "pr-codex"
 DEFAULT_TENANT = "yuki777/pr-codex"
-DEFAULT_STATE_PATH = Path("~/.hermes/automation/pr-codex/state.json").expanduser()
-DEFAULT_OUTBOX_PATH = Path("~/.hermes/automation/pr-codex/tasks.jsonl").expanduser()
+DEFAULT_HERMES_ROOT = Path(os.environ.get("PR_CODEX_HERMES_ROOT", "~/.hermes")).expanduser()
+DEFAULT_STATE_PATH = DEFAULT_HERMES_ROOT / "automation" / "pr-codex" / "state.json"
+DEFAULT_OUTBOX_PATH = DEFAULT_HERMES_ROOT / "automation" / "pr-codex" / "tasks.jsonl"
 HERMES_AUTO_MARKER = "<!-- hermes-auto:"
 STATE_SCHEMA_VERSION = 1
 

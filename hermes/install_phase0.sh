@@ -9,6 +9,8 @@ REPO="${PR_CODEX_REPO:-yuki777/pr-codex}"
 BOARD="${PR_CODEX_HERMES_BOARD:-pr-codex}"
 TENANT="${PR_CODEX_HERMES_TENANT:-yuki777/pr-codex}"
 HERMES_ROOT="${PR_CODEX_HERMES_ROOT:-$HOME/.hermes}"
+STATE_PATH="$HERMES_ROOT/automation/pr-codex/state.json"
+OUTBOX_PATH="$HERMES_ROOT/automation/pr-codex/tasks.jsonl"
 WITH_CRON=0
 FORCE=0
 
@@ -85,13 +87,15 @@ python3 "$HERMES_ROOT/scripts/pr_codex_watch.py" \
   --repo "$REPO" \
   --board "$BOARD" \
   --tenant "$TENANT" \
+  --state "$STATE_PATH" \
+  --outbox "$OUTBOX_PATH" \
   --seed \
   --sink print \
   --json
 
-WATCH_PROMPT="Run the local Phase 0 watcher command and report a concise summary only: python3 $HERMES_ROOT/scripts/pr_codex_watch.py --repo $REPO --board $BOARD --tenant $TENANT --sink hermes --json"
-HEALTH_PROMPT="Run the local Phase 0 Kanban health command and report only anomalies: python3 $HERMES_ROOT/scripts/pr_codex_kanban_health.py --repo $REPO --board $BOARD --tenant $TENANT --sink hermes --json"
-DIGEST_PROMPT="Run the local Phase 0 daily digest command and deliver the summary: python3 $HERMES_ROOT/scripts/pr_codex_daily_digest.py --repo $REPO --board $BOARD --tenant $TENANT --sink hermes --json"
+WATCH_PROMPT="Run the local Phase 0 watcher command and report a concise summary only: python3 $HERMES_ROOT/scripts/pr_codex_watch.py --repo $REPO --board $BOARD --tenant $TENANT --state $STATE_PATH --outbox $OUTBOX_PATH --sink hermes --json"
+HEALTH_PROMPT="Run the local Phase 0 Kanban health command and report only anomalies: python3 $HERMES_ROOT/scripts/pr_codex_kanban_health.py --repo $REPO --board $BOARD --tenant $TENANT --outbox $OUTBOX_PATH --sink hermes --json"
+DIGEST_PROMPT="Run the local Phase 0 daily digest command and deliver the summary: python3 $HERMES_ROOT/scripts/pr_codex_daily_digest.py --repo $REPO --board $BOARD --tenant $TENANT --state $STATE_PATH --outbox $OUTBOX_PATH --sink hermes --json"
 
 cron_exists() {
   hermes -p sheriff cron list 2>/dev/null | grep -F -- "$1" >/dev/null 2>&1

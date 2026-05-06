@@ -33,12 +33,14 @@ hermes/
     pr_codex_daily_digest.py         # daily Issue/PR/Kanban summary
 ```
 
-The runtime state defaults to:
+The runtime state defaults to the global Hermes root (or `PR_CODEX_HERMES_ROOT` when set):
 
 ```text
-~/.hermes/automation/pr-codex/state.json
-~/.hermes/automation/pr-codex/tasks.jsonl   # outbox fallback when Hermes is absent
+$PR_CODEX_HERMES_ROOT/automation/pr-codex/state.json
+$PR_CODEX_HERMES_ROOT/automation/pr-codex/tasks.jsonl   # outbox fallback when Hermes is absent
 ```
+
+The installer also passes absolute `--state` and `--outbox` paths into generated cron prompts so Hermes profile-specific `HOME` values do not split seeded watcher state from scheduled watcher state.
 
 ## Bootstrap
 

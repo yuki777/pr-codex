@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -184,6 +185,31 @@ class HermesWatcherTests(unittest.TestCase):
             ],
         )
 
+    def test_fetch_review_threads_unwraps_gh_graphql_data(self):
+        original = watch.gh_json
+
+        def fake_gh_json(args):
+            return {
+                "data": {
+                    "repository": {
+                        "pullRequest": {
+                            "reviewThreads": {
+                                "nodes": [{"id": "thread-1", "isResolved": False}],
+                                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                            }
+                        }
+                    }
+                }
+            }
+
+        try:
+            watch.gh_json = fake_gh_json
+            actual = watch.fetch_review_threads("yuki777", "pr-codex", 29)
+        finally:
+            watch.gh_json = original
+
+        self.assertEqual(actual, [{"id": "thread-1", "isResolved": False}])
+
 
 class CommonHelperTests(unittest.TestCase):
     def test_kanban_command_uses_board_assignee_and_idempotency_key(self):
@@ -217,6 +243,39 @@ class CommonHelperTests(unittest.TestCase):
             rows = [json.loads(line) for line in outbox.read_text().splitlines()]
         self.assertEqual(rows[0]["idempotency_key"], "issue:new:#28")
         self.assertEqual(rows[0]["assignee"], "issue-triager")
+
+    def test_default_state_paths_can_use_explicit_hermes_root(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            old_value = os.environ.get("PR_CODEX_HERMES_ROOT")
+            os.environ["PR_CODEX_HERMES_ROOT"] = tmpdir
+            try:
+                spec = importlib.util.spec_from_file_location(
+                    "_pr_codex_common_env_test",
+                    SCRIPTS / "_pr_codex_common.py",
+                )
+                module = importlib.util.module_from_spec(spec)
+                assert spec and spec.loader
+                sys.modules["_pr_codex_common_env_test"] = module
+                spec.loader.exec_module(module)
+            finally:
+                if old_value is None:
+                    os.environ.pop("PR_CODEX_HERMES_ROOT", None)
+                else:
+                    os.environ["PR_CODEX_HERMES_ROOT"] = old_value
+
+        self.assertEqual(module.DEFAULT_STATE_PATH, Path(tmpdir) / "automation" / "pr-codex" / "state.json")
+        self.assertEqual(module.DEFAULT_OUTBOX_PATH, Path(tmpdir) / "automation" / "pr-codex" / "tasks.jsonl")
+
+
+class InstallerScriptTests(unittest.TestCase):
+    def test_installer_uses_explicit_global_root_and_cron_state_paths(self):
+        text = (ROOT / "hermes" / "install_phase0.sh").read_text()
+        self.assertIn('HERMES_ROOT="${PR_CODEX_HERMES_ROOT:-$HOME/.hermes}"', text)
+        self.assertNotIn("${HERMES_HOME", text)
+        self.assertIn('--state "$STATE_PATH"', text)
+        self.assertIn('--outbox "$OUTBOX_PATH"', text)
+        self.assertIn("--state $STATE_PATH --outbox $OUTBOX_PATH --sink hermes", text)
+        self.assertNotIn("pr_codex_kanban_health.py --repo $REPO --board $BOARD --tenant $TENANT --state", text)
 
 
 class HealthTests(unittest.TestCase):

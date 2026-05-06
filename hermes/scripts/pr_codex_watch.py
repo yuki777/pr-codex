@@ -542,8 +542,9 @@ query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
         ]
         if cursor:
             args.extend(["-f", f"cursor={cursor}"])
-        payload = gh_json(args)
-        review_threads = (((payload or {}).get("repository") or {}).get("pullRequest") or {}).get("reviewThreads") or {}
+        payload = gh_json(args) or {}
+        data = payload.get("data", payload) if isinstance(payload, dict) else {}
+        review_threads = (((data.get("repository") or {}).get("pullRequest") or {}).get("reviewThreads")) or {}
         threads.extend(review_threads.get("nodes") or [])
         page_info = review_threads.get("pageInfo") or {}
         if not page_info.get("hasNextPage"):
