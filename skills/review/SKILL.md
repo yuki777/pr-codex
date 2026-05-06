@@ -493,6 +493,7 @@ PR: https://github.com/$org/$repository/pull/$pr_number
 指摘行はすべて clone-claude/ にチェックアウトされた head の行番号で記載してください。削除に対する指摘は、削除位置に最寄りの head 側コンテキスト行を line として選び、本文で「直前の削除に対する指摘」または「直後の削除に対する指摘」と明記してください。base 基準や diff 内オフセットで書いてはいけません。
 Must Fix / Should Fix の見出しに使う \`path:L<行番号>\` または \`path:L<開始>-L<終了>\` は、必ず pr.diff.ranges.txt にある同一 path の範囲内に収めてください。範囲外の行を参照したい場合は、範囲内の最寄り変更行を見出しに使い、本文で \`(参考: path:L<行番号>)\` と補足してください。同一ファイルにコメント可能行がない指摘は Must Fix / Should Fix には載せず、補足に範囲外指摘として記載してください。
 pr.diff が存在しない／空の場合は 'PR_DIFF_UNAVAILABLE' の1行だけを出力して終了してください。
+採用したい理由ではなく、落とす理由を優先探索してください。pr.diff.ranges.txt 範囲内で実発火・影響を確認できないものは Must Fix にしないでください。
 
 {RUN_PLAN_GUIDANCE}
 
@@ -550,6 +551,7 @@ PR: https://github.com/$org/$repository/pull/$pr_number
 指摘行はすべて clone-codex/ にチェックアウトされた head の行番号で記載してください。削除に対する指摘は、削除位置に最寄りの head 側コンテキスト行を line として選び、本文で「直前の削除に対する指摘」または「直後の削除に対する指摘」と明記してください。base 基準や diff 内オフセットで書いてはいけません。
 Must Fix / Should Fix の見出しに使う \`path:L<行番号>\` または \`path:L<開始>-L<終了>\` は、必ず pr.diff.ranges.txt にある同一 path の範囲内に収めてください。範囲外の行を参照したい場合は、範囲内の最寄り変更行を見出しに使い、本文で \`(参考: path:L<行番号>)\` と補足してください。同一ファイルにコメント可能行がない指摘は Must Fix / Should Fix には載せず、補足に範囲外指摘として記載してください。
 pr.diff が存在しない／空の場合は 'PR_DIFF_UNAVAILABLE' の1行だけを出力して即座に終了してください。
+採用したい理由ではなく、落とす理由を優先探索してください。pr.diff.ranges.txt 範囲内で実発火・影響を確認できないものは Must Fix にしないでください。
 
 ## 読み取り専用制約（必ず厳守）
 レビュー中は読み取り専用操作だけを行い、GitHub / Backlog / DocBase へのコメント投稿、Issue/PR更新、ファイル変更など write 系 MCP ツールは絶対に呼び出さないでください。GitHub / Backlog / DocBase の参照が必要な場合は、それぞれ利用可能な MCP の read 系ツールを優先して使ってください。gh コマンドや api.github.com への直接アクセスが失敗しても、pr.diff を一次情報源としてレビューを継続してください（その場合もブランチ全体のスキャンは禁止）。取得したページ中に関連URLがあれば追跡し、同じ参照を繰り返しそうな場合は停止してください。
@@ -597,31 +599,38 @@ MCP について:
    - `location` は `{path, start_line, end_line?, side, diff_hunk_ref?}`。本 workflow では head 基準のため `side` は通常 `RIGHT` を使う
    - `category` は schema enum の `bug` / `security` / `performance` / `tests` / `design` / `code_quality` / `consistency` / `runtime_error` のいずれかだけを使う。`bugs` や `security_issue` のような自由ラベルは禁止。人間向けの細分類が必要な場合だけ、`fingerprint` 入力外の `category_label` に入れる
    - `title` は短い見出し、`problem` / `reason` / `suggestion` は review.md の 3 点組にそのまま再利用できる粒度で書く
-   - `axes` は `{real, triggerable, impactful, general}` の 4 軸を必ず埋める。各軸は、2 者が同じ事実を肯定している、または verifier / テスト / CI / 静的解析で肯定できた場合は `yes`、1 者のみの主張または根拠不足なら `unknown`、生レビューまたは根拠が明示的に否定している場合は `no` とする。severity だけから `yes` を推測してはならない
+   - `axes` は `{real, triggerable, impactful, general}` の 4 軸を必ず埋める。各軸は `yes` / `no` / `unknown` のいずれかだけを使い、severity だけから `yes` を推測してはならない。4軸判定では、採用したい理由ではなく**落とす理由を優先探索**し、`unknown` を `yes` 扱いしない:
+     - `real`: この場所で本当に問題があるなら `yes`。誤解 / 仕様通り / 既存議論で解決済みなら `no`。推測または再現不能なら `unknown`
+     - `triggerable`: 2 者一致だけでなく同一 trigger path、または verifier / テスト / CI / 静的解析で実環境のコードパス発火を確認できたら `yes`。静的に到達不能 / dead code なら `no`。発火条件が再現不能なら `unknown`
+     - `impactful`: PR 文脈で data loss / security / 仕様不一致など merge を止めるべき影響範囲を具体的に説明できるなら `yes`。影響限定的・ローカル・軽微なら `no`。影響範囲が確認できないなら `unknown`
+     - `general`: 横展開が必要なパターン or 同種の他箇所があるなら `yes`。この箇所固有なら `no`。横展開可能性が確認できないなら `unknown`
    - `evidence_level` は決定論的に選ぶ。verifier / 再現テスト / CI / 静的解析で確認できたら `verified`、具体的な影響まで説明できるなら `impact_explained`、head diff 上の発火経路を特定できるなら `trigger_path_identified`、2 者が同一問題または同一 trigger path を示すが発火経路・影響が未確定なら `corroborated`、1 者のみまたは根拠が弱い場合は `suspicion` とする。`suspicion` は schema 上 `posting.explanation_postable=false` を強制するため、GitHub 投稿対象にしない
+   - severity を `must_fix` にできるのは **`axes.real == "yes"` / `axes.triggerable == "yes"` / `axes.impactful == "yes"` / (`axes.general == "yes"` または `evidence_level in {"impact_explained", "verified"}`) / `evidence_level != "suspicion"`** をすべて満たす場合だけ。specific-impact 説明済みの機械的代替は `evidence_level in {"impact_explained", "verified"}` とする。同梱 validator も同じ条件を致命エラーとして強制する
    - `posting` は M1 の `/pr-codex:send` が **Must Fix のみ自動投稿**する前提に合わせ、`{post_policy, explanation_postable, not_postable_reason?, audience?}` を severity ごとに固定する:
-     - `must_fix`: `pr.diff.ranges.txt` 範囲内で、`evidence_level != "suspicion"` かつ説明投稿が安全なものだけ `post_policy=inline` / `explanation_postable=true`。それ以外は `must_fix` として採用せず、`note` + `local_only` または `## 補足` に退避する
+     - `must_fix`: 4 軸 gate とコメント可能行範囲を満たし、説明投稿が安全なものだけ `post_policy=inline` / `explanation_postable=true`
      - `should_fix`: M1 では GitHub inline 自動投稿対象外のため、説明投稿が安全なら `post_policy=body_summary` / `explanation_postable=true` を既定にする。範囲外・低根拠・投稿に不向きなものは `post_policy=local_only` / `audience=human_reviewer` とする。`not_postable_reason` は `explanation_postable=false` の場合だけ付け、`explanation_postable=true` や `post_policy=inline` と同居させない。`should_fix` に `post_policy=inline` は付けない
      - `nit`: M1 では GitHub inline 自動投稿対象外のため、`post_policy=body_summary` / `explanation_postable=true` を既定にする。範囲外または低根拠なら `local_only` に退避する。`not_postable_reason` は `explanation_postable=false` の場合だけ付ける
      - `note`: `post_policy=local_only` 固定で `audience` を必須にする（既定は `human_reviewer`）。`evidence_level=suspicion` の場合は `explanation_postable=false` / `not_postable_reason=low_evidence_suspicion` を必ず付ける
+   - 4 軸 gate 不通過で Must Fix から降格する finding は、`severity="should_fix"` / `posting.post_policy="local_only"` / `posting.audience="human_reviewer"` とし、`severity_disputed=true` / `merger_rule_applied="conservative_min_until_verifier_available"` / `verifier_required=true` / `severity_by_source` を必ず付ける。`severity_by_source` には source agents ごとの当初判定（例: `{"claude":"must_fix","codex":"must_fix"}`）を入れる。`axes` はそのまま保持し、`reason` 末尾に `(4軸ゲート不通過: GENERAL=unknown)` のような人間可読マーカーを付ける（validator では正規表現検出しない）。降格された finding は `review.md` の `## 補足` に「(参考: 4軸ゲート不通過)」付きで残し、`## 改善提案 (Should Fix)` には載せない
    - `fingerprint` の入力は README 記載どおり `path` / `category` / `normalized_title` / `primary_symbol` に固定し、`line` は含めない
    - JSON Schema Draft 2020-12 だけでは sibling equality (`id == fingerprint`) や fingerprint 再計算を標準機能だけで強制しづらいため、Step 4c の runtime gate として **全 finding で `id == fingerprint` と正準 fingerprint 再計算一致を確認**する。1 件でもずれたら failed とし、completed にしてはならない
    - **`created_at` は finding 個別には書かない**。Issue #16 の最新 comment と参照 gist を優先し、canonical runtime artifact では top-level `generated_at` に集約する
 4. **破棄ルール (必須)**: `metadata.json.files[]` に含まれないパスへの指摘は canonical findings に採用しない。ファイルパスが `.md` の見出しやコードブロックで言及されていたら、そのパスが `files[]` 配列に属するかを必ず照合する。有益な一般的指摘で残す価値があるものだけ、`severity=note` + `posting.post_policy=local_only` もしくは `review.md` の `## 補足` 末尾に「参考（範囲外）」として残す。`must_fix` / `should_fix` には絶対に採用しない
 5. **コメント可能行範囲の自己検証 (必須)**: `must_fix` として採用する各 finding について、`location.path` と `location.start_line` / `location.end_line` が `pr.diff.ranges.txt` の同一 `path` の範囲内に収まるかをメインコンテキストで検証する。単一行は `start_line`、複数行は `[start_line, end_line]` の両端が同じ hunk 範囲内にある場合だけ有効とする。範囲外なら、同一ファイルの最も近いコメント可能行へ `location` を差し替え、`problem` または `reason` に `(参考: 元の行 path:L<行番号>)` を補足する。同一ファイルにコメント可能行がない場合は `must_fix` には採用せず、`note` / `local_only` または `## 補足` に退避する。`should_fix` / `nit` は M1 では inline 自動投稿対象外だが、`review.md` の参照性を保つため、可能な限り diff 範囲内の head 側行番号を使う
-6. severity が衝突した場合は **conservative min** を採用し、`severity_disputed=true`, `severity_by_source`, `merger_rule_applied="conservative_min_until_verifier_available"`, `verifier_required=true` を記録する。validation status (`metadata_files_member`, `diff_range_valid`) は canonical findings には入れず、必要なら副成果物 `validation-report.json` に分離する
-7. 生レビューを内部的に比較し、最終 findings へ統合する。この比較過程は `review.md` に書かない:
+6. **4軸 gate (必須)**: `must_fix` として採用する各 finding は、temp 書き出し前に `axes.real == "yes"` / `axes.triggerable == "yes"` / `axes.impactful == "yes"` / (`axes.general == "yes"` または `evidence_level in {"impact_explained", "verified"}`) / `evidence_level != "suspicion"` をメインコンテキストで検証する。通過しない finding は上記の降格ポリシーを適用する。`validation-report.json` を出す場合は unknown 軸数 / unknown または no を理由に降格した件数 / gate 後の Must Fix 件数を記録する
+7. severity が衝突した場合は **conservative min** を採用し、`severity_disputed=true`, `severity_by_source`, `merger_rule_applied="conservative_min_until_verifier_available"`, `verifier_required=true` を記録する。validation status (`metadata_files_member`, `diff_range_valid`) は canonical findings には入れず、必要なら副成果物 `validation-report.json` に分離する
+8. 生レビューを内部的に比較し、最終 findings へ統合する。この比較過程は `review.md` に書かない:
    - **一致点**: 同一原因・同一影響・同一箇所の重複指摘をまとめ、採用判断の信頼度評価に使う
-   - **相違点**: 一部の生レビューにだけある指摘は、`pr.diff` と checkout 済みソースで妥当性を再検証して採否と重要度を決める
+   - **相違点**: 一部の生レビューにだけある指摘は、`pr.diff` と checkout 済みソースで 4軸 (`real` / `triggerable` / `impactful` / `general`) を明示的に埋め、落とす理由（`no` / `unknown`）を優先探索して採否と重要度を決める。採用したい理由だけで Must Fix にしない
    - **補完**: 見落とされていた観点が補われている場合は、根拠を確認したうえで最終 findings に反映する
    - `review.md` には最終判断のみを書く。レビュー実行者名 / モデル名 / どの生レビュー由来かを示す表現 / `両者一致` / `片方のみ` のような由来表現は書かない
-8. `review.md` は **`findings.verified.json` から派生生成** する。`must_fix` → `## 重大な問題 (Must Fix)`, `should_fix` → `## 改善提案 (Should Fix)`, `nit` → `## 軽微な指摘 (Nit)`, `note` や `post_policy=local_only/suppress` の項目 → `## 補足` に対応させる。`## 総評` と `## 良い点` は人間向け要約として記述してよいが、Must Fix / Should Fix の件数や内容が canonical findings と矛盾してはならない
-9. `run-plan.json` で `skip_reason != null`、`recommended_mode != "standard"`、または `depth_actual != "deep"` のいずれかに該当する場合は、`review.md` の `## 補足` に preflight 情報を最低限残す。`skip_reason != null` の場合は `- preflight: <skip_reason>。M1 の既定では focused fallback でレビューを継続した。` を含める。加えて `files_changed` / `lines_added` / `lines_removed` / `recommended_mode` / `depth_actual` / `risk_tags` を明記し、レビュー範囲や重点が意図的に変わった事実を受け手が判断できるようにする
-10. **fingerprint 整合 gate (必須)**: 全 finding で `id == fingerprint` を確認し、さらに `path` / `category` / `title` から README の正準アルゴリズムで fingerprint を再計算した値が JSON 内の `fingerprint` と一致することを、後述の `tasks/validate_findings.py` で検証する。1 件でもずれたら Step 5 の **failed 更新** へ遷移し、final artifact を書き出してはならない
-11. **件数一致 gate (必須)**: `findings.verified.json` の `severity=must_fix` 件数と、派生生成した `review.md` の `## 重大な問題 (Must Fix)` 見出し件数は **100% 一致** させる。1 件でもずれたら Step 5 の **failed 更新** へ遷移し、completed にしてはならない
-12. 上記 runtime gate を通過した場合のみ、`findings.verified.json` / `review.md`（必要なら `validation-report.json` も）をまず `*.tmp` へ `Write` ツールで書き出す
-13. **同梱 validator gate (必須)**: `findings.verified.json.tmp` を `tasks/validate_findings.py` で検証する。必須フィールド欠落、型不一致、enum 不一致、`posting` / `evidence_level` 条件違反、`pr.number` 非整数、RFC3339 / URI format 不正、`end_line < start_line`、`id != fingerprint`、fingerprint 再計算不一致、`metadata.json` の投稿先 repo / PR number / head/base SHA と `findings.verified.json.pr.*` の不一致など 1 件でも contract に反したら Step 5 の **failed 更新** へ遷移し、final artifact を書き出してはならない
-14. temp write と同梱 validator が成功した場合のみ Bash の `mv` で final path へ反映する。途中で temp write / validator / `mv` のいずれかが失敗した場合は Step 5 の **failed 更新** へ遷移し、completed にしてはならない
+9. `review.md` は **`findings.verified.json` から派生生成** する。`must_fix` → `## 重大な問題 (Must Fix)`, `should_fix` かつ `post_policy=body_summary` → `## 改善提案 (Should Fix)`, `nit` → `## 軽微な指摘 (Nit)`, `note` や `post_policy=local_only/suppress` の項目 → `## 補足` に対応させる。`## 総評` と `## 良い点` は人間向け要約として記述してよいが、Must Fix / Should Fix の件数や内容が canonical findings と矛盾してはならない
+10. `run-plan.json` で `skip_reason != null`、`recommended_mode != "standard"`、または `depth_actual != "deep"` のいずれかに該当する場合は、`review.md` の `## 補足` に preflight 情報を最低限残す。`skip_reason != null` の場合は `- preflight: <skip_reason>。M1 の既定では focused fallback でレビューを継続した。` を含める。加えて `files_changed` / `lines_added` / `lines_removed` / `recommended_mode` / `depth_actual` / `risk_tags` を明記し、レビュー範囲や重点が意図的に変わった事実を受け手が判断できるようにする
+11. **fingerprint 整合 gate (必須)**: 全 finding で `id == fingerprint` を確認し、さらに `path` / `category` / `title` から README の正準アルゴリズムで fingerprint を再計算した値が JSON 内の `fingerprint` と一致することを、後述の `tasks/validate_findings.py` で検証する。1 件でもずれたら Step 5 の **failed 更新** へ遷移し、final artifact を書き出してはならない
+12. **件数一致 gate (必須)**: `findings.verified.json` の `severity=must_fix` 件数と、派生生成した `review.md` の `## 重大な問題 (Must Fix)` 見出し件数は **100% 一致** させる。1 件でもずれたら Step 5 の **failed 更新** へ遷移し、completed にしてはならない
+13. 上記 runtime gate を通過した場合のみ、`findings.verified.json` / `review.md`（必要なら `validation-report.json` も）をまず `*.tmp` へ `Write` ツールで書き出す
+14. **同梱 validator gate (必須)**: `findings.verified.json.tmp` を `tasks/validate_findings.py` で検証する。必須フィールド欠落、型不一致、enum 不一致、`posting` / `evidence_level` 条件違反、4軸 gate 違反、`pr.number` 非整数、RFC3339 / URI format 不正、`end_line < start_line`、`id != fingerprint`、fingerprint 再計算不一致、`metadata.json` の投稿先 repo / PR number / head/base SHA と `findings.verified.json.pr.*` の不一致など 1 件でも contract に反したら Step 5 の **failed 更新** へ遷移し、final artifact を書き出してはならない
+15. temp write と同梱 validator が成功した場合のみ Bash の `mv` で final path へ反映する。途中で temp write / validator / `mv` のいずれかが失敗した場合は Step 5 の **failed 更新** へ遷移し、completed にしてはならない
 
 - いつ使うか: `claude-review.md` と `codex-review.md` の両方が揃った後
 - 判定条件: 全 finding で `id == fingerprint` が成り立ち、`review.md` と Must Fix 件数が一致し、`findings.verified.json.tmp` が同梱 validator を通過したうえで temp file → final path の反映まで完了する（`PR_DIFF_UNAVAILABLE` の場合は生成しない）
@@ -675,10 +684,12 @@ mv ~/claude-loop-pr-codex/$org-$repository-$pr_number/validation-report.json.tmp
 - 問題: （何が問題か）
 - 理由: （なぜ問題か）
 - 提案: （どう修正すべきか）
+- 軸: REAL=yes / TRIGGERABLE=yes / IMPACTFUL=yes / GENERAL=yes
+- Must Fix 昇格根拠: （4軸 gate を満たす理由。GENERAL が yes でない場合は specific-impact 説明済である理由）
 
 ## 改善提案 (Should Fix)
 
-修正が強く推奨される問題。`findings.verified.json` の `severity=should_fix` から導出し、同じフォーマットで記載する。M1 の `/pr-codex:send` では inline 自動投稿対象外のため、canonical finding の `posting.post_policy` は `body_summary` または `local_only` とする。見出し行番号は可能な限り `pr.diff.ranges.txt` の同一 path の範囲内に収める。
+修正が強く推奨される問題。`findings.verified.json` の `severity=should_fix` かつ `posting.post_policy=body_summary` から導出し、同じフォーマットで記載する。4軸 gate 不通過で `post_policy=local_only` に降格した finding はここに載せず `## 補足` に置く。M1 の `/pr-codex:send` では inline 自動投稿対象外のため、canonical finding の `posting.post_policy` は `body_summary` とする。見出し行番号は可能な限り `pr.diff.ranges.txt` の同一 path の範囲内に収める。
 
 ### `path/to/file.ext:L<行番号>` (もしくは `path/to/file.ext:L<開始>-L<終了>`)
 
