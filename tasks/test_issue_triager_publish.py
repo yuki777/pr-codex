@@ -353,6 +353,32 @@ class IssueTriagerPublishTests(unittest.TestCase):
             report["policy_omissions"],
         )
 
+    def test_benign_pat_and_key_substrings_are_not_treated_as_credentials(self):
+        state = self.empty_state()
+        client = FakeIssueCommentClient()
+
+        report = publisher.publish_issue_triage(
+            self.base_payload("Keep compatibility notes and monkeypatch examples internal-safe."),
+            state=state,
+            client=client,
+            dry_run=False,
+            sink="github",
+            env=self.enabled_env(),
+        )
+
+        self.assertEqual(report["action"], "published")
+        body = client.posted[0]["body"]
+        self.assertIn("compatibility", body)
+        self.assertIn("monkeypatch", body)
+        self.assertNotIn(
+            {"field": "recommended_next_action", "reason": "forbidden_public_terms"},
+            report["policy_omissions"],
+        )
+        self.assertNotIn(
+            {"field": "recommended_next_action", "reason": "redacted_content"},
+            report["policy_omissions"],
+        )
+
     def test_cross_repo_issue_refs_are_omitted_before_publication(self):
         state = self.empty_state()
         client = FakeIssueCommentClient()

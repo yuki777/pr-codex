@@ -126,7 +126,10 @@ def scrub_for_public(text: str | None, *, max_chars: int = 800) -> tuple[str, li
         ),
         (
             re.compile(
-                r"(?<![A-Za-z0-9])_*[A-Z][A-Z0-9_]*(?:TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL|PAT)[A-Z0-9_]*"
+                r"(?<![A-Za-z0-9])_*"
+                r"(?=(?:[A-Za-z0-9]+_)*(?:TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL|PAT)"
+                r"(?:_[A-Za-z0-9]+)*\s*[:=])"
+                r"[A-Za-z][A-Za-z0-9_]*"
                 r"\s*[:=]\s*(?:\"[^\"]*\"|'[^']*'|[^\s,;]+)",
                 re.I,
             ),
@@ -135,7 +138,10 @@ def scrub_for_public(text: str | None, *, max_chars: int = 800) -> tuple[str, li
         ),
         (
             re.compile(
-                r"(?<![A-Za-z0-9])_*[A-Z][A-Z0-9_]*(?:TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL|PAT)[A-Z0-9_]*"
+                r"(?<![A-Za-z0-9])_*"
+                r"(?=(?:[A-Za-z0-9]+_)*(?:TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL|PAT)"
+                r"(?:_[A-Za-z0-9]+)*\s+)"
+                r"[A-Za-z][A-Za-z0-9_]*"
                 r"\s+(?:\"[^\"]*\"|'[^']*'|[A-Za-z0-9._~+/\-]{4,})",
                 re.I,
             ),
