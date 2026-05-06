@@ -1,25 +1,27 @@
 {
-  "files_changed": 2,
-  "hunks": 2,
-  "lines_added": 7,
-  "lines_removed": 2,
+  "files_changed": 20,
+  "hunks": 32,
+  "lines_added": 119,
+  "lines_removed": 157,
   "risk_tags": [
-    "dependency"
+    "dependency",
+    "infra",
+    "test_touch"
   ],
   "selected_hunters": [
     "claude",
     "codex"
   ],
   "depth_actual": "standard",
-  "depth_source": "default",
-  "depth_reason": "no depth argument and no high-risk small-PR signal; selected default standard",
-  "depth_requested": null,
+  "depth_source": "argument",
+  "depth_reason": "requested --standard",
+  "depth_requested": "standard",
   "depth_downgraded": false,
   "depth_downgrade_reason": null,
   "recommended_mode": "standard",
   "skip_reason": null,
   "estimated_stages": 4,
-  "estimated_timeout_ms": 390900,
+  "estimated_timeout_ms": 1200000,
   "actual_duration_ms": null,
   "actual_tokens": null
 }
