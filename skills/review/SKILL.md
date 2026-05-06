@@ -599,9 +599,20 @@ MCP について:
    - `category` は schema enum の `bug` / `security` / `performance` / `tests` / `design` / `code_quality` / `consistency` / `runtime_error` のいずれかだけを使う。`bugs` や `security_issue` のような自由ラベルは禁止。人間向けの細分類が必要な場合だけ、`fingerprint` 入力外の `category_label` に入れる
    - `title` は短い見出し、`problem` / `reason` / `suggestion` は review.md の 3 点組にそのまま再利用できる粒度で書く
    - `axes` は `{real, triggerable, impactful, general}` の 4 軸を必ず埋める。各軸は、2 者が同じ事実を肯定している、または verifier / テスト / CI / 静的解析で肯定できた場合は `yes`、1 者のみの主張または根拠不足なら `unknown`、生レビューまたは根拠が明示的に否定している場合は `no` とする。severity だけから `yes` を推測してはならない
-   - `evidence_level` は決定論的に選ぶ。verifier / 再現テスト / CI / 静的解析で確認できたら `verified`、具体的な影響まで説明できるなら `impact_explained`、head diff 上の発火経路を特定できるなら `trigger_path_identified`、2 者が同一問題または同一 trigger path を示すが発火経路・影響が未確定なら `corroborated`、1 者のみまたは根拠が弱い場合は `suspicion` とする。`suspicion` は schema 上 `posting.explanation_postable=false` を強制するため、GitHub 投稿対象にしない
+   - `evidence_level` は根拠の強さに応じて 5 段から 1 つだけ決定論的に選ぶ。複数段に該当する場合は最も低い段階に揃える:
+     - `suspicion`: hunter が候補として挙げただけ。具体的根拠なし
+     - `corroborated`: 静的解析・型・lint・他箇所のパターン・2 者の同一指摘で裏付け
+     - `trigger_path_identified`: head diff 上で発火条件が特定できる
+     - `impact_explained`: 影響範囲と修正方針が具体的に書ける
+     - `verified`: 反証検討を経て採用 (verifier / 再現テスト / CI / 静的解析で確認)
+   - **例外規則**: CI / type system / 既存 lint で検出される類の「明白な静的解析的バグ」は、trigger path が再現できなくても `corroborated` かつ `impact_explained` の両方が成立し、`evidence[]` に `type` が `static_analysis` / `ci_log` / `test` のいずれかで含まれる場合に限り、`verified` に昇格させてよい。`type: manual_review` のみでの昇格は禁止
+   - `suspicion` は schema 上 `posting.explanation_postable=false` を強制するため、GitHub 投稿対象にしない
+   - **採用基準による severity 降格**: severity を仮決定した後、`evidence_level` が採用基準を満たさない場合は severity を以下の通り降格する:
+     - `must_fix` で `evidence_level < verified` かつ例外規則 (`corroborated + impact_explained` + 静的解析的根拠) を満たさない場合 → `should_fix` に降格
+     - `should_fix` で `evidence_level < corroborated` の場合 → `note` に降格し `post_policy=local_only` / `audience=human_reviewer`
+     - 降格は canonical findings 確定前に1度だけ行い、降格後の severity を以後の posting 判定で使う
    - `posting` は M1 の `/pr-codex:send` が **Must Fix のみ自動投稿**する前提に合わせ、`{post_policy, explanation_postable, not_postable_reason?, audience?}` を severity ごとに固定する:
-     - `must_fix`: `pr.diff.ranges.txt` 範囲内で、`evidence_level != "suspicion"` かつ説明投稿が安全なものだけ `post_policy=inline` / `explanation_postable=true`。それ以外は `must_fix` として採用せず、`note` + `local_only` または `## 補足` に退避する
+     - `must_fix`: `pr.diff.ranges.txt` 範囲内で、`evidence_level == "verified"` かつ説明投稿が安全なものだけ `post_policy=inline` / `explanation_postable=true`。それ以外は `must_fix` として採用せず、採用基準による severity 降格後の `should_fix` / `note` として扱う
      - `should_fix`: M1 では GitHub inline 自動投稿対象外のため、説明投稿が安全なら `post_policy=body_summary` / `explanation_postable=true` を既定にする。範囲外・低根拠・投稿に不向きなものは `post_policy=local_only` / `audience=human_reviewer` とする。`not_postable_reason` は `explanation_postable=false` の場合だけ付け、`explanation_postable=true` や `post_policy=inline` と同居させない。`should_fix` に `post_policy=inline` は付けない
      - `nit`: M1 では GitHub inline 自動投稿対象外のため、`post_policy=body_summary` / `explanation_postable=true` を既定にする。範囲外または低根拠なら `local_only` に退避する。`not_postable_reason` は `explanation_postable=false` の場合だけ付ける
      - `note`: `post_policy=local_only` 固定で `audience` を必須にする（既定は `human_reviewer`）。`evidence_level=suspicion` の場合は `explanation_postable=false` / `not_postable_reason=low_evidence_suspicion` を必ず付ける
@@ -611,6 +622,7 @@ MCP について:
 4. **破棄ルール (必須)**: `metadata.json.files[]` に含まれないパスへの指摘は canonical findings に採用しない。ファイルパスが `.md` の見出しやコードブロックで言及されていたら、そのパスが `files[]` 配列に属するかを必ず照合する。有益な一般的指摘で残す価値があるものだけ、`severity=note` + `posting.post_policy=local_only` もしくは `review.md` の `## 補足` 末尾に「参考（範囲外）」として残す。`must_fix` / `should_fix` には絶対に採用しない
 5. **コメント可能行範囲の自己検証 (必須)**: `must_fix` として採用する各 finding について、`location.path` と `location.start_line` / `location.end_line` が `pr.diff.ranges.txt` の同一 `path` の範囲内に収まるかをメインコンテキストで検証する。単一行は `start_line`、複数行は `[start_line, end_line]` の両端が同じ hunk 範囲内にある場合だけ有効とする。範囲外なら、同一ファイルの最も近いコメント可能行へ `location` を差し替え、`problem` または `reason` に `(参考: 元の行 path:L<行番号>)` を補足する。同一ファイルにコメント可能行がない場合は `must_fix` には採用せず、`note` / `local_only` または `## 補足` に退避する。`should_fix` / `nit` は M1 では inline 自動投稿対象外だが、`review.md` の参照性を保つため、可能な限り diff 範囲内の head 側行番号を使う
 6. severity が衝突した場合は **conservative min** を採用し、`severity_disputed=true`, `severity_by_source`, `merger_rule_applied="conservative_min_until_verifier_available"`, `verifier_required=true` を記録する。validation status (`metadata_files_member`, `diff_range_valid`) は canonical findings には入れず、必要なら副成果物 `validation-report.json` に分離する
+   - `validation-report.json` には ladder 分布も記録する: `{evidence_level_counts: {suspicion, corroborated, trigger_path_identified, impact_explained, verified}, must_fix_verified_ratio: float, exception_promotion_count: int}`。これは F11 の eval fixture が誤救済率を監視するための入力になる
 7. 生レビューを内部的に比較し、最終 findings へ統合する。この比較過程は `review.md` に書かない:
    - **一致点**: 同一原因・同一影響・同一箇所の重複指摘をまとめ、採用判断の信頼度評価に使う
    - **相違点**: 一部の生レビューにだけある指摘は、`pr.diff` と checkout 済みソースで妥当性を再検証して採否と重要度を決める
