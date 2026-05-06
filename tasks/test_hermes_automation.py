@@ -157,6 +157,33 @@ class HermesWatcherTests(unittest.TestCase):
         events = watch.collect_events(snapshot, state, repo="yuki777/pr-codex", detected_at="2026-05-06T01:01:00Z")
         self.assertEqual([event.task.idempotency_key for event in events], ["issue_comment:new:#25:10"])
 
+    def test_fetch_paginated_list_accumulates_all_pages(self):
+        calls: list[str] = []
+        original = watch.gh_json
+
+        def fake_gh_json(args):
+            calls.append(args[0])
+            if args[0].endswith("page=1"):
+                return [{"number": 1}, {"number": 2}]
+            if args[0].endswith("page=2"):
+                return [{"number": 3}]
+            raise AssertionError(f"unexpected call: {args}")
+
+        try:
+            watch.gh_json = fake_gh_json
+            actual = watch.fetch_paginated_list("repos/yuki777/pr-codex/issues?state=open", per_page=2)
+        finally:
+            watch.gh_json = original
+
+        self.assertEqual(actual, [{"number": 1}, {"number": 2}, {"number": 3}])
+        self.assertEqual(
+            calls,
+            [
+                "repos/yuki777/pr-codex/issues?state=open&per_page=2&page=1",
+                "repos/yuki777/pr-codex/issues?state=open&per_page=2&page=2",
+            ],
+        )
+
 
 class CommonHelperTests(unittest.TestCase):
     def test_kanban_command_uses_board_assignee_and_idempotency_key(self):

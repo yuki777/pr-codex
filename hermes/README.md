@@ -118,6 +118,11 @@ review_comment:new:#25:<comment_id>
 review_thread:unresolved:#25:<thread_id>
 ```
 
+PR review tasks intentionally track new PRs once and subsequent head SHA changes.
+Metadata-only PR edits at the same head (title/body/base/draft changes) are not
+task-generating in Phase 0; use a later phase or a dedicated metadata watcher if
+that signal becomes operationally important.
+
 Comments containing the sentinel below are ignored so Hermes does not react to its
 own automated GitHub posts in later phases:
 
