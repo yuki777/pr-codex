@@ -17,6 +17,7 @@ GitHub PRを **Claude Code** と **Codex CLI** の2者レビュー方式で自�
 - GitHub CLI (`gh`)
 - `jq`（SKILL.md 内の全テンプレートで利用する。macOS 標準では未インストール）
 - `python3`（同梱 validator `tasks/validate_findings.py` / `tasks/validate_preflight_result.py` / `tasks/validate_findings_sarif.py` で `findings.verified.json` / `preflight-result.json` / `findings.sarif` を検証するため）
+- Python package `jsonschema` (`python3 -m pip install 'jsonschema>=4,<5'`) — `tasks/validate_findings_sarif.py` が同梱 OASIS SARIF v2.1.0 schema に対して official schema validation を行うため
 
 ## セットアップ
 
@@ -185,7 +186,7 @@ mv ~/claude-loop-pr-codex/sent/yuki777-pr-codex-24 \
 ## SARIF derived artifact
 
 - `tasks/generate_findings_sarif.py` は `findings.verified.json` から SARIF v2.1.0 `findings.sarif` を一方向生成する。`schema_version == "findings.v1"` 専用で、canonical への逆変換はしない
-- `schemas/sarif-2.1.0.json` は OASIS SARIF v2.1.0 schema を同梱したもの。`tasks/validate_findings_sarif.py` はこの schema と pr-codex cross-artifact rule（side=RIGHT、fingerprint、post_policy、Must Fix count）をオフラインで検証する
+- `schemas/sarif-2.1.0.json` は OASIS SARIF v2.1.0 schema を同梱したもの。`tasks/validate_findings_sarif.py` は Python `jsonschema` でこの schema に対する official schema validation を行い、さらに pr-codex cross-artifact rule（side=RIGHT、fingerprint、post_policy、Must Fix count）をオフラインで検証する
 - rule は category enum 8 種（`pr-codex/bug` など）を固定列挙する。`severity` は `must_fix → error` / `should_fix → warning` / `nit → note` / `note → none` に写像する
 - `security` category の `must_fix` は `properties.security_severity_label = "high"` を付ける。F7 では label のみで、security high/critical の inline 抑制ロジックは変更しない
 - `result.partialFingerprints.canonical` は canonical `finding.id` と同じ安定 fingerprint。`result.guid` は SARIF 公式 schema の GUID 制約を満たすため、この fingerprint から導出した deterministic UUIDv5 を使う

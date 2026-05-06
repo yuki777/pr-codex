@@ -649,7 +649,7 @@ MCP について:
 
 `Write` ツールは `~` やシェル変数（`$org` 等）を展開しない。`file_path` にはホームディレクトリを `$HOME` の実値（例: `/Users/adachi`）に展開済みの絶対パスを渡し、`$org` / `$repository` / `$pr_number` も実値に置換してから呼び出すこと。`findings.verified.json` の JSON 本文も、プレースホルダを残さず実値で埋める。temp file を使う場合も同様に絶対パスで指定する。
 
-temp file 書き出し後、final artifact へ反映する前に以下の同梱 validator を必ず実行する。`$CLAUDE_PLUGIN_ROOT` が shell 環境で未設定の場合は、Step 4 前処理で解決した plugin root の絶対パスに置換してから Bash ツールへ渡す（コマンド構造は変えない）。この validator は stdlib-only で、npm cache やネットワークを使わず、作業ディレクトリ外へ書き込まない。
+temp file 書き出し後、final artifact へ反映する前に以下の同梱 validator を必ず実行する。`$CLAUDE_PLUGIN_ROOT` が shell 環境で未設定の場合は、Step 4 前処理で解決した plugin root の絶対パスに置換してから Bash ツールへ渡す（コマンド構造は変えない）。canonical findings validator は stdlib-only、SARIF validator は Python package `jsonschema>=4,<5` を使って同梱 OASIS schema を検証する。いずれも成果物を書き換えず検証だけに使う。
 
 ```bash
 python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings.py --schema $CLAUDE_PLUGIN_ROOT/schemas/findings.v1.json --data ~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.verified.json.tmp --metadata ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json

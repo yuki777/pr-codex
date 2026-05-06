@@ -351,6 +351,17 @@ class FindingsSarifTest(unittest.TestCase):
             )
         self.assert_cli_invalid(completed, "must_fix_count_mismatch")
 
+    def test_official_schema_rejects_invalid_sarif_types(self) -> None:
+        artifact = canonical_artifact()
+        sarif = build_sarif(artifact, metadata=metadata(), ranges={"src/App.php": [(1, 20)]})
+        sarif["runs"][0]["tool"]["driver"]["informationUri"] = 123
+        sarif["runs"][0]["automationDetails"]["id"] = 456
+        errors = validate_findings_sarif(self.schema, sarif, findings=artifact)
+        self.assertTrue(errors, "official SARIF schema violations must be reported")
+        self.assertTrue(any("official SARIF schema violation" in error for error in errors), errors)
+        self.assertTrue(any("informationUri" in error for error in errors), errors)
+        self.assertTrue(any("automationDetails.id" in error for error in errors), errors)
+
     def test_small_fixture_diff_end_to_end_generation(self) -> None:
         finding = make_finding(
             severity="should_fix",

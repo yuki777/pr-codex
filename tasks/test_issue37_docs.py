@@ -22,6 +22,7 @@ class Issue37DocsTest(unittest.TestCase):
             "local-only artifact",
             "GitHub Code Scanning への upload",
             "posting.post_policy=suppress",
+            "jsonschema",
             "canonical_must_fix != markdown_must_fix != payload_must_fix != sarif_must_fix",
             "result.partialFingerprints.canonical",
             "deterministic UUIDv5",

@@ -2,9 +2,10 @@
 """Validate pr-codex findings.sarif derived artifacts.
 
 This helper keeps SARIF validation offline by loading the bundled OASIS SARIF
-2.1.0 schema and enforcing the subset plus pr-codex cross-artifact invariants
-used by generate_findings_sarif.py.  It mirrors the existing validator style:
-exit 0 for VALID, exit 1 for contract failures, and exit 2 for CLI/read errors.
+2.1.0 schema, validating the payload with python-jsonschema, and enforcing
+pr-codex cross-artifact invariants used by generate_findings_sarif.py.  It
+mirrors the existing validator style: exit 0 for VALID, exit 1 for contract
+failures, and exit 2 for CLI/read errors.
 """
 
 from __future__ import annotations
@@ -17,6 +18,11 @@ from pathlib import Path
 from typing import Any
 
 from generate_findings_sarif import CATEGORY_RULES, SEVERITY_TO_LEVEL, parse_ranges, range_contains
+
+try:  # jsonschema is intentionally only required for SARIF, not canonical JSON.
+    import jsonschema
+except ModuleNotFoundError:  # pragma: no cover - exercised by CLI environments without dependency
+    jsonschema = None  # type: ignore[assignment]
 
 SARIF_SCHEMA_TITLE = "Static Analysis Results Format (SARIF) Version 2.1.0 JSON Schema"
 FINGERPRINT_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -103,6 +109,32 @@ def validate_schema_file(schema: Any) -> list[str]:
     if "sarif-schema-2.1.0.json" not in str(schema.get("$id", "")):
         errors.append("$schema_file.$id: must identify sarif-schema-2.1.0.json")
     return errors
+
+
+def json_path_from_error(error: Any) -> str:
+    parts = ["$"]
+    for part in error.absolute_path:
+        if isinstance(part, int):
+            parts.append(f"[{part}]")
+        else:
+            parts.append(f".{part}")
+    return "".join(parts)
+
+
+def validate_official_sarif_schema(schema: Any, data: Any) -> list[str]:
+    """Validate the SARIF payload against the bundled OASIS Draft-07 schema."""
+    if jsonschema is None:
+        return [
+            "$schema_file: python package 'jsonschema' is required for official OASIS SARIF schema validation; "
+            "install it with `python3 -m pip install jsonschema`"
+        ]
+    try:
+        jsonschema.Draft7Validator.check_schema(schema)
+        validator = jsonschema.Draft7Validator(schema, format_checker=jsonschema.FormatChecker())
+        schema_errors = sorted(validator.iter_errors(data), key=lambda item: list(item.absolute_path))
+    except jsonschema.exceptions.SchemaError as exc:
+        return [f"$schema_file: invalid bundled SARIF schema: {exc.message}"]
+    return [f"{json_path_from_error(error)}: official SARIF schema violation: {error.message}" for error in schema_errors]
 
 
 def validate_sarif_shape(data: Any) -> list[str]:
@@ -335,6 +367,8 @@ def validate_findings_sarif(
     payload_path: Path | None = None,
 ) -> list[str]:
     errors = validate_schema_file(schema)
+    if not errors:
+        errors.extend(validate_official_sarif_schema(schema, sarif))
     errors.extend(validate_sarif_shape(sarif))
     if errors:
         return errors
