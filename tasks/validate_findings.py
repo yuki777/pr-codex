@@ -346,7 +346,9 @@ def validate_root_cause_clusters(errors: list[str], data: dict[str, Any], findin
         if isinstance(cluster_id, str):
             for identifier in finding_ids:
                 declared = finding_cluster_refs.get(identifier)
-                if declared is not None and declared != cluster_id:
+                if declared is None:
+                    errors.append(f"{cpath}.finding_ids: finding {identifier} must declare root_cause_id={cluster_id}")
+                elif declared != cluster_id:
                     errors.append(f"{cpath}.finding_ids: finding {identifier} declares root_cause_id={declared}")
         if isinstance(representative, str) and representative in findings_by_id:
             severities = [findings_by_id[identifier].get("severity") for identifier in finding_ids if identifier in findings_by_id]

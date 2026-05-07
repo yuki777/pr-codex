@@ -72,6 +72,17 @@ def valid_artifact() -> dict[str, object]:
     }
 
 
+def clone_finding(artifact: dict[str, object], path: str) -> dict[str, object]:
+    duplicate = copy.deepcopy(artifact["findings"][0])
+    duplicate["location"] = {"path": path, "start_line": 47, "side": "RIGHT"}
+    duplicate["title"] = f"Duplicate root cause at `{path}`."
+    duplicate_id = compute_fingerprint(duplicate)
+    duplicate["id"] = duplicate_id
+    duplicate["fingerprint"] = duplicate_id
+    artifact["findings"].append(duplicate)
+    return duplicate
+
+
 def valid_metadata() -> dict[str, object]:
     return {
         "org": "yuki777",
@@ -428,6 +439,19 @@ class ValidateFindingsTest(unittest.TestCase):
                     ]
                 ),
                 "finding_ids: unknown finding id",
+            ),
+            "member-missing-root-cause-id": (
+                lambda artifact: artifact.update(
+                    root_cause_clusters=[
+                        {
+                            "id": "rc-missing-declaration",
+                            "summary": "Cluster members must declare the same root cause id.",
+                            "representative_finding_id": artifact["findings"][0]["id"],
+                            "finding_ids": [artifact["findings"][0]["id"], clone_finding(artifact, "skills/review/SKILL.md")["id"]],
+                        }
+                    ]
+                ),
+                "must declare root_cause_id=rc-missing-declaration",
             ),
         }
         for name, (mutate, expected_fragment) in cases.items():
