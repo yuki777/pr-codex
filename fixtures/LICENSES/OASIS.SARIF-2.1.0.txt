@@ -1,0 +1,10 @@
+Static Analysis Results Format (SARIF) Version 2.1.0 JSON Schema
+Source: https://docs.oasis-open.org/sarif/sarif/v2.1.0/os/schemas/sarif-schema-2.1.0.json
+Standard: OASIS Standard, 20 March 2020
+Copyright: © OASIS Open 2020. All Rights Reserved.
+
+The schema is bundled so pr-codex can validate local findings.sarif artifacts
+offline. Refer to OASIS policies and the SARIF 2.1.0 specification for the
+complete license and terms:
+https://docs.oasis-open.org/sarif/sarif/v2.1.0/os/sarif-v2.1.0-os.html
+https://www.oasis-open.org/policies-guidelines/ipr/

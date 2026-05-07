@@ -159,6 +159,19 @@ trigger path が再現できなくても `corroborated` かつ `impact_explained
 ### 軽微な指摘 (Nit)
 スタイルや好みに関する軽微な指摘。簡潔に記載（必ず `path/to/file.ext:L<行番号>` 表記を付与）。
 
+### SARIF 派生成果物の公開境界
+
+`findings.verified.json` から `findings.sarif` を生成する際の `posting.post_policy` → SARIF 表現は以下に固定する。SARIF は M2 では local-only artifact であり、GitHub Code Scanning upload は自動化しない。
+
+| `posting.post_policy` | SARIF 上の扱い |
+|---|---|
+| `inline` | `suppressions` なし。Must Fix inline と同じ公開可能スコープ |
+| `body_summary` | `should_fix` は `suppressions` なし。`nit` は noise 防止のため `suppressions` を付ける |
+| `local_only` | `suppressions: [{kind: "external", status: "accepted", justification: "local_only per pr-codex post_policy"}]` |
+| `suppress` | SARIF に出力しない。canonical 内部記録だけに残す |
+
+`severity` は `must_fix → error` / `should_fix → warning` / `nit → note` / `note → none` に写像する。`security` category の `must_fix` は `properties.security_severity_label = "high"` を付けるが、F7 では security high/critical の inline 抑制ロジック自体は変更しない。
+
 ### 良い点
 評価できるコードや設計判断があれば簡潔に述べる。厳しいレビューでも、良い点は認める。
 

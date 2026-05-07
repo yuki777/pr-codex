@@ -1,0 +1,276 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/yuki777/pr-codex/main/schemas/findings.candidates.v1.json",
+  "title": "pr-codex hunter candidates v1",
+  "description": "Loose intermediate artifact emitted at the hunter → verifier boundary. The verifier turns these candidates into canonical findings.v1 entries; ids/fingerprints, axes, evidence_level, and posting are optional here and are not trusted for GitHub posting.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "producer",
+    "pr",
+    "generated_at",
+    "candidates"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "findings.candidates.v1"
+    },
+    "producer": {
+      "$ref": "#/$defs/producer"
+    },
+    "pr": {
+      "$ref": "#/$defs/pr"
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\\d|3[01])T(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)(?![\\s\\S])"
+    },
+    "candidates": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/candidate"
+      }
+    }
+  },
+  "$defs": {
+    "sha": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{7,64}$"
+    },
+    "non_empty_string": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?![\\s\\S]*[\\u0000-\\u001F\\u007F-\\u009F\\uD800-\\uDFFF])"
+    },
+    "axis_value": {
+      "enum": [
+        "yes",
+        "no",
+        "unknown"
+      ]
+    },
+    "evidence_level": {
+      "enum": [
+        "suspicion",
+        "corroborated",
+        "trigger_path_identified",
+        "impact_explained",
+        "verified"
+      ]
+    },
+    "post_policy": {
+      "enum": [
+        "inline",
+        "body_summary",
+        "local_only",
+        "suppress"
+      ]
+    },
+    "not_postable_reason": {
+      "enum": [
+        "depends_on_pr_external_context",
+        "security_detail",
+        "too_long",
+        "low_evidence_suspicion",
+        "private_dependency",
+        "other_explained"
+      ]
+    },
+    "audience": {
+      "enum": [
+        "human_reviewer",
+        "eval_harness",
+        "future_memory"
+      ]
+    },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version",
+        "run_id"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "version": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "run_id": {
+          "$ref": "#/$defs/non_empty_string"
+        }
+      }
+    },
+    "pr": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "number",
+        "base_sha",
+        "head_sha"
+      ],
+      "properties": {
+        "repository": {
+          "type": "string",
+          "pattern": "^[^/\\s]+/[^/\\s]+$"
+        },
+        "number": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "base_sha": {
+          "$ref": "#/$defs/sha"
+        },
+        "head_sha": {
+          "$ref": "#/$defs/sha"
+        },
+        "merge_commit_sha": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "location": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "start_line",
+        "side"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "start_line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "end_line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "side": {
+          "enum": [
+            "LEFT",
+            "RIGHT"
+          ]
+        },
+        "diff_hunk_ref": {
+          "$ref": "#/$defs/non_empty_string"
+        }
+      }
+    },
+    "axes": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "real": {
+          "$ref": "#/$defs/axis_value"
+        },
+        "triggerable": {
+          "$ref": "#/$defs/axis_value"
+        },
+        "impactful": {
+          "$ref": "#/$defs/axis_value"
+        },
+        "general": {
+          "$ref": "#/$defs/axis_value"
+        }
+      }
+    },
+    "posting": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "post_policy": {
+          "$ref": "#/$defs/post_policy"
+        },
+        "explanation_postable": {
+          "type": "boolean"
+        },
+        "not_postable_reason": {
+          "$ref": "#/$defs/not_postable_reason"
+        },
+        "audience": {
+          "$ref": "#/$defs/audience"
+        }
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_agent",
+        "location",
+        "severity_raw",
+        "category_raw",
+        "title",
+        "problem",
+        "reason",
+        "suggestion"
+      ],
+      "properties": {
+        "candidate_id": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "source_agent": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "source_ref": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "location": {
+          "$ref": "#/$defs/location"
+        },
+        "severity_raw": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "category_raw": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "title": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "problem": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "reason": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "suggestion": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "id": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "fingerprint": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "evidence_level": {
+          "$ref": "#/$defs/evidence_level"
+        },
+        "axes": {
+          "$ref": "#/$defs/axes"
+        },
+        "verification_hint": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "posting": {
+          "$ref": "#/$defs/posting"
+        }
+      }
+    }
+  }
+}

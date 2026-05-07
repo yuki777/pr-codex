@@ -1,35 +1,39 @@
 {
-  "files_changed": 4,
-  "hunks": 6,
-  "lines_added": 28,
-  "lines_removed": 11,
-  "risk_tags": [],
+  "files_changed": 20,
+  "hunks": 32,
+  "lines_added": 119,
+  "lines_removed": 157,
+  "risk_tags": [
+    "dependency",
+    "infra",
+    "test_touch"
+  ],
   "selected_hunters": [
     "claude",
     "codex"
   ],
   "depth_actual": "standard",
-  "depth_source": "default",
-  "depth_reason": "no depth argument and no high-risk small-PR signal; selected default standard",
-  "depth_requested": null,
+  "depth_source": "argument",
+  "depth_reason": "requested --standard",
+  "depth_requested": "standard",
   "depth_downgraded": false,
   "depth_downgrade_reason": null,
   "recommended_mode": "standard",
   "skip_reason": null,
   "routing_decision": {
-    "budget_class": "small",
+    "budget_class": "medium",
     "route": "claude+codex",
     "model_profile": "standard",
-    "rationale": "files_changed=4, total_lines=39, risk_tags=[], depth=standard, mode=standard"
+    "rationale": "files_changed=20, total_lines=276, risk_tags=[dependency,infra,test_touch], depth=standard, mode=standard"
   },
   "estimated_stages": 4,
-  "estimated_timeout_ms": 513900,
+  "estimated_timeout_ms": 1200000,
   "actual_duration_ms": null,
   "actual_tokens": null,
   "review_loop": {
     "halting_policy": {
       "max_rounds": 3,
-      "time_budget_ms": 513900,
+      "time_budget_ms": 1200000,
       "no_new_evidence_rounds": 1,
       "repeated_contradiction_limit": 2,
       "verifier_fail_policy": "local_artifact_only",

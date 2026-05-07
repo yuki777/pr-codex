@@ -20,9 +20,29 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y jq
+      - name: Install Python validation dependencies
+        run: python3 -m pip install 'jsonschema>=4,<5'
       - name: Validate run-plan contract
         run: python3 tasks/validate_run_plan.py
+      - name: Validate fixture eval smoke gate
+        run: |
+          mkdir -p /tmp/pr-codex-eval
+          for fixture in small medium large; do
+            python3 tasks/validate_expected_findings.py \
+              --schema schemas/expected-findings.v1.json \
+              --data "fixtures/${fixture}/expected-findings.json"
+            python3 tasks/score_fixture.py \
+              --expected "fixtures/${fixture}/expected-findings.json" \
+              --actual "fixtures/${fixture}/scoring-stubs/perfect.findings.verified.json" \
+              --out "/tmp/pr-codex-eval/score-${fixture}.json" \
+              --evaluated-at 2026-05-06T00:00:00Z
+            python3 tasks/validate_score_report.py \
+              --schema schemas/score-report.v1.json \
+              --data "/tmp/pr-codex-eval/score-${fixture}.json"
+          done
       - name: Run findings validator unit tests
         run: python3 -m unittest tasks.test_validate_findings
+      - name: Run local SARIF generation and validation tests
+        run: python3 -m unittest tasks.test_findings_sarif
       - name: Run repository unit tests
         run: python3 -m unittest discover -s tasks -p 'test_*.py'

@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/yuki777/pr-codex/main/schemas/m1-m2-gate.v1.json",
+  "title": "pr-codex M1 to M2 gate report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "evaluated_at", "criteria", "overall_status"],
+  "properties": {
+    "schema_version": {"const": "m1-m2-gate.v1"},
+    "evaluated_at": {"type": "string", "format": "date-time"},
+    "criteria": {
+      "type": "array",
+      "minItems": 6,
+      "items": {"$ref": "#/$defs/criterion"}
+    },
+    "overall_status": {"enum": ["pass", "fail", "blocked_by_unknowns"]}
+  },
+  "$defs": {
+    "status": {"enum": ["pass", "fail", "unknown"]},
+    "criterion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "status", "evidence"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "status": {"$ref": "#/$defs/status"},
+        "evidence": {"type": "object"}
+      }
+    }
+  }
+}
