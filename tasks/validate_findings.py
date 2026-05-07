@@ -27,8 +27,12 @@ FINGERPRINT_RE = re.compile(r"^[0-9a-f]{64}$")
 REPOSITORY_RE = re.compile(r"^[^/\s]+/[^/\s]+$")
 BACKTICK_SYMBOL_RE = re.compile(r"`([^`]+)`")
 
-TOP_LEVEL_KEYS = {"schema_version", "producer", "pr", "generated_at", "findings"}
+TOP_LEVEL_KEYS = {"schema_version", "producer", "pr", "generated_at", "findings", "root_cause_clusters"}
+TOP_LEVEL_REQUIRED_KEYS = {"schema_version", "producer", "pr", "generated_at", "findings"}
 PRODUCER_KEYS = {"name", "version", "run_id"}
+ROOT_CAUSE_CLUSTER_KEYS = {"id", "summary", "representative_finding_id", "finding_ids"}
+ROOT_CAUSE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._:-]{1,127}$")
+SEVERITY_RANK = {"note": 0, "nit": 1, "should_fix": 2, "must_fix": 3}
 PR_KEYS = {"repository", "number", "base_sha", "head_sha", "merge_commit_sha"}
 LOCATION_KEYS = {"path", "start_line", "end_line", "side", "diff_hunk_ref"}
 AXES_KEYS = {"real", "triggerable", "impactful", "general"}
@@ -55,6 +59,7 @@ FINDING_KEYS = {
     "verifier_required",
     "evidence",
     "php",
+    "root_cause_id",
 }
 EVIDENCE_KEYS = {"type", "tool", "command", "diagnostic_code", "path", "line", "url", "note"}
 PHP_KEYS = {"symbol", "composer_package", "language_version"}
@@ -276,6 +281,88 @@ def validate_must_fix_four_axes_gate(
         )
 
 
+def validate_root_cause_clusters(errors: list[str], data: dict[str, Any], findings: list[Any]) -> None:
+    raw_clusters = data.get("root_cause_clusters")
+    findings_by_id: dict[str, dict[str, Any]] = {}
+    finding_cluster_refs: dict[str, str] = {}
+
+    for index, finding in enumerate(findings):
+        if not isinstance(finding, dict):
+            continue
+        identifier = finding.get("id")
+        if isinstance(identifier, str):
+            findings_by_id[identifier] = finding
+        if "root_cause_id" in finding:
+            root_cause_id = finding.get("root_cause_id")
+            if not isinstance(root_cause_id, str) or not is_safe_json_string(root_cause_id) or not ROOT_CAUSE_ID_RE.match(root_cause_id):
+                errors.append(f"$.findings[{index}].root_cause_id: must be a stable lowercase cluster id")
+            elif isinstance(identifier, str):
+                finding_cluster_refs[identifier] = root_cause_id
+
+    if raw_clusters is None:
+        if finding_cluster_refs:
+            for identifier, root_cause_id in sorted(finding_cluster_refs.items()):
+                errors.append(f"$.findings[id={identifier}].root_cause_id: referenced cluster is not defined: {root_cause_id}")
+        return
+
+    if not isinstance(raw_clusters, list):
+        errors.append("$.root_cause_clusters: must be an array")
+        return
+
+    clusters_by_id: dict[str, dict[str, Any]] = {}
+    for index, cluster in enumerate(raw_clusters):
+        cpath = f"$.root_cause_clusters[{index}]"
+        if not isinstance(cluster, dict):
+            errors.append(f"{cpath}: must be an object")
+            continue
+        add_unexpected(errors, cpath, cluster, ROOT_CAUSE_CLUSTER_KEYS)
+        require_keys(errors, cpath, cluster, ROOT_CAUSE_CLUSTER_KEYS)
+        cluster_id = cluster.get("id")
+        if not isinstance(cluster_id, str) or not is_safe_json_string(cluster_id) or not ROOT_CAUSE_ID_RE.match(cluster_id):
+            errors.append(f"{cpath}.id: must be a stable lowercase cluster id")
+        elif cluster_id in clusters_by_id:
+            errors.append(f"{cpath}.id: duplicate root cause cluster id")
+        else:
+            clusters_by_id[cluster_id] = cluster
+        validate_string_field(errors, cpath, cluster, "summary")
+        representative = cluster.get("representative_finding_id")
+        if not isinstance(representative, str) or not FINGERPRINT_RE.match(representative):
+            errors.append(f"{cpath}.representative_finding_id: must be a canonical finding id")
+        finding_ids = cluster.get("finding_ids")
+        if not isinstance(finding_ids, list) or len(finding_ids) < 2:
+            errors.append(f"{cpath}.finding_ids: must list at least two finding ids")
+            continue
+        if any(not isinstance(identifier, str) or not FINGERPRINT_RE.match(identifier) for identifier in finding_ids):
+            errors.append(f"{cpath}.finding_ids: all values must be canonical finding ids")
+            continue
+        if len(finding_ids) != len(set(finding_ids)):
+            errors.append(f"{cpath}.finding_ids: must be unique")
+        if isinstance(representative, str) and representative not in finding_ids:
+            errors.append(f"{cpath}.representative_finding_id: must be listed in finding_ids")
+        unknown_ids = [identifier for identifier in finding_ids if identifier not in findings_by_id]
+        if unknown_ids:
+            errors.append(f"{cpath}.finding_ids: unknown finding id: {unknown_ids[0]}")
+            continue
+        if isinstance(cluster_id, str):
+            for identifier in finding_ids:
+                declared = finding_cluster_refs.get(identifier)
+                if declared is not None and declared != cluster_id:
+                    errors.append(f"{cpath}.finding_ids: finding {identifier} declares root_cause_id={declared}")
+        if isinstance(representative, str) and representative in findings_by_id:
+            severities = [findings_by_id[identifier].get("severity") for identifier in finding_ids if identifier in findings_by_id]
+            ranked = [SEVERITY_RANK[value] for value in severities if isinstance(value, str) and value in SEVERITY_RANK]
+            representative_severity = findings_by_id[representative].get("severity")
+            if ranked and SEVERITY_RANK.get(representative_severity, -1) != max(ranked):
+                errors.append(f"{cpath}.representative_finding_id: representative severity must equal highest cluster severity")
+
+    for identifier, root_cause_id in sorted(finding_cluster_refs.items()):
+        cluster = clusters_by_id.get(root_cause_id)
+        if cluster is None:
+            errors.append(f"$.findings[id={identifier}].root_cause_id: referenced cluster is not defined: {root_cause_id}")
+        elif identifier not in cluster.get("finding_ids", []):
+            errors.append(f"$.findings[id={identifier}].root_cause_id: finding must be listed by its root cause cluster")
+
+
 def validate_pr_metadata_context(errors: list[str], data: dict[str, Any], metadata: Any) -> None:
     if metadata is None:
         return
@@ -352,7 +439,7 @@ def validate_artifact(schema: dict[str, Any], data: Any, metadata: Any | None = 
         return ["$: must be an object"]
 
     add_unexpected(errors, "$", data, TOP_LEVEL_KEYS)
-    require_keys(errors, "$", data, TOP_LEVEL_KEYS)
+    require_keys(errors, "$", data, TOP_LEVEL_REQUIRED_KEYS)
 
     if data.get("schema_version") != "findings.v1":
         errors.append("$.schema_version: must equal 'findings.v1'")
@@ -565,6 +652,7 @@ def validate_artifact(schema: dict[str, Any], data: Any, metadata: Any | None = 
                 for key in PHP_KEYS:
                     validate_string_field(errors, f"{fpath}.php", php, key)
 
+    validate_root_cause_clusters(errors, data, findings)
     return errors
 
 

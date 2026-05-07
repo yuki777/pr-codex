@@ -138,13 +138,14 @@ Claude 側でメモリ上に以下を抽出する:
   - top-level `pr.repository` / `pr.number` / `pr.head_sha` / `pr.base_sha` が `metadata.json.repository_full_name` / `metadata.json.pr_number` / `metadata.json.head_sha` / `metadata.json.base_sha` と一致し、`metadata.json.repository_full_name == "$org/$repository"` で投稿先 repo と一致すること
   - すべての finding で `id == fingerprint` が成り立ち、同梱 validator が正準アルゴリズムで再計算した fingerprint と一致すること
   - `findings[]` のうち `severity == "must_fix"` の要素を `$must_fix` 配列として抽出する
+  - top-level `root_cause_clusters[]` がある場合は同梱 validator 済みの cluster detail を読み、各 cluster の `representative_finding_id` を representative posting 対象として扱う。cluster member は canonical finding としては残し、GitHub inline duplicate は代表コメントに集約する
   - `findings[]` のうち `severity == "should_fix" && posting.post_policy == "body_summary"` の要素を `$should_fix_body_summary_candidates` 配列として抽出する。順序は `findings[]` の登場順を保ち、Step 5 の opt-in がない限り body には含めない
   - `findings[]` のうち `severity == "nit"` の要素を `$nit_findings` 配列として抽出する。`posting.post_policy` の値に関わらず GitHub payload には含めず、primary path でのみ `nits.md` に書き出す
   - M1 の投稿 contract として、`severity != "must_fix"` の finding に `posting.post_policy == "inline"` が含まれないことを確認する
 
 #### `findings.verified.json` から抽出するフィールド
 
-各 Must Fix finding から以下を payload 用に組み立てる:
+各 Must Fix finding から以下を payload 用に組み立てる。`root_cause_clusters[]` がない finding は従来どおり個別 inline comment にする。cluster member のうち `representative_finding_id` ではない finding は duplicate inline comment としては投稿せず、代表 finding の `body` に affected findings summary として path/line/problem を最大 5 件まで短く含める（超過分は `他 N 件` として数だけ示す）。canonical / review.md / SARIF / preflight の Must Fix count は cluster member を含む full finding count を使い、代表数に減らして数えない:
 
 | 出力キー        | 値 |
 | --------------- | --- |
@@ -201,7 +202,12 @@ Must Fix:
 - 問題: <problem>
 - 理由: <reason>
 - 提案: <suggestion>
+
+同一 root cause の影響箇所:
+- `<path:Lline>` <problem>
 ```
+
+`同一 root cause の影響箇所` は cluster representative の場合のみ追加する。representative 自身はこの箇条書きから除外し、同じ cluster の他 finding を canonical array order で最大 5 件まで列挙する。
 
 #### 空セクションの扱い
 
@@ -363,7 +369,7 @@ Codex は以下の 4 stage を順に判定する。各 stage は前段の結論�
 
 | Stage | 検証観点 |
 | --- | --- |
-| 1. `schema_validation` | `findings.verified.json` の `schema_version == "findings.v1"`、同梱 validator validation、top-level `pr.*` と `metadata.json` の一致、全 finding の `id == fingerprint` と正準 fingerprint 再計算一致、`findings.sarif` の schema validation、`canonical_must_fix == markdown_must_fix == payload_must_fix == sarif_must_fix` |
+| 1. `schema_validation` | `findings.verified.json` の `schema_version == "findings.v1"`、同梱 validator validation、top-level `pr.*` と `metadata.json` の一致、全 finding の `id == fingerprint` と正準 fingerprint 再計算一致、`findings.sarif` の schema validation、`canonical_must_fix == markdown_must_fix == sarif_must_fix`、および payload 側は cluster representative 集約後の Must Fix posting count と一致 |
 | 2. `range_validation` | `payload.comments[]` の `path` が `metadata.json.files[]` に含まれること、`line` / `start_line` が `pr.diff.ranges.txt` の同一 hunk 範囲内にあること |
 | 3. `semantic_preflight` | `payload.comments[]` が `severity == "must_fix"` の finding だけに対応すること、Should Fix / Nit / Note の inline 混入がないこと、Nit が body に混入していないこと、4 軸 + `evidence_level` gate、反証 prompt |
 | 4. `payload_consistency` | `event` 判定、`body` 冒頭の `## 総評` 一致、`## 良い点` 一致、`findings.verified.json` ↔ `review.md` ↔ `review-payload.json` ↔ `findings.sarif` の Must Fix 件数一致、Should Fix body summary の 1:1 対応・3 件上限・セクション順序 |
@@ -458,7 +464,7 @@ Codex は `preflight-codex.md` の末尾付近に `### RESULT_JSON` 見出しと
 3. findings.verified.json の top-level pr.repository / pr.number / pr.head_sha / pr.base_sha が metadata.json の repository_full_name / pr_number / head_sha / base_sha と一致し、metadata.json.repository_full_name が投稿先 org/repository と一致すること
 4. 全 finding で id == fingerprint が成り立ち、同梱 validator と同じ正準アルゴリズムで再計算した fingerprint と一致すること
 5. findings.sarif が存在し、絶対パス {SARIF_SCHEMA_PATH} / {SARIF_VALIDATOR_PATH} で `python3 {SARIF_VALIDATOR_PATH} --schema {SARIF_SCHEMA_PATH} --data findings.sarif --findings findings.verified.json --ranges pr.diff.ranges.txt --markdown review.md --payload review-payload.json` を実行して PASS すること。存在しない場合は `python3 {SARIF_GENERATOR_PATH} --findings findings.verified.json --metadata metadata.json --ranges pr.diff.ranges.txt --output findings.sarif` で再生成してから検証してよいが、GitHub へ upload してはならない。空の `pr.diff.ranges.txt` は「コメント可能範囲なし」として扱い、非空 findings / SARIF results がある場合は生成・検証ともに FAIL とする（`--ranges` 未指定時だけ range gate 無効）
-6. Must Fix 件数が `canonical_must_fix == markdown_must_fix == payload_must_fix == sarif_must_fix` であること。SARIF 側は `level == "error"` の result 件数で数える。不一致は rule=must_fix_count_mismatch, stage=schema_validation, auto_fixable=false, requires_review_regeneration=true とする
+6. Must Fix 件数は full canonical count として `canonical_must_fix == markdown_must_fix == sarif_must_fix` を保つこと。payload 側は cluster representative 集約後の posting count（unclustered Must Fix + Must Fix cluster representatives）と一致すること。SARIF 側は `level == "error"` の result 件数で数える。不一致は rule=must_fix_count_mismatch, stage=schema_validation, auto_fixable=false, requires_review_regeneration=true とする
 
 ## STAGE 2: range_validation
 以下を確認し、STAGE 2: PASS または STAGE 2: FAIL を出力してください。

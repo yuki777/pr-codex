@@ -128,7 +128,7 @@ Stage ごとの責務、input/output artifact、halting 条件は [`skills/revie
 
 ### Should Fix / Nit の取り扱い
 
-- `Must Fix` は従来どおり GitHub review の inline comment として投稿される
+- `Must Fix` は従来どおり GitHub review の inline comment として投稿される。`root_cause_clusters[]` がある場合は、各 cluster の `representative_finding_id` を inline 代表として扱い、同じ root cause の他 finding は代表コメント本文の affected findings summary に短く列挙する（canonical / SARIF / review.md には全 finding を残し、Must Fix 件数 gate は full count のまま維持する）
 - `Should Fix` は自動では投稿されない。手動実行時に `yes` を選ぶと、author が見落としやすい非ブロッキング改善だけを上位 3 件まで PR body に短く同梱できる
 - `Nit` はノイズ抑制のため PR には載せず、`nits.md` に控えとして残す。投稿後は `sent/` 配下の履歴ディレクトリで確認できる
 - `findings.verified.json` がない fallback path では、従来どおり `Should Fix` / `Nit` / 補足を投稿 payload に含めない
@@ -283,6 +283,7 @@ mv ~/claude-loop-pr-codex/sent/yuki777-pr-codex-24 \
 - fixture oracle は `schemas/expected-findings.v1.json` で定義する。runtime artifact とは分離し、`expected_outcome` / `acceptable_overrides` / `strictness_profile` / `minimum_evidence_level` など採点用メタデータを保持する
 - fixture scoring の出力は `schemas/score-report.v1.json`、M1→M2 gate report は `schemas/m1-m2-gate.v1.json` で定義する
 - `findings.verified.json` は top-level `generated_at` を持ち、per-finding `created_at` は持たない
+- `findings.verified.json` は任意で top-level `root_cause_clusters[]` を持てる。各 cluster は `id` / `summary` / `representative_finding_id` / `finding_ids` を持ち、`finding.root_cause_id` から参照する。validator は cluster id の重複、未知 finding id、representative が member でない状態、representative severity が cluster 内最高 severity より低い状態を拒否する
 - `findings.verified.json.pr.repository` は **投稿先の base repo** (`owner/repo`) に固定する。fork PR でも head repo ではなく、`metadata.json.repository_full_name` および `/pr-codex:send` の投稿先 `$org/$repository` と一致させる
 - M1 の `finding.id` は **`fingerprint` と同値**に固定する（retry / send の `source_finding_id` / eval harness 比較で決定論的に追跡するため）
 - `category` は schema enum（`bug` / `security` / `performance` / `tests` / `design` / `code_quality` / `consistency` / `runtime_error`）に固定し、自由文字列の揺れを `fingerprint` に入れない

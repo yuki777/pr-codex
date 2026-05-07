@@ -143,6 +143,16 @@ trigger path が再現できなくても `corroborated` かつ `impact_explained
 | IMPACTFUL | merge を止めるべき影響度 (data loss / security / 仕様不一致) | 影響限定的、ローカル / 軽微 | 影響範囲が確認できない |
 | GENERAL | 横展開が必要なパターン or 同種の他箇所がある | この箇所固有 (ただし specific-impact 説明済みなら OK) | 横展開可能性が確認できない |
 
+### Root-cause clustering
+
+複数 finding が同一 root cause に由来する場合は、`findings.verified.json` の top-level `root_cause_clusters[]` にまとめてよい。Markdown の `review.md` には full finding を残し、GitHub 投稿時だけ representative + affected findings summary に集約する。
+
+- cluster は `id` / `summary` / `representative_finding_id` / `finding_ids` を持つ
+- 各 member finding には同じ `root_cause_id` を付ける
+- representative は cluster 内で最も高い severity の finding にする。Must Fix を含む cluster の representative は Must Fix でなければならない
+- severity は cluster によって下げない。重複抑制は投稿表現の問題であり、canonical artifact では個々の finding と severity を維持する
+- distinct bugs を無理に統合しない。修正箇所・原因・再現経路が異なる場合は別 cluster または cluster なしにする
+
 ### 改善提案 (Should Fix)
 修正が強く推奨される問題。同じフォーマットで記載。
 
