@@ -19,7 +19,7 @@ usage() {
 Usage: $0 [--with-cron] [--force]
 
 Options:
-  --with-cron  Create the three Hermes cron jobs. Without this, commands are printed only.
+  --with-cron  Create the four Hermes cron jobs. Without this, commands are printed only.
   --force      Overwrite profile SOUL.md files for the five pr-codex profiles.
 
 Environment:
@@ -62,6 +62,7 @@ install -m 0755 "$ROOT_DIR/hermes/scripts/pr_codex_watch.py" "$HERMES_ROOT/scrip
 install -m 0755 "$ROOT_DIR/hermes/scripts/issue_triager_publish.py" "$HERMES_ROOT/scripts/issue_triager_publish.py"
 install -m 0755 "$ROOT_DIR/hermes/scripts/pr_codex_daily_digest.py" "$HERMES_ROOT/scripts/pr_codex_daily_digest.py"
 install -m 0755 "$ROOT_DIR/hermes/scripts/pr_codex_kanban_health.py" "$HERMES_ROOT/scripts/pr_codex_kanban_health.py"
+install -m 0755 "$ROOT_DIR/hermes/scripts/pr_codex_developer_bridge.py" "$HERMES_ROOT/scripts/pr_codex_developer_bridge.py"
 
 for profile in issue-triager pr-reviewer review-triager developer sheriff; do
   profile_dir="$HERMES_ROOT/profiles/$profile"
@@ -97,6 +98,7 @@ python3 "$HERMES_ROOT/scripts/pr_codex_watch.py" \
 WATCH_PROMPT="Run the local Phase 0 watcher command and report a concise summary only: python3 $HERMES_ROOT/scripts/pr_codex_watch.py --repo $REPO --board $BOARD --tenant $TENANT --state $STATE_PATH --outbox $OUTBOX_PATH --sink hermes --json"
 HEALTH_PROMPT="Run the local Phase 0 Kanban health command and report only anomalies: python3 $HERMES_ROOT/scripts/pr_codex_kanban_health.py --repo $REPO --board $BOARD --tenant $TENANT --outbox $OUTBOX_PATH --sink hermes --json"
 DIGEST_PROMPT="Run the local Phase 0 daily digest command and deliver the summary: python3 $HERMES_ROOT/scripts/pr_codex_daily_digest.py --repo $REPO --board $BOARD --tenant $TENANT --state $STATE_PATH --outbox $OUTBOX_PATH --sink hermes --json"
+DEVELOPER_BRIDGE_PROMPT="Run the local developer bridge command and deliver output only if it creates or dispatches work: python3 $HERMES_ROOT/scripts/pr_codex_developer_bridge.py --repo $REPO --board $BOARD --json"
 
 cron_exists() {
   hermes -p sheriff cron list 2>/dev/null | grep -F -- "$1" >/dev/null 2>&1
@@ -117,6 +119,7 @@ if [ "$WITH_CRON" -eq 1 ]; then
   create_cron_once "pr-codex-watch-github" "every 10m" "$WATCH_PROMPT"
   create_cron_once "pr-codex-kanban-health" "every 30m" "$HEALTH_PROMPT"
   create_cron_once "pr-codex-daily-digest" "0 9 * * *" "$DIGEST_PROMPT"
+  create_cron_once "pr-codex-developer-bridge" "every 15m" "$DEVELOPER_BRIDGE_PROMPT"
 else
   cat <<EOF
 
@@ -125,6 +128,7 @@ Cron creation was not requested. Review existing jobs first, then run:
 hermes -p sheriff cron create "every 10m" "$WATCH_PROMPT" --name "pr-codex-watch-github"
 hermes -p sheriff cron create "every 30m" "$HEALTH_PROMPT" --name "pr-codex-kanban-health"
 hermes -p sheriff cron create "0 9 * * *" "$DIGEST_PROMPT" --name "pr-codex-daily-digest"
+hermes -p sheriff cron create "every 15m" "$DEVELOPER_BRIDGE_PROMPT" --name "pr-codex-developer-bridge"
 
 Then start/ensure the gateway scheduler:
 

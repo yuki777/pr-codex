@@ -26,6 +26,7 @@ def load_module(name: str):
 common = load_module("_pr_codex_common")
 watch = load_module("pr_codex_watch")
 health = load_module("pr_codex_kanban_health")
+bridge = load_module("pr_codex_developer_bridge")
 
 
 class HermesWatcherTests(unittest.TestCase):
@@ -291,6 +292,68 @@ class HermesWatcherTests(unittest.TestCase):
         self.assertEqual(actual, [{"id": "thread-1", "isResolved": False}])
 
 
+class DeveloperBridgeReviewFeedbackTests(unittest.TestCase):
+    def codex_thread(self, *, extra_comments=None, is_resolved=False):
+        return {
+            "id": "PRRT_codex_1",
+            "isResolved": is_resolved,
+            "isOutdated": False,
+            "path": "README.md",
+            "line": 42,
+            "comments": {
+                "nodes": [
+                    {
+                        "id": "c1",
+                        "body": "P2: clustered payload count の説明が Stage 4 と不整合です。",
+                        "createdAt": "2026-05-08T00:00:00Z",
+                        "url": "https://github.test/review/c1",
+                        "author": {"login": "chatgpt-codex-connector"},
+                    },
+                    *(extra_comments or []),
+                ]
+            },
+        }
+
+    def test_unreplied_codex_review_thread_creates_reply_required_task(self):
+        pr = {"number": 52, "title": "fix counts", "url": "https://github.test/pr/52", "head_sha": "abc123", "head_ref": "fix/counts"}
+        finding = bridge.find_unreplied_codex_review_thread(pr, [self.codex_thread()])
+        self.assertIsNotNone(finding)
+        body = bridge.build_codex_review_thread_task_body(pr, finding["thread"], "yuki777/pr-codex")
+        self.assertIn("chatgpt-codex-connector", body)
+        self.assertIn("必ず review thread に日本語で返信", body)
+        self.assertIn("Hard stops", body)
+
+    def test_codex_review_thread_with_hermes_reply_is_not_actionable(self):
+        reply = {
+            "id": "c2",
+            "body": "対応済みです。PR #53 で修正しました。",
+            "createdAt": "2026-05-08T00:10:00Z",
+            "url": "https://github.test/review/c2",
+            "author": {"login": "yuki777"},
+        }
+        pr = {"number": 52, "head_sha": "abc123"}
+        self.assertIsNone(bridge.find_unreplied_codex_review_thread(pr, [self.codex_thread(extra_comments=[reply])]))
+
+    def test_premerge_gate_blocks_unreplied_codex_thread(self):
+        pr = {"number": 52, "title": "fix counts", "url": "https://github.test/pr/52", "head_sha": "abc123", "head_ref": "fix/counts"}
+        result = bridge.evaluate_codex_reply_gate(pr, [self.codex_thread()])
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["unreplied_count"], 1)
+        self.assertIn("PRRT_codex_1", result["thread_ids"])
+
+    def test_plan_prioritizes_codex_thread_reply_before_new_issue(self):
+        pr = {"number": 52, "title": "fix counts", "url": "https://github.test/pr/52", "head_sha": "abc123", "head_ref": "fix/counts"}
+        plan = bridge.plan_next_action(
+            issues=[{"number": 99, "title": "new feature", "labels": []}],
+            open_prs=[pr],
+            tasks=[],
+            max_open_prs=2,
+            codex_threads_by_pr={52: {"thread": self.codex_thread()}},
+        )
+        self.assertEqual(plan["action"], "create_codex_thread_reply_task")
+        self.assertEqual(plan["pr"]["number"], 52)
+
+
 class CommonHelperTests(unittest.TestCase):
     def test_kanban_command_uses_board_assignee_and_idempotency_key(self):
         task = common.KanbanTask(
@@ -379,9 +442,10 @@ class InstallerScriptTests(unittest.TestCase):
             command = job["command"]
             self.assertIn('test -n "$PR_CODEX_HERMES_ROOT"', command)
             self.assertIn('"$PR_CODEX_HERMES_ROOT/scripts/', command)
-            self.assertIn('--outbox "$PR_CODEX_HERMES_ROOT/automation/pr-codex/tasks.jsonl"', command)
+            if job["name"] != "pr-codex-developer-bridge":
+                self.assertIn('--outbox "$PR_CODEX_HERMES_ROOT/automation/pr-codex/tasks.jsonl"', command)
             self.assertNotIn("~/.hermes", command)
-            if job["name"] != "pr-codex-kanban-health":
+            if job["name"] not in {"pr-codex-kanban-health", "pr-codex-developer-bridge"}:
                 self.assertIn('--state "$PR_CODEX_HERMES_ROOT/automation/pr-codex/state.json"', command)
 
     def test_review_triager_profile_does_not_trust_marker_only(self):
