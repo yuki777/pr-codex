@@ -1,0 +1,51 @@
+{
+  "schema_version": "findings.v1",
+  "producer": {
+    "name": "pr-codex-eval-stub",
+    "version": "1.7.0",
+    "run_id": "small-scoring-stub"
+  },
+  "pr": {
+    "repository": "bearsunday/BEAR.Sunday",
+    "number": 164,
+    "base_sha": "190ba62385bdf76e70f9e174289230ca979e9c70",
+    "head_sha": "68924ee3530f0fe170abed50f9ac19e204aadc0b",
+    "merge_commit_sha": "736947a5c67507c1bb6ac95da0429694e874ad7e"
+  },
+  "generated_at": "2026-05-06T00:00:00Z",
+  "findings": [
+    {
+      "id": "048356d79deccbc65f1f8fe97c3ca11259f3356501be4486f8f20d89eb2102a1",
+      "fingerprint": "048356d79deccbc65f1f8fe97c3ca11259f3356501be4486f8f20d89eb2102a1",
+      "source_agents": [
+        "eval_stub"
+      ],
+      "merged_from": [
+        "fixtures/scoring-stubs"
+      ],
+      "location": {
+        "path": "src/Extension/Application/AbstractApp.php",
+        "start_line": 1,
+        "side": "RIGHT"
+      },
+      "severity": "should_fix",
+      "category": "consistency",
+      "title": "Deprecated AbstractApp should point to an in-repo migration path",
+      "problem": "Deprecated AbstractApp should point to an in-repo migration path",
+      "reason": "Deterministic scoring stub for F11 regression eval.",
+      "suggestion": "Use this artifact only as CI-safe scoring input.",
+      "evidence_level": "corroborated",
+      "axes": {
+        "real": "yes",
+        "triggerable": "yes",
+        "impactful": "yes",
+        "general": "no"
+      },
+      "posting": {
+        "post_policy": "local_only",
+        "explanation_postable": true,
+        "audience": "human_reviewer"
+      }
+    }
+  ]
+}

@@ -2,13 +2,27 @@
 user-invocable: true
 name: pr-codex
 description: "GitHub PRを Claude Code と Codex CLI の2者レビュー方式で自動レビューする"
-argument-hint: ""
+argument-hint: "[--deep|--standard]"
 allowed-tools: ["Bash", "Read", "Write", "Glob", "Grep"]
 ---
 
 # pr-codex
 
 GitHubのレビュー依頼PRを自動レビューするコマンド。Claude Code と Codex CLI の2者レビュー方式。
+
+## 引数
+
+The user invoked this with: `$ARGUMENTS`
+
+起動直後に Claude 側で `$ARGUMENTS` を解析し、レビュー深度の明示指定を `$depth_requested` として保持する。
+
+- 引数なし: `$depth_requested = ""`（run-plan の自動推定または default を使う）
+- `--deep`: `$depth_requested = "deep"`
+- `--standard`: `$depth_requested = "standard"`
+
+上記以外の引数、または複数引数が含まれる場合は、ユーザーに `unsupported argument: <value>。使える引数は --deep または --standard です。` と報告して **処理を中断** する。未知の引数を silent ignore してレビューを続行してはならない。
+
+`--deep` は高リスク・小規模 PR を深く見るための手動指定、`--standard` は高速 path を明示する指定である。どちらも `/pr-codex:send` の自動投稿範囲を広げるものではない。
 
 ## セットアップ
 
@@ -35,7 +49,7 @@ Codex CLI 側のレビュー実行は、本スキル内で `-m gpt-5.5` を指�
 GitHub Search API でレビュー依頼されている Open PR を取得する。
 Notifications API と異なり、リポジトリの Watch 設定に依存しない。
 
-各テンプレートはコードブロックの内容をそのまま1回のシェル実行単位として使うこと。変数（`$MY_LOGIN`, `$org`, `$repository`, `$pr_number`, `$title`, `$pr_url`, `$branch`, `$base_branch`, `$head_sha`, `$files_json`, `$started_at`, `$finished_at`, `$exit_code` など）の置換以外の改変は不可。
+各テンプレートはコードブロックの内容をそのまま1回のシェル実行単位として使うこと。変数（`$MY_LOGIN`, `$org`, `$repository`, `$pr_number`, `$title`, `$pr_url`, `$branch`, `$base_branch`, `$head_sha`, `$files_json`, `$started_at`, `$finished_at`, `$exit_code`, `$failed_stage` など）の置換以外の改変は不可。
 
 まず自分のログイン名を取得する。
 
@@ -336,7 +350,7 @@ awk '
 - `pr.diff` は両ツール共通の「PR 差分の確定情報源」として Step 4 で参照される
 - `pr.diff.ranges.txt` は `pr.diff` から抽出した「コメント可能行範囲」の確定情報源として Step 4 で参照される
 
-以下の `status.json` / `metadata.json` / `run-plan.json` は Bash で作成する（`jq -n --arg` / `--argjson` / `--slurpfile` / `--rawfile` の出力を `>` でリダイレクト）。`findings.verified.json` / `validation-report.json` / `review.md` は Step 4c で `Write` ツールを使い、runtime gate 通過後に final path へ反映する。
+以下の `status.json` / `metadata.json` / `run-plan.json` は Bash で作成する（`jq -n --arg` / `--argjson` / `--slurpfile` / `--rawfile` の出力を `>` でリダイレクト）。`findings.candidates.json` / `findings.verified.json` / `validation-report.json` / `review.md` は Step 4c で `Write` ツールを使い、runtime gate 通過後に final path へ反映する。
 
 まず現在時刻を取得する（出力を `$started_at` として保持する）。
 
@@ -345,11 +359,11 @@ date -u +%Y-%m-%dT%H:%M:%S+00:00
 ```
 
 - いつ使うか: 作業ディレクトリと clone の準備完了後に実行する
-- 判定条件: `status.json` が `running` で作成される
+- 判定条件: `status.json` が `running` で作成され、`tasks/validate_status.py` を通過する
 - 次アクション: metadata 作成へ進む
 
 ```bash
-jq -n --arg started_at "$started_at" --arg head_sha "$head_sha" '{state:"running",started_at:$started_at,head_sha:$head_sha}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json
+jq -n --arg started_at "$started_at" --arg head_sha "$head_sha" '{state:"running",started_at:$started_at,head_sha:$head_sha,stage:"ranker",failed_stage:null}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json && python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_status.py --data ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json
 ```
 
 - いつ使うか: `status.json` 作成後に実行する
@@ -361,21 +375,42 @@ jq -n --arg org "$org" --arg repository "$repository" --arg repository_full_name
 ```
 
 - いつ使うか: `metadata.json` 作成直後に必ず実行する
-- 判定条件: `run-plan.json` が作成され、`files_changed` / `hunks` / `lines_added` / `lines_removed` / `risk_tags` / `selected_hunters` / `depth_actual` / `recommended_mode` / `skip_reason` / `estimated_stages` / `estimated_timeout_ms` / `actual_duration_ms` / `actual_tokens` が埋まる
+- 判定条件: `run-plan.json` が作成され、`files_changed` / `hunks` / `lines_added` / `lines_removed` / `risk_tags` / `selected_hunters` / `depth_actual` / `depth_source` / `depth_reason` / `depth_requested` / `depth_downgraded` / `depth_downgrade_reason` / `recommended_mode` / `skip_reason` / `routing_decision` / `estimated_stages` / `estimated_timeout_ms` / `actual_duration_ms` / `actual_tokens` が埋まる
 - 次アクション: Step 4 前処理へ進む
 
-`run-plan.json` は Step 2b の `files[]` と Step 3 の `pr.diff` を使う preflight artifact。M1 では `selected_hunters` は常に `["claude","codex"]` を出力し、将来 F4 の選定ロジックに差し替える前提で固定値とする。`recommended_mode == "skip"` は「/loop では skip 推奨、手動では警告のみ」の**提案値**であり、M1 の既定では実際のレビューを止めず `focused fallback` で継続する。
+`run-plan.json` は Step 2b の `files[]` と Step 3 の `pr.diff`、および起動時に解析した `$depth_requested` を使う preflight artifactで、**logical stage: ranker** の正式な出力である。M2 では `routing_decision` に token/duration/file-count/risk proxy 由来の `budget_class` と logical `model_profile` を残すが、USD 推定・価格表・実プロバイダ名・実モデル名・private config は絶対に書かない。`selected_hunters` は ranker 出力の interface として配列のまま維持するが、F4 では常に `["claude","codex"]` を出力し、`routing_decision.route` も M2 では常に `"claude+codex"` とする。route enum は将来 F4 の specialist routing で拡張できるよう、ここでは固定値の hook のみ残す。`recommended_mode == "skip"` は「/loop では skip 推奨、手動では警告のみ」の**提案値**であり、M1/F4/M2 の既定では実際のレビューを止めず `focused fallback` で継続する。
+
+`depth_actual`（`standard` / `deep`）と `recommended_mode`（`standard` / `focused` / `skip`）は直交した軸として扱う。depth は「1観点あたりの掘り下げ深さ」、recommended_mode は「対象観点の絞り込み」を表すため、`depth_actual="deep"` かつ `recommended_mode="focused"` のような組み合わせも有効である。
 
 モード切替の暫定ルール:
 
-- `lines_added + lines_removed > 5000` → `depth_actual = "standard"` に強制
+- 明示 `--deep` → `depth_actual = "deep"`、`depth_source = "argument"`（ただし `lines_added + lines_removed > 5000` なら `standard` に強制降格し、`depth_downgraded = true` / `depth_downgrade_reason` を記録）
+- 明示 `--standard` → `depth_actual = "standard"`、`depth_source = "argument"`
+- 引数なし、かつ `risk_tags` に `security` または `data_migration` を含み、`files_changed <= 20` かつ `lines_added + lines_removed <= 1500` → `depth_actual = "deep"`、`depth_source = "auto"`
+- 引数なしで上記に該当しない場合 → `depth_actual = "standard"`、`depth_source = "default"`
+- `lines_added + lines_removed > 5000` → `--deep` 明示時も `depth_actual = "standard"` に強制
 - `files_changed > 50` → `recommended_mode = "focused"` に切替
 - `files_changed > 100` → `recommended_mode = "skip"` と `skip_reason` を設定（ただし M1 の既定実行は skip せず focused fallback）
 
 推定 timeout は `min(1200000, 300000 + files_changed*30000 + hunks*15000 + (lines_added+lines_removed)*100 + sensitive_risk_count*90000)` の暫定式で求める。`sensitive_risk_count` は `risk_tags` のうち `security` / `data_migration` の件数。
 
+予算・routing の派生ルール:
+
+- `budget_class = "small"`: `files_changed <= 10` かつ `total_lines <= 500` かつ `sensitive_risk_count == 0`
+- `budget_class = "medium"`: `small` ではなく、`files_changed <= 50` かつ `total_lines <= 5000`
+- `budget_class = "large"`: 上記以外
+- `model_profile = "deep"`: `recommended_mode == "standard"` かつ `depth_actual == "deep"`
+- `model_profile = "standard"`: `recommended_mode == "standard"` かつ `depth_actual == "standard"`
+- `model_profile = "focused-fallback"`: `recommended_mode == "focused"` または `"skip"`（skip 提案でもレビューは止めない）
+- `rationale` は `files_changed` / `total_lines` / `risk_tags` / `depth_actual` / `recommended_mode` の決定論的な事実列のみとし、LLM 自由生成文や provider/model 名を入れない
+
 ```bash
-jq -n --slurpfile metadata ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json --rawfile diff ~/claude-loop-pr-codex/$org-$repository-$pr_number/pr.diff '
+jq -n --arg depth_requested "$depth_requested" --slurpfile metadata ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json --rawfile diff ~/claude-loop-pr-codex/$org-$repository-$pr_number/pr.diff '
+  def explicit_depth:
+    if $depth_requested == "" or $depth_requested == "null" then null
+    elif $depth_requested == "deep" or $depth_requested == "standard" then $depth_requested
+    else error("unsupported depth_requested: " + $depth_requested)
+    end;
   def files: ($metadata[0].files // []);
   def diff_lines: ($diff | split("\n"));
   def lines_added: [diff_lines[] | select(startswith("+") and (startswith("+++") | not))] | length;
@@ -393,6 +428,32 @@ jq -n --slurpfile metadata ~/claude-loop-pr-codex/$org-$repository-$pr_number/me
   def files_changed: (files | length);
   def total_lines: (lines_added + lines_removed);
   def sensitive_risk_count: (risk_tags | map(select(. == "security" or . == "data_migration")) | length);
+  def auto_deep: (sensitive_risk_count > 0 and files_changed <= 20 and total_lines <= 1500);
+  def depth_downgraded: (explicit_depth == "deep" and total_lines > 5000);
+  def depth_requested_out: explicit_depth;
+  def depth_source:
+    if explicit_depth != null then "argument"
+    elif auto_deep then "auto"
+    else "default"
+    end;
+  def depth_actual:
+    if total_lines > 5000 then "standard"
+    elif explicit_depth != null then explicit_depth
+    elif auto_deep then "deep"
+    else "standard"
+    end;
+  def depth_reason:
+    if explicit_depth == "deep" and total_lines > 5000 then "requested --deep but changed lines > 5000; forced standard to preserve the 20 minute timeout"
+    elif explicit_depth == "deep" then "requested --deep"
+    elif explicit_depth == "standard" then "requested --standard"
+    elif total_lines > 5000 then "changed lines > 5000; selected standard to preserve the 20 minute timeout"
+    elif auto_deep then "risk_tags include security or data_migration and PR size is <= 20 files / <= 1500 changed lines; selected deep"
+    else "no depth argument and no high-risk small-PR signal; selected default standard"
+    end;
+  def depth_downgrade_reason:
+    if depth_downgraded then "requested --deep but changed lines > 5000; forced standard to preserve the 20 minute timeout"
+    else null
+    end;
   def recommended_mode:
     if files_changed > 100 then "skip"
     elif files_changed > 50 then "focused"
@@ -402,10 +463,6 @@ jq -n --slurpfile metadata ~/claude-loop-pr-codex/$org-$repository-$pr_number/me
     if files_changed > 100 then "files_changed > 100: /loop では skip 提案、手動では警告のみ。M1 の既定では focused fallback を適用"
     else null
     end;
-  def depth_actual:
-    if total_lines > 5000 then "standard"
-    else "deep"
-    end;
   def estimated_stages:
     if recommended_mode == "skip" then 6
     elif recommended_mode == "focused" then 5
@@ -413,6 +470,20 @@ jq -n --slurpfile metadata ~/claude-loop-pr-codex/$org-$repository-$pr_number/me
     end;
   def estimated_timeout_ms:
     [1200000, (300000 + (files_changed * 30000) + (hunks * 15000) + (total_lines * 100) + (sensitive_risk_count * 90000))] | min;
+  def budget_class:
+    if files_changed <= 10 and total_lines <= 500 and sensitive_risk_count == 0 then "small"
+    elif files_changed <= 50 and total_lines <= 5000 then "medium"
+    else "large"
+    end;
+  def route:
+    "claude+codex";
+  def model_profile:
+    if recommended_mode == "standard" and depth_actual == "deep" then "deep"
+    elif recommended_mode == "standard" and depth_actual == "standard" then "standard"
+    else "focused-fallback"
+    end;
+  def rationale:
+    "files_changed=\(files_changed), total_lines=\(total_lines), risk_tags=[\((risk_tags | join(",")))], depth=\(depth_actual), mode=\(recommended_mode)";
   {
     files_changed: files_changed,
     hunks: hunks,
@@ -421,8 +492,19 @@ jq -n --slurpfile metadata ~/claude-loop-pr-codex/$org-$repository-$pr_number/me
     risk_tags: risk_tags,
     selected_hunters: ["claude", "codex"],
     depth_actual: depth_actual,
+    depth_source: depth_source,
+    depth_reason: depth_reason,
+    depth_requested: depth_requested_out,
+    depth_downgraded: depth_downgraded,
+    depth_downgrade_reason: depth_downgrade_reason,
     recommended_mode: recommended_mode,
     skip_reason: skip_reason,
+    routing_decision: {
+      budget_class: budget_class,
+      route: route,
+      model_profile: model_profile,
+      rationale: rationale
+    },
     estimated_stages: estimated_stages,
     estimated_timeout_ms: estimated_timeout_ms,
     actual_duration_ms: null,
@@ -433,24 +515,31 @@ jq -n --slurpfile metadata ~/claude-loop-pr-codex/$org-$repository-$pr_number/me
 
 ### Step 4 前処理: レビュー観点の読み込み
 
-Step 4a / 4b 共通のレビュー観点本文（MCP追加情報収集 / 7観点 / 出力フォーマット / 重要）は、このスキルディレクトリ内の `REVIEW_CRITERIA.md` に外出ししている。加えて Step 3 で生成した `run-plan.json` を読み、preflight に応じた `{RUN_PLAN_GUIDANCE}` を組み立てる。4a / 4b のプロンプトには `{REVIEW_CRITERIA}` と `{RUN_PLAN_GUIDANCE}` プレースホルダが埋め込まれており、**Claude 自身が Bash ツール呼び出し前にメモリ上で実値へ置換する**（シェル側で `$()` 展開は行わない）。
+Step 4a / 4b 共通のレビュー観点本文（MCP追加情報収集 / 7観点 / 出力フォーマット / 重要）は、このスキルディレクトリ内の `REVIEW_CRITERIA.md` に外出ししている。加えて Step 3 で生成した `run-plan.json` を読み、preflight に応じた `{RUN_PLAN_GUIDANCE}` と `{DEPTH_GUIDANCE}` を組み立てる。4a / 4b のプロンプトには `{REVIEW_CRITERIA}` / `{RUN_PLAN_GUIDANCE}` / `{DEPTH_GUIDANCE}` プレースホルダが埋め込まれており、**Claude 自身が Bash ツール呼び出し前にメモリ上で実値へ置換する**（シェル側で `$()` 展開は行わない）。
 
 - いつ使うか: Step 3 完了後、Step 4a / 4b 起動前に必ず実行する
 - 判定条件: `REVIEW_CRITERIA.md` の全文と `run-plan.json` の内容を Read ツールで取得できる
 - 次アクション:
-  - 4a / 4b の Bash コマンド文字列中の `{REVIEW_CRITERIA}` を、下記の `{REVIEW_CRITERIA}` / `{RUN_PLAN_GUIDANCE}` 共通のエスケープ規則（`\` → `\\`、`"` → `\"`、`$` → `\$`、`` ` `` → `\``）に従って整形した本文で置換してから Bash ツールに渡す
-  - `run-plan.json` から `.files_changed` / `.hunks` / `.lines_added` / `.lines_removed` / `.risk_tags` / `.selected_hunters` / `.depth_actual` / `.recommended_mode` / `.skip_reason` / `.estimated_stages` / `.estimated_timeout_ms` を保持する。Step 5 の `jq --argjson` に再利用するため、`.risk_tags` と `.selected_hunters` はそれぞれ `$risk_tags_json` / `$selected_hunters_json` として **JSON 配列文字列のまま** 保持し、数値項目も `$files_changed` / `$hunks` / `$lines_added` / `$lines_removed` / `$estimated_stages` / `$estimated_timeout_ms` として保持したうえで、以下の方針で `{RUN_PLAN_GUIDANCE}` を組み立てて置換する
+  - 4a / 4b の Bash コマンド文字列中の `{REVIEW_CRITERIA}` を、下記の `{REVIEW_CRITERIA}` / `{RUN_PLAN_GUIDANCE}` / `{DEPTH_GUIDANCE}` 共通のエスケープ規則（`\` → `\\`、`"` → `\"`、`$` → `\$`、`` ` `` → `\``）に従って整形した本文で置換してから Bash ツールに渡す
+  - `run-plan.json` から `.files_changed` / `.hunks` / `.lines_added` / `.lines_removed` / `.risk_tags` / `.selected_hunters` / `.depth_actual` / `.depth_source` / `.depth_reason` / `.depth_requested` / `.depth_downgraded` / `.depth_downgrade_reason` / `.recommended_mode` / `.skip_reason` / `.routing_decision.budget_class` / `.routing_decision.model_profile` / `.routing_decision.route` / `.routing_decision.rationale` / `.estimated_stages` / `.estimated_timeout_ms` を保持する。Step 5 の `jq --argjson` に再利用するため、`.risk_tags` と `.selected_hunters` はそれぞれ `$risk_tags_json` / `$selected_hunters_json` として **JSON 配列文字列のまま** 保持し、数値項目も `$files_changed` / `$hunks` / `$lines_added` / `$lines_removed` / `$estimated_stages` / `$estimated_timeout_ms` として保持する。`routing_decision.route` は Step 5 で artifact を再構築するため `$route` として保持するが hunter 個別プロンプトには渡さない。以下の方針で `{RUN_PLAN_GUIDANCE}` と `{DEPTH_GUIDANCE}` を組み立てて置換する
 
 `{RUN_PLAN_GUIDANCE}` の組み立て規則:
 
-- 先頭に `depth_actual` / `recommended_mode` / `risk_tags` / `estimated_timeout_ms` を箇条書きで明記する
+- 先頭に `budget_class` / `model_profile` / `rationale` / `depth_actual` / `recommended_mode` / `risk_tags` / `estimated_timeout_ms` を箇条書きで明記する
 - `risk_tags` / `selected_hunters` は **生の JSON を埋め込まず**、`, ` 区切りの平文（空なら `none`）へ整形してから使う
 - `recommended_mode == "standard"` の場合: 既存どおり 7観点をフルに使う
 - `recommended_mode == "focused"` の場合: **security / bug / test** を最優先とし、スタイル / リネーム / 軽微な改善は correctness に直結するものだけ残す
 - `recommended_mode == "skip"` の場合: `/loop` では skip 推奨水準だが、**M1 の既定は skip せず focused fallback** と明記する。実レビューでも `focused` と同じ重点に絞り、確証の弱い指摘を増やさない
-- `depth_actual == "standard"` の場合: 変更行周辺と直接の呼び出し元 / 呼び出し先を優先し、広域探索より 20 分以内完了を優先する
 - `risk_tags` に `security` または `data_migration` が含まれる場合: そのタグに対応するファイル群を最優先で確認する
-- `{REVIEW_CRITERIA}` / `{RUN_PLAN_GUIDANCE}` を bash double-quote 内へ差し込む前に、両方とも `\` → `\\`、`"` → `\"`、`$` → `\$`、`` ` `` → `\`` の順でエスケープする
+- `recommended_mode` は depth と直交するため、focused / skip fallback でも `depth_actual == "deep"` なら下の `{DEPTH_GUIDANCE}` の深掘り指示を維持する
+
+`{DEPTH_GUIDANCE}` の組み立て規則:
+
+- 先頭に `depth_actual` / `depth_source` / `depth_requested` / `depth_downgraded` / `depth_reason` を箇条書きで明記する。`depth_downgrade_reason` が非 null の場合も併記する
+- `depth_actual == "standard"` の場合: 変更行周辺と直接の呼び出し元 / 呼び出し先を優先し、広域探索・仮説列挙・低確度の横展開より 20 分以内完了を優先する
+- `depth_actual == "deep"` の場合: 変更行から到達する呼び出し元 / 呼び出し先、設定・スキーマ・権限境界、テスト差分を追加で確認し、反証検討を厚くする。ただしレビュー対象スコープは `pr.diff` と `metadata.json.files[]` に限定し、投稿対象の severity / post_policy は広げない
+- `depth_downgraded == true` の場合: ユーザーが `--deep` を指定していても 5000 行ガードにより standard として扱い、広域探索を増やさない
+- `{REVIEW_CRITERIA}` / `{RUN_PLAN_GUIDANCE}` / `{DEPTH_GUIDANCE}` を bash double-quote 内へ差し込む前に、3つとも `\` → `\\`、`"` → `\"`、`$` → `\$`、`` ` `` → `\`` の順でエスケープする
 
 さらに canonical findings の `producer.version` を埋めるため、同じ `$CLAUDE_PLUGIN_ROOT` を基準に `$CLAUDE_PLUGIN_ROOT/.claude-plugin/plugin.json` を Read ツールで取得し、`.version` を `$plugin_version` として保持する。`findings.verified.json` の `producer.version` は空文字列不可のため、取得に失敗した場合は Step 5 の **failed 更新** へ遷移する。`schemas/findings.v1.json` も同じ基準で Read し、Step 4c の schema validation に使う。
 
@@ -468,11 +557,11 @@ echo "$CLAUDE_PLUGIN_ROOT"
 
 Claude Code と Codex CLI の両方で独立にレビューし、結果を統合する。
 
-**4a と 4b は並行実行する。** 各ツールは独立した clone ディレクトリを使うため競合しない。両方の Bash コマンドを `run_in_background: true` で同時に発行し、両方の完了を待ってから 4c に進む。Step 4 前処理で読み込んだ観点本文で `{REVIEW_CRITERIA}` と `{RUN_PLAN_GUIDANCE}` を置換した **完全体のコマンド文字列**を Bash ツールへ渡すこと。
+**4a と 4b は並行実行する。** 各ツールは独立した clone ディレクトリを使うため競合しない。両方の Bash コマンドを `run_in_background: true` で同時に発行し、両方の完了を待ってから 4c に進む。Step 4 前処理で読み込んだ観点本文で `{REVIEW_CRITERIA}` / `{RUN_PLAN_GUIDANCE}` / `{DEPTH_GUIDANCE}` を置換した **完全体のコマンド文字列**を Bash ツールへ渡すこと。
 
 #### 4a: Claude Code レビュー
 
-子プロセスの claude code でレビューを実行する。Bash ツールで以下のコマンドを一字一句変えずに実行する。
+**logical stage: hunter**。子プロセスの claude code でレビュー候補を広めに収集する。Bash ツールで以下のコマンドを一字一句変えずに実行する。
 
 - いつ使うか: Step 3 完了後に 4b と同時に実行する（`run_in_background: true`）
 - 判定条件: `claude-review.md` が生成され、終了コードが 0
@@ -497,6 +586,8 @@ pr.diff が存在しない／空の場合は 'PR_DIFF_UNAVAILABLE' の1行だけ
 
 {RUN_PLAN_GUIDANCE}
 
+{DEPTH_GUIDANCE}
+
 {REVIEW_CRITERIA}
 
 " \
@@ -518,7 +609,7 @@ pr.diff が存在しない／空の場合は 'PR_DIFF_UNAVAILABLE' の1行だけ
 
 #### 4b: Codex CLI レビュー
 
-Codex CLI を使い、同じPRをレビューさせる。Bash ツールで以下のコマンドを一字一句変えずに実行する。
+**logical stage: hunter**。Codex CLI を使い、同じPRのレビュー候補を独立に収集する。Bash ツールで以下のコマンドを一字一句変えずに実行する。
 
 - いつ使うか: Step 3 完了後に 4a と同時に実行する（`run_in_background: true`）
 - 判定条件: `codex-review.md` が生成され、終了コードが 0
@@ -558,6 +649,8 @@ pr.diff が存在しない／空の場合は 'PR_DIFF_UNAVAILABLE' の1行だけ
 
 {RUN_PLAN_GUIDANCE}
 
+{DEPTH_GUIDANCE}
+
 {REVIEW_CRITERIA}
 
 " \
@@ -585,11 +678,11 @@ MCP について:
 
 #### 4c: レビュー結果の統合
 
-両方のレビューが完了したら、メインコンテキスト（自分自身）が以下を行う:
+**logical stage: verifier / logical stage: explainer**。両方の hunter 出力が完了したら、メインコンテキスト（自分自身）が前半で verifier、後半で explainer を行う。Step 4c を物理的に複数 Bash 実行へ分割せず、既存の temp → validator → `mv` による atomicity を維持する:
 
-1. `claude-review.md` / `codex-review.md` / `pr.diff.ranges.txt` / `metadata.json` / `run-plan.json` を読み、さらに canonical schema として `$CLAUDE_PLUGIN_ROOT/schemas/findings.v1.json` を Read する（パス解決は Step 4 前処理の `REVIEW_CRITERIA.md` と同じく `$CLAUDE_PLUGIN_ROOT` 基準で行う）
-2. **スコープ検証 (必須)**: どちらか一方でも本文が `PR_DIFF_UNAVAILABLE` のみなら、統合成果物は作成せず Step 5 の **failed 更新** へ遷移する（`findings.verified.json` / `review.md` は生成しない）
-3. まず 2 つの生レビューから finding 候補を正規化し、**`findings.verified.json` をメモリ上で先に構築する**。`review.md` も同じくメモリ上でこの canonical artifact から派生生成し、ID / fingerprint 再計算 / 件数 gate と temp file への同梱 validator 検証を通すまで final path へは書き出さない。`findings.verified.json` は `schemas/findings.v1.json` に従い、最低限以下を満たす:
+1. `claude-review.md` / `codex-review.md` / `pr.diff.ranges.txt` / `metadata.json` / `run-plan.json` を読み、さらに candidate schema として `$CLAUDE_PLUGIN_ROOT/schemas/findings.candidates.v1.json`、canonical schema として `$CLAUDE_PLUGIN_ROOT/schemas/findings.v1.json` を Read する（パス解決は Step 4 前処理の `REVIEW_CRITERIA.md` と同じく `$CLAUDE_PLUGIN_ROOT` 基準で行う）
+2. **スコープ検証 (必須)**: どちらか一方でも本文が `PR_DIFF_UNAVAILABLE` のみなら、統合成果物は作成せず Step 5 の **failed 更新** へ遷移する（`findings.candidates.json` / `findings.verified.json` / `review.md` は生成しない）
+3. まず 2 つの生レビューから hunter 候補を正規化し、**`findings.candidates.json` をメモリ上で構築する**。これは verifier 入力を debug 可能に残す中間 artifact であり、`schemas/findings.candidates.v1.json` に従う。candidate では `id != fingerprint`、4軸未確定、`evidence_level` 未確定、`posting` 未決定を許し、GitHub 投稿判断には使わない。続いて verifier が candidates を絞り込み、**`findings.verified.json` をメモリ上で先に構築する**。`review.md` も同じくメモリ上でこの canonical artifact から派生生成し、candidate validator / ID / fingerprint 再計算 / 件数 gate と temp file への同梱 validator 検証を通すまで final path へは書き出さない。`findings.verified.json` は `schemas/findings.v1.json` に従い、最低限以下を満たす:
    - top-level: `schema_version = "findings.v1"`, `producer`, `pr`, `generated_at`, `findings[]`
    - `producer.name` は `pr-codex`、`producer.version` は Step 4 前処理で `$CLAUDE_PLUGIN_ROOT/.claude-plugin/plugin.json` から読んだ `$plugin_version`、`producer.run_id` は `<org>-<repository>-<pr_number>-<head_sha>` のような再生成可能な値にする
    - `pr.repository` は `metadata.json.repository_full_name`（base repo の owner/repo 形式。GitHub review 投稿先と同一）を使い、`pr.number` / `pr.base_sha` / `pr.head_sha` も `metadata.json` から埋める。fork PR でも `.head.repo.full_name` は使わない。`merge_commit_sha` は `metadata.json.merge_commit_sha` が `null` でない場合のみ入れる
@@ -617,7 +710,7 @@ MCP について:
      - `must_fix` で `evidence_level < verified` かつ例外規則 (`corroborated + impact_explained` + 静的解析的根拠) を満たさない場合 → `should_fix` に降格
      - `should_fix` で `evidence_level < corroborated` の場合 → `note` に降格し `post_policy=local_only` / `audience=human_reviewer`
      - 降格は canonical findings 確定前に1度だけ行い、降格後の severity を以後の posting 判定で使う
-   - `posting` は M1 の `/pr-codex:send` が **Must Fix のみ自動投稿**する前提に合わせ、`{post_policy, explanation_postable, not_postable_reason?, audience?}` を severity ごとに固定する:
+   - `posting` は verifier の責務として、M1 の `/pr-codex:send` が **Must Fix のみ自動投稿**する前提に合わせ、`{post_policy, explanation_postable, not_postable_reason?, audience?}` を severity ごとに固定する。explainer はこの焼き付け済み `posting` を読むだけで、posting policy を再判断しない:
      - `must_fix`: 4 軸 gate とコメント可能行範囲を満たし、`evidence_level == "verified"` かつ説明投稿が安全なものだけ `post_policy=inline` / `explanation_postable=true`。それ以外は `must_fix` として採用せず、採用基準による severity 降格後の `should_fix` / `note` として扱う
      - `should_fix`: M1 では GitHub inline 自動投稿対象外のため、説明投稿が安全なら `post_policy=body_summary` / `explanation_postable=true` を既定にする。範囲外・低根拠・投稿に不向きなものは `post_policy=local_only` / `audience=human_reviewer` とする。`not_postable_reason` は `explanation_postable=false` の場合だけ付け、`explanation_postable=true` や `post_policy=inline` と同居させない。`should_fix` に `post_policy=inline` は付けない
      - `nit`: M1 では GitHub inline 自動投稿対象外のため、`post_policy=body_summary` / `explanation_postable=true` を既定にする。範囲外または低根拠なら `local_only` に退避する。`not_postable_reason` は `explanation_postable=false` の場合だけ付ける
@@ -636,20 +729,24 @@ MCP について:
    - **補完**: 見落とされていた観点が補われている場合は、根拠を確認したうえで最終 findings に反映する
    - `review.md` には最終判断のみを書く。レビュー実行者名 / モデル名 / どの生レビュー由来かを示す表現 / `両者一致` / `片方のみ` のような由来表現は書かない
 9. `review.md` と `findings.sarif` は **`findings.verified.json` から派生生成** する。`review.md` は `must_fix` → `## 重大な問題 (Must Fix)`, `should_fix` かつ `post_policy=body_summary` → `## 改善提案 (Should Fix)`, `nit` → `## 軽微な指摘 (Nit)`, `note` や `post_policy=local_only/suppress` の項目 → `## 補足` に対応させる。`findings.sarif` は `tasks/generate_findings_sarif.py` で canonical から一方向生成し、M2 では local-only artifact として保存する（GitHub Code Scanning upload はしない）。`## 総評` と `## 良い点` は人間向け要約として記述してよいが、Must Fix / Should Fix の件数や内容が canonical findings と矛盾してはならない
-10. `run-plan.json` で `skip_reason != null`、`recommended_mode != "standard"`、または `depth_actual != "deep"` のいずれかに該当する場合は、`review.md` の `## 補足` に preflight 情報を最低限残す。`skip_reason != null` の場合は `- preflight: <skip_reason>。M1 の既定では focused fallback でレビューを継続した。` を含める。加えて `files_changed` / `lines_added` / `lines_removed` / `recommended_mode` / `depth_actual` / `risk_tags` を明記し、レビュー範囲や重点が意図的に変わった事実を受け手が判断できるようにする
+10. `run-plan.json` で `skip_reason != null`、`recommended_mode != "standard"`、`depth_actual != "standard"`、`depth_source != "default"`、`depth_downgraded == true`、または `depth_reason` が `changed lines > 5000` で始まる場合のいずれかに該当する場合は、`review.md` の `## 補足` に preflight 情報を最低限残す。`skip_reason != null` の場合は `- preflight: <skip_reason>。M1 の既定では focused fallback でレビューを継続した。` を含める。加えて `files_changed` / `lines_added` / `lines_removed` / `recommended_mode` / `depth_actual` / `depth_source` / `depth_reason` / `risk_tags` を明記し、レビュー範囲や重点が意図的に変わった事実を受け手が判断できるようにする。`routing_decision` はローカル artifact 専用であり、`review.md` や GitHub 投稿 body へコピーしない
 11. **fingerprint 整合 gate (必須)**: 全 finding で `id == fingerprint` を確認し、さらに `path` / `category` / `title` から README の正準アルゴリズムで fingerprint を再計算した値が JSON 内の `fingerprint` と一致することを、後述の `tasks/validate_findings.py` で検証する。1 件でもずれたら Step 5 の **failed 更新** へ遷移し、final artifact を書き出してはならない
 12. **件数一致 gate (必須)**: `findings.verified.json` の `severity=must_fix` 件数と、派生生成した `review.md` の `## 重大な問題 (Must Fix)` 見出し件数、および `findings.sarif` の `level=error` result 件数は **100% 一致** させる。1 件でもずれたら Step 5 の **failed 更新** へ遷移し、completed にしてはならない
-13. 上記 runtime gate を通過した場合のみ、`findings.verified.json` / `review.md`（必要なら `validation-report.json` も）をまず `*.tmp` へ `Write` ツールで書き出す。`findings.sarif.tmp` は `tasks/generate_findings_sarif.py` で canonical tmp から生成する
-14. **同梱 validator gate (必須)**: `findings.verified.json.tmp` を `tasks/validate_findings.py` で検証し、その後 `findings.sarif.tmp` を `tasks/validate_findings_sarif.py` で `schemas/sarif-2.1.0.json` へ検証する。必須フィールド欠落、型不一致、enum 不一致、`posting` / `evidence_level` 条件違反、4軸 gate 違反、`pr.number` 非整数、RFC3339 / URI format 不正、`end_line < start_line`、`id != fingerprint`、fingerprint 再計算不一致、`metadata.json` の投稿先 repo / PR number / head/base SHA と `findings.verified.json.pr.*` の不一致、SARIF schema/side/range/post_policy/Must Fix count 不一致など 1 件でも contract に反したら Step 5 の **failed 更新** へ遷移し、final artifact を書き出してはならない
+13. 上記 runtime gate を通過した場合のみ、`findings.candidates.json` / `findings.verified.json` / `review.md`（必要なら `validation-report.json` も）をまず `*.tmp` へ `Write` ツールで書き出す。`findings.sarif.tmp` は `tasks/generate_findings_sarif.py` で canonical tmp から生成する
+14. **同梱 validator gate (必須)**: `findings.candidates.json.tmp` を `tasks/validate_candidates.py` で検証し、その後 `findings.verified.json.tmp` を `tasks/validate_findings.py` で検証し、さらに `findings.sarif.tmp` を `tasks/validate_findings_sarif.py` で `schemas/sarif-2.1.0.json` へ検証する。必須フィールド欠落、型不一致、enum 不一致、`posting` / `evidence_level` 条件違反、4軸 gate 違反、`pr.number` 非整数、RFC3339 / URI format 不正、`end_line < start_line`、`id != fingerprint`、fingerprint 再計算不一致、`metadata.json` の投稿先 repo / PR number / head/base SHA と `findings.verified.json.pr.*` の不一致、SARIF schema/side/range/post_policy/Must Fix count 不一致など 1 件でも contract に反したら Step 5 の **failed 更新** へ遷移し、final artifact を書き出してはならない
 15. temp write と同梱 validator が成功した場合のみ Bash の `mv` で final path へ反映する。途中で temp write / SARIF 生成 / validator / `mv` のいずれかが失敗した場合は Step 5 の **failed 更新** へ遷移し、completed にしてはならない
 
 - いつ使うか: `claude-review.md` と `codex-review.md` の両方が揃った後
-- 判定条件: 全 finding で `id == fingerprint` が成り立ち、`review.md` / `findings.sarif` と Must Fix 件数が一致し、`findings.verified.json.tmp` と `findings.sarif.tmp` が同梱 validator を通過したうえで temp file → final path の反映まで完了する（`PR_DIFF_UNAVAILABLE` の場合は生成しない）
+- 判定条件: `findings.candidates.json.tmp` が同梱 validator を通過し、全 finding で `id == fingerprint` が成り立ち、`review.md` / `findings.sarif` と Must Fix 件数が一致し、`findings.verified.json.tmp` と `findings.sarif.tmp` が同梱 validator を通過したうえで temp file → final path の反映まで完了する（`PR_DIFF_UNAVAILABLE` の場合は生成しない）
 - 次アクション: 書き出し後 Step 5 へ進む（`PR_DIFF_UNAVAILABLE` / `id != fingerprint` / 件数不一致 / temp write failure / SARIF generation failure / validator failure / `mv` failure があった場合は Step 5 failed 分岐へ）
 
-`Write` ツールは `~` やシェル変数（`$org` 等）を展開しない。`file_path` にはホームディレクトリを `$HOME` の実値（例: `/Users/adachi`）に展開済みの絶対パスを渡し、`$org` / `$repository` / `$pr_number` も実値に置換してから呼び出すこと。`findings.verified.json` の JSON 本文も、プレースホルダを残さず実値で埋める。temp file を使う場合も同様に絶対パスで指定する。
+`Write` ツールは `~` やシェル変数（`$org` 等）を展開しない。`file_path` にはホームディレクトリを `$HOME` の実値（例: `/Users/adachi`）に展開済みの絶対パスを渡し、`$org` / `$repository` / `$pr_number` も実値に置換してから呼び出すこと。`findings.candidates.json` / `findings.verified.json` の JSON 本文も、プレースホルダを残さず実値で埋める。temp file を使う場合も同様に絶対パスで指定する。
 
-temp file 書き出し後、final artifact へ反映する前に以下の同梱 validator を必ず実行する。`$CLAUDE_PLUGIN_ROOT` が shell 環境で未設定の場合は、Step 4 前処理で解決した plugin root の絶対パスに置換してから Bash ツールへ渡す（コマンド構造は変えない）。canonical findings validator は stdlib-only、SARIF validator は Python package `jsonschema>=4,<5` を使って同梱 OASIS schema を検証する。いずれも成果物を書き換えず検証だけに使う。
+temp file 書き出し後、final artifact へ反映する前に以下の同梱 validator を必ず順番に実行する。`$CLAUDE_PLUGIN_ROOT` が shell 環境で未設定の場合は、Step 4 前処理で解決した plugin root の絶対パスに置換してから Bash ツールへ渡す（コマンド構造は変えない）。canonical findings validator / candidates validator / status validator は stdlib-only、SARIF validator は Python package `jsonschema>=4,<5` を使って同梱 OASIS schema を検証する。いずれも成果物を書き換えず検証だけに使い、npm cache やネットワークを使わず、作業ディレクトリ外へ書き込まない。
+
+```bash
+python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_candidates.py --schema $CLAUDE_PLUGIN_ROOT/schemas/findings.candidates.v1.json --data ~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.candidates.json.tmp --metadata ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json
+```
 
 ```bash
 python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings.py --schema $CLAUDE_PLUGIN_ROOT/schemas/findings.v1.json --data ~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.verified.json.tmp --metadata ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json
@@ -665,10 +762,14 @@ python3 $CLAUDE_PLUGIN_ROOT/tasks/generate_findings_sarif.py --findings ~/claude
 python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings_sarif.py --schema $CLAUDE_PLUGIN_ROOT/schemas/sarif-2.1.0.json --data ~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.sarif.tmp --findings ~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.verified.json.tmp --ranges ~/claude-loop-pr-codex/$org-$repository-$pr_number/pr.diff.ranges.txt --markdown ~/claude-loop-pr-codex/$org-$repository-$pr_number/review.md.tmp
 ```
 
-temp file を final artifact に反映する際は、以下の `mv` テンプレートだけを使う。`review.md` を先に反映し、その後 `findings.verified.json`、最後に `findings.sarif` を反映する。これにより `findings.verified.json` だけが残る状態を避け、completed 更新前に send primary path の前提が成立しないようにする。
+temp file を final artifact に反映する際は、以下の `mv` テンプレートだけを使う。`review.md` を先に反映し、その後 `findings.candidates.json`、`findings.verified.json`、最後に `findings.sarif` を反映する。これにより `findings.verified.json` だけが残る状態を避け、completed 更新前に send primary path の前提が成立しないようにする。
 
 ```bash
 mv ~/claude-loop-pr-codex/$org-$repository-$pr_number/review.md.tmp ~/claude-loop-pr-codex/$org-$repository-$pr_number/review.md
+```
+
+```bash
+mv ~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.candidates.json.tmp ~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.candidates.json
 ```
 
 ```bash
@@ -751,7 +852,7 @@ date -u +%Y-%m-%dT%H:%M:%S+00:00
 
 ```bash
 tmp_run_plan=~/claude-loop-pr-codex/$org-$repository-$pr_number/run-plan.json.tmp
-jq -n --argjson files_changed "$files_changed" --argjson hunks "$hunks" --argjson lines_added "$lines_added" --argjson lines_removed "$lines_removed" --argjson risk_tags "$risk_tags_json" --argjson selected_hunters "$selected_hunters_json" --arg depth_actual "$depth_actual" --arg recommended_mode "$recommended_mode" --arg skip_reason "$skip_reason" --argjson estimated_stages "$estimated_stages" --argjson estimated_timeout_ms "$estimated_timeout_ms" --arg started_at "$started_at" --arg finished_at "$finished_at" '{
+jq -n --argjson files_changed "$files_changed" --argjson hunks "$hunks" --argjson lines_added "$lines_added" --argjson lines_removed "$lines_removed" --argjson risk_tags "$risk_tags_json" --argjson selected_hunters "$selected_hunters_json" --arg depth_actual "$depth_actual" --arg depth_source "$depth_source" --arg depth_reason "$depth_reason" --arg depth_requested "$depth_requested" --argjson depth_downgraded "$depth_downgraded" --arg depth_downgrade_reason "$depth_downgrade_reason" --arg recommended_mode "$recommended_mode" --arg skip_reason "$skip_reason" --arg budget_class "$budget_class" --arg model_profile "$model_profile" --arg route "$route" --arg rationale "$rationale" --argjson estimated_stages "$estimated_stages" --argjson estimated_timeout_ms "$estimated_timeout_ms" --arg started_at "$started_at" --arg finished_at "$finished_at" '{
   files_changed: $files_changed,
   hunks: $hunks,
   lines_added: $lines_added,
@@ -759,8 +860,19 @@ jq -n --argjson files_changed "$files_changed" --argjson hunks "$hunks" --argjso
   risk_tags: $risk_tags,
   selected_hunters: $selected_hunters,
   depth_actual: $depth_actual,
+  depth_source: $depth_source,
+  depth_reason: $depth_reason,
+  depth_requested: (if $depth_requested == "" or $depth_requested == "null" then null else $depth_requested end),
+  depth_downgraded: $depth_downgraded,
+  depth_downgrade_reason: (if $depth_downgrade_reason == "" or $depth_downgrade_reason == "null" then null else $depth_downgrade_reason end),
   recommended_mode: $recommended_mode,
   skip_reason: (if $skip_reason == "" or $skip_reason == "null" then null else $skip_reason end),
+  routing_decision: {
+    budget_class: $budget_class,
+    route: $route,
+    model_profile: $model_profile,
+    rationale: $rationale
+  },
   estimated_stages: $estimated_stages,
   estimated_timeout_ms: $estimated_timeout_ms,
   actual_duration_ms: (((($finished_at | strptime("%Y-%m-%dT%H:%M:%S+00:00") | mktime) - ($started_at | strptime("%Y-%m-%dT%H:%M:%S+00:00") | mktime)) * 1000)),
@@ -769,19 +881,20 @@ jq -n --argjson files_changed "$files_changed" --argjson hunks "$hunks" --argjso
 ```
 
 - いつ使うか: 上の `run-plan.json` 更新成功直後に実行する
-- 判定条件: `status.json` の `state` が `completed` になる
+- 判定条件: `status.json` の `state` が `completed` になり、`tasks/validate_status.py` を通過する
 - 次アクション: Step 6 の結果報告へ進む
 
 ```bash
-jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" --arg head_sha "$head_sha" '{state:"completed",started_at:$started_at,finished_at:$finished_at,exit_code:0,head_sha:$head_sha}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json
+jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" --arg head_sha "$head_sha" '{state:"completed",started_at:$started_at,finished_at:$finished_at,exit_code:0,head_sha:$head_sha,stage:"explainer",failed_stage:null}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json && python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_status.py --data ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json
 ```
 
 - いつ使うか: Step 4a または 4b が timeout / 非ゼロ終了した場合、権限不足などで処理継続不可の場合、**または Step 4c のスコープ検証で `claude-review.md` / `codex-review.md` のいずれかが `PR_DIFF_UNAVAILABLE` のみだった場合**に実行する
-- 判定条件: `status.json` の `state` が `failed`
+- 事前条件: `$failed_stage` を `ranker` / `hunter` / `verifier` / `explainer` のいずれか 1 つに設定する。metadata/files/diff/run-plan 生成失敗は `ranker`、4a/4b timeout/非ゼロ/`PR_DIFF_UNAVAILABLE`/candidate validation 失敗は `hunter`、4軸/range/fingerprint/Must Fix 件数/`findings.verified.json` validator 失敗は `verifier`、temp write または temp→final `mv` 失敗は `explainer` とする
+- 判定条件: `status.json` の `state` が `failed` かつ `failed_stage` が `$failed_stage` と一致し、`tasks/validate_status.py` を通過する
 - 次アクション: Step 6 の結果報告へ進む
 
 ```bash
-jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" --arg head_sha "$head_sha" '{state:"failed",started_at:$started_at,finished_at:$finished_at,exit_code:1,head_sha:$head_sha}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json
+jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" --arg head_sha "$head_sha" --arg failed_stage "$failed_stage" '{state:"failed",started_at:$started_at,finished_at:$finished_at,exit_code:1,head_sha:$head_sha,stage:$failed_stage,failed_stage:$failed_stage}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json && python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_status.py --data ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json
 ```
 
 ### Step 6: 結果報告
@@ -795,9 +908,11 @@ jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" --arg head
 - 次アクション: `review.md` を Read ツールで読み、以下の内容をユーザーにテキストで報告して終了する
   - 対象PR（`$pr_url` のリンク付き）
   - レビュー結果の要約（総評 + 重大な問題の件数と代表例、改善提案の件数を含める）
-  - 結果ファイルのパス（`~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.verified.json` と `~/claude-loop-pr-codex/$org-$repository-$pr_number/review.md`）
+  - 結果ファイルのパス（`~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.candidates.json` / `findings.verified.json` / `review.md`）
 
 ## エラーハンドリング
+
+F4 stage reporting として、failed 分岐では必ず `$failed_stage` を 1 つ選び `status.json.failed_stage` に残す。ranker は Step 2b/3 preflight、hunter は Step 4a/4b と `findings.candidates.json`、verifier は `findings.verified.json` の gate、explainer は `review.md` 派生と temp→final 反映を表す。
 
 - PRがclosed/merged → `skipped` としてログに記録し、次の候補へ進む
 - Step 2b の metadata `gh api --jq` / files `jq -sce` で `missing repository_full_name / head_sha / base_sha / branch / base_branch / files` が出た → `state=failed` で記録し、その回は終了（PR メタデータまたは変更ファイル一覧が必須フィールドを欠いているため信頼できるレビュー不可）
@@ -809,10 +924,11 @@ jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" --arg head
 - `codex exec` がタイムアウト（20分） → `state=failed` で記録
 - `codex exec` が非ゼロ終了 → `state=failed` で記録
 - **`claude-review.md` / `codex-review.md` のいずれかが `PR_DIFF_UNAVAILABLE` のみ → `state=failed` で記録し、`review.md` は生成しない**
-- **`findings.verified.json.tmp` が同梱 validator による `schemas/findings.v1.json` validation / fingerprint 再計算 / format / range validation に失敗 → `state=failed` で記録し、final artifact は反映しない**
-- **`findings.verified.json` のいずれかの finding で `id != fingerprint` → `state=failed` で記録し、final artifact は反映しない**
-- **`findings.verified.json` の Must Fix 件数と `review.md` の Must Fix 見出し件数が不一致 → `state=failed` で記録し、send へ進めない**
-- **`*.tmp` の Write または temp → final の `mv` が失敗 → `state=failed` で記録し、completed にしない**
+- **`findings.candidates.json.tmp` が同梱 validator による `schemas/findings.candidates.v1.json` validation に失敗 → `failed_stage=hunter` / `state=failed` で記録し、final artifact は反映しない**
+- **`findings.verified.json.tmp` が同梱 validator による `schemas/findings.v1.json` validation / fingerprint 再計算 / format / range validation に失敗 → `failed_stage=verifier` / `state=failed` で記録し、final artifact は反映しない**
+- **`findings.verified.json` のいずれかの finding で `id != fingerprint` → `failed_stage=verifier` / `state=failed` で記録し、final artifact は反映しない**
+- **`findings.verified.json` の Must Fix 件数と `review.md` の Must Fix 見出し件数が不一致 → `failed_stage=verifier` / `state=failed` で記録し、send へ進めない**
+- **`*.tmp` の Write または temp → final の `mv` が失敗 → `failed_stage=explainer` / `state=failed` で記録し、completed にしない**
 - 権限不足（404/403） → `state=failed` で記録し、その回は終了
 
 ## ファイル構成
@@ -822,12 +938,18 @@ jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" --arg head
 ```
 $CLAUDE_PLUGIN_ROOT/skills/review/
   ├── SKILL.md                ← 本ファイル
-  └── REVIEW_CRITERIA.md      ← 4a / 4b 共通のレビュー観点本文。Step 4 前処理で Read し、{REVIEW_CRITERIA} プレースホルダに置換
+  ├── REVIEW_CRITERIA.md      ← 4a / 4b 共通のレビュー観点本文。Step 4 前処理で Read し、{REVIEW_CRITERIA} プレースホルダに置換
+  └── STAGES.md               ← ranker / hunter / verifier / explainer の責務・artifact・halting 条件
 $CLAUDE_PLUGIN_ROOT/tasks/
+  ├── validate_candidates.py      ← hunter candidates の schema / metadata validator
   ├── validate_findings.py        ← canonical findings の schema / fingerprint / format / range validator
   ├── generate_findings_sarif.py  ← canonical findings から local-only findings.sarif を生成
-  └── validate_findings_sarif.py  ← SARIF schema / post_policy / count consistency validator
+  ├── validate_findings_sarif.py  ← SARIF schema / post_policy / count consistency validator
+  ├── validate_status.py          ← status.json stage / failed_stage validator
+  ├── score_fixture.py            ← F11 manual/deep eval 用の fixture scoring runner（通常レビュー中は実行しない）
+  └── m1_m2_gate.py               ← F11 M1→M2 gate report runner（運用実測値を外部入力として受ける）
 $CLAUDE_PLUGIN_ROOT/schemas/
+  ├── findings.candidates.v1.json
   ├── findings.v1.json
   └── sarif-2.1.0.json
 ```
@@ -839,17 +961,19 @@ $CLAUDE_PLUGIN_ROOT/schemas/
   └── $org-$repository-$pr_number/
         ├── status.json
         ├── metadata.json        ← org/repository/repository_full_name/pr_number/pr_url/head_sha/base_sha/branch/base_branch/merge_commit_sha/title/files を含む
-        ├── run-plan.json        ← preflight 指標。Step 5 成功時に actual_duration_ms / actual_tokens を追記
+        ├── run-plan.json        ← preflight 指標と routing_decision。Step 5 成功時に actual_duration_ms / actual_tokens を追記
         ├── pr.diff              ← PR 差分 (unified diff)。Step 4a/4b のスコープ確定情報源
         ├── pr.diff.ranges.txt   ← コメント可能行範囲。Step 4a/4b と Step 4c の行番号検証に使う
         ├── clone-claude/        ← Claude Code 用 shallow clone (depth 50, base fetch 済み)
         ├── clone-codex/         ← Codex CLI 用 shallow clone (depth 50, base fetch 済み)
-        ├── claude-review.md     ← Claude Code の生レビュー
-        ├── codex-review.md      ← Codex CLI の生レビュー
+        ├── claude-review.md     ← Claude Code の生レビュー (hunter)
+        ├── codex-review.md      ← Codex CLI の生レビュー (hunter)
+        ├── findings.candidates.json ← hunter → verifier 境界の候補 artifact (`schemas/findings.candidates.v1.json`)
         ├── findings.verified.json ← canonical findings (`schemas/findings.v1.json`)
         ├── findings.sarif       ← SARIF v2.1.0 派生成果物（local-only / upload しない）
         ├── validation-report.json ← validation の副成果物（optional）
         ├── review.md            ← 統合レビュー（最終成果物）
+        ├── findings.candidates.json.tmp ← Step 4c の一時ファイル（失敗時に残り得る）
         ├── findings.verified.json.tmp  ← Step 4c の一時ファイル（失敗時に残り得る）
         ├── findings.sarif.tmp   ← Step 4c の一時ファイル（失敗時に残り得る）
         ├── validation-report.json.tmp  ← Step 4c の一時ファイル（optional）
@@ -862,7 +986,9 @@ $CLAUDE_PLUGIN_ROOT/schemas/
 
 本スキルは Claude Code を `--permission-mode auto` で起動することを前提とする（README の「使い方」参照）。auto mode でも、許可済みツールやコマンドの内容によっては分類器の判断で承認が必要になり得るため、本スキルではテンプレートに明示された操作だけを実行する。
 
-ローカルの書き込みは作業ディレクトリ `~/claude-loop-pr-codex/` 配下に限り、`clone-claude/` / `clone-codex/` の作成と更新、`status.json` / `metadata.json` / `run-plan.json` / `pr.diff` / `pr.diff.ranges.txt` / `claude.log` / `codex.log` / `claude-review.md` / `codex-review.md` / `findings.verified.json` / `findings.sarif` / `validation-report.json` / `review.md` と、それらの `*.tmp` 一時ファイル作成のみ許可する。schema / fingerprint / SARIF validation のために `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings.py ...`、`python3 $CLAUDE_PLUGIN_ROOT/tasks/generate_findings_sarif.py ...`、`python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings_sarif.py ...` を実行してよいが、validator は成果物を書き換えず検証だけに使う。
+ローカルの書き込みは作業ディレクトリ `~/claude-loop-pr-codex/` 配下に限り、`clone-claude/` / `clone-codex/` の作成と更新、`status.json` / `metadata.json` / `run-plan.json` / `pr.diff` / `pr.diff.ranges.txt` / `claude.log` / `codex.log` / `claude-review.md` / `codex-review.md` / `findings.candidates.json` / `findings.verified.json` / `findings.sarif` / `validation-report.json` / `review.md` と、それらの `*.tmp` 一時ファイル作成のみ許可する。schema / fingerprint / status / SARIF validation のために `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_candidates.py ...`、`python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings.py ...`、`python3 $CLAUDE_PLUGIN_ROOT/tasks/generate_findings_sarif.py ...`、`python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings_sarif.py ...`、`python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_status.py ...` を実行してよいが、validator は成果物を書き換えず検証だけに使う。
+
+F11 の regression eval (`score_fixture.py` / `m1_m2_gate.py`) は通常の `/pr-codex:review` 実行フローには組み込まない。手動 deep eval で `findings.verified.json` を採点する場合のみ、README / `fixtures/README.md` の手順に従って `artifacts/` 配下へ `score-report.v1` / `m1-m2-gate.v1` を出力する。CI では固定 stub の deterministic test だけを実行し、LLM や GitHub write/API 投稿は必須経路に入れない。
 
 許可ルールは以下の allowlist に従う。
 
@@ -872,15 +998,15 @@ $CLAUDE_PLUGIN_ROOT/schemas/
 4. シェル演算子はテンプレート中に明示された `|` `<` `>` `2>` `&&` のみ許可する。パイプラインの upstream 失敗検知のため、テンプレート中に明示された `set -o pipefail &&` は削除せずそのまま使う
 5. JSON 生成は `jq -n --arg` / `--argjson` / `--slurpfile` / `--rawfile` を使う。ヒアドキュメントで JSON を直接組み立てない
 6. ファイル書き込みの使い分け:
-   - `findings.verified.json.tmp` / `validation-report.json.tmp` / `review.md.tmp` は `Write` ツールで書き出し、`findings.sarif.tmp` は `generate_findings_sarif.py` の `--output` で書き出し、gate 通過後に `mv` で final name へ反映する（`file_path` は `~` / `$...` を展開しないため、実値の絶対パスを渡す）
+   - `findings.candidates.json.tmp` / `findings.verified.json.tmp` / `validation-report.json.tmp` / `review.md.tmp` は `Write` ツールで書き出し、`findings.sarif.tmp` は `generate_findings_sarif.py` の `--output` で書き出し、gate 通過後に `mv` で final name へ反映する（`file_path` は `~` / `$...` を展開しないため、実値の絶対パスを渡す）
    - `status.json` / `metadata.json` / `run-plan.json` は `jq -n --arg` / `--argjson` / `--slurpfile` / `--rawfile` の出力を `Bash` の `>` で書く
    - `pr.diff` は Step 3 の `gh pr diff` の標準出力を `>` でリダイレクトして作成する
    - `pr.diff.ranges.txt` は Step 3 の `awk` の標準出力を `>` でリダイレクトして作成する
    - `claude-review.md` / `codex-review.md` / `claude.log` / `codex.log` は Step 4a / 4b の標準出力・標準エラーを `>` / `2>` でリダイレクトして作成する
 7. Step 4a / 4b の timeout は必ず `1200000` に固定する
-8. テンプレートに明示された `git fetch` / `git checkout FETCH_HEAD` / `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings.py ...` / `python3 $CLAUDE_PLUGIN_ROOT/tasks/generate_findings_sarif.py ...` / `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings_sarif.py ...` / temp file から final artifact への `mv` / 成果物ファイル作成以外の状態変更操作は実行しない。禁止例: `git push` / `git merge` / `git reset --*` / `git clean -fd[x]` / `git stash` / `git commit` / `git tag` / `git branch -D`、`rm -rf` 系、`gh pr` / `gh issue` の write 操作、および GitHub / Backlog / DocBase の write 系 MCP ツール
+8. テンプレートに明示された `git fetch` / `git checkout FETCH_HEAD` / `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_candidates.py ...` / `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings.py ...` / `python3 $CLAUDE_PLUGIN_ROOT/tasks/generate_findings_sarif.py ...` / `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings_sarif.py ...` / `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_status.py ...` / temp file から final artifact への `mv` / 成果物ファイル作成以外の状態変更操作は実行しない。禁止例: `git push` / `git merge` / `git reset --*` / `git clean -fd[x]` / `git stash` / `git commit` / `git tag` / `git branch -D`、`rm -rf` 系、`gh pr` / `gh issue` の write 操作、および GitHub / Backlog / DocBase の write 系 MCP ツール
 9. 1回の実行で選定・処理する PR は 1 件のみとする
-10. Step 4a / 4b のプロンプト中に含まれる `{REVIEW_CRITERIA}` と `{RUN_PLAN_GUIDANCE}` プレースホルダは、Step 4 前処理で Read した `REVIEW_CRITERIA.md` と `run-plan.json` を元に Claude 側で置換したうえで、Bash ツールに渡す完全体のコマンド文字列として使う。`{REVIEW_CRITERIA}` と `{RUN_PLAN_GUIDANCE}` のどちらも bash double-quote 内で安全になるよう、差し込み前に **`\` → `\\`、`"` → `\"`、`$` → `\$`、`` ` `` → `\``** の順でエスケープする。シェルでのコマンド置換 (`$()`) やヒアドキュメントは使わない
+10. Step 4a / 4b のプロンプト中に含まれる `{REVIEW_CRITERIA}` / `{RUN_PLAN_GUIDANCE}` / `{DEPTH_GUIDANCE}` プレースホルダは、Step 4 前処理で Read した `REVIEW_CRITERIA.md` と `run-plan.json` を元に Claude 側で置換したうえで、Bash ツールに渡す完全体のコマンド文字列として使う。`{REVIEW_CRITERIA}` / `{RUN_PLAN_GUIDANCE}` / `{DEPTH_GUIDANCE}` のいずれも bash double-quote 内で安全になるよう、差し込み前に **`\` → `\\`、`"` → `\"`、`$` → `\$`、`` ` `` → `\``** の順でエスケープする。シェルでのコマンド置換 (`$()`) やヒアドキュメントは使わない
 
 補助注記（いずれもテンプレート一字一句原則の具体適用例）:
 

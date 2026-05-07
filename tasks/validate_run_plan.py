@@ -22,6 +22,9 @@ RISK_TAG_ENUM = [
     "api_contract",
 ]
 
+SENSITIVE_RISK_TAGS = {"security", "data_migration"}
+ROUTE_M2 = "claude+codex"
+
 RISK_TAG_CASES = [
     ("src/auth/login.go", {"security"}),
     ("config/oauth.json", {"security"}),
@@ -43,6 +46,17 @@ RISK_TAG_CASES = [
 ]
 
 ESCAPE_RULE_TEXT = '`\\` → `\\\\`、`"` → `\\"`、`$` → `\\$`、`` ` `` → `\\``'
+
+DEPTH_REASON_ARGUMENT_DEEP = "requested --deep"
+DEPTH_REASON_ARGUMENT_STANDARD = "requested --standard"
+DEPTH_REASON_DOWNGRADED = (
+    "requested --deep but changed lines > 5000; forced standard to preserve the 20 minute timeout"
+)
+DEPTH_REASON_LARGE_DEFAULT = "changed lines > 5000; selected standard to preserve the 20 minute timeout"
+DEPTH_REASON_AUTO_DEEP = (
+    "risk_tags include security or data_migration and PR size is <= 20 files / <= 1500 changed lines; selected deep"
+)
+DEPTH_REASON_DEFAULT_STANDARD = "no depth argument and no high-risk small-PR signal; selected default standard"
 
 
 def load_json(path: Path) -> object:
@@ -102,7 +116,7 @@ def run_jq(args: list[str], jq_filter: str, input_text: str | None = None) -> ob
 
 
 def preflight_block() -> str:
-    block = extract_bash_block("jq -n --slurpfile metadata")
+    block = extract_bash_block("jq -n --arg depth_requested")
     required = "&& test -s ~/claude-loop-pr-codex/$org-$repository-$pr_number/run-plan.json"
     if required not in block:
         raise AssertionError("run-plan template must guard with && test -s")
@@ -122,10 +136,13 @@ def files_list_block() -> str:
     return block
 
 
-def run_preflight_template(metadata_path: Path, diff_path: Path) -> object:
+def run_preflight_template(metadata_path: Path, diff_path: Path, depth_requested: str = "") -> object:
     return run_jq(
         [
             "-n",
+            "--arg",
+            "depth_requested",
+            depth_requested,
             "--slurpfile",
             "metadata",
             str(metadata_path),
@@ -143,6 +160,8 @@ def run_files_list_template(pages: list[list[dict[str, str]]]) -> object:
 
 
 def run_duration_template(plan: dict[str, object], started_at: str, finished_at: str) -> object:
+    routing_decision = plan["routing_decision"]
+    assert isinstance(routing_decision, dict)
     return run_jq(
         [
             "-n",
@@ -168,11 +187,38 @@ def run_duration_template(plan: dict[str, object], started_at: str, finished_at:
             "depth_actual",
             str(plan["depth_actual"]),
             "--arg",
+            "depth_source",
+            str(plan["depth_source"]),
+            "--arg",
+            "depth_reason",
+            str(plan["depth_reason"]),
+            "--arg",
+            "depth_requested",
+            "null" if plan["depth_requested"] is None else str(plan["depth_requested"]),
+            "--argjson",
+            "depth_downgraded",
+            json.dumps(plan["depth_downgraded"]),
+            "--arg",
+            "depth_downgrade_reason",
+            "null" if plan["depth_downgrade_reason"] is None else str(plan["depth_downgrade_reason"]),
+            "--arg",
             "recommended_mode",
             str(plan["recommended_mode"]),
             "--arg",
             "skip_reason",
             "null" if plan["skip_reason"] is None else str(plan["skip_reason"]),
+            "--arg",
+            "budget_class",
+            str(routing_decision["budget_class"]),
+            "--arg",
+            "model_profile",
+            str(routing_decision["model_profile"]),
+            "--arg",
+            "route",
+            str(routing_decision["route"]),
+            "--arg",
+            "rationale",
+            str(routing_decision["rationale"]),
             "--argjson",
             "estimated_stages",
             str(plan["estimated_stages"]),
@@ -201,6 +247,8 @@ def json_type_matches(expected: str, value: object) -> bool:
         return isinstance(value, str)
     if expected == "null":
         return value is None
+    if expected == "boolean":
+        return isinstance(value, bool)
     raise ValueError(f"unsupported schema type: {expected}")
 
 
@@ -235,6 +283,10 @@ def validate_schema(schema: dict[str, object], value: object, path: str = "$") -
 
     if isinstance(value, str) and "minLength" in schema and len(value) < schema["minLength"]:
         raise AssertionError(f"{path}: expected length >= {schema['minLength']}, got {len(value)}")
+    if isinstance(value, str) and "maxLength" in schema and len(value) > schema["maxLength"]:
+        raise AssertionError(f"{path}: expected length <= {schema['maxLength']}, got {len(value)}")
+    if isinstance(value, str) and "pattern" in schema and not re.search(str(schema["pattern"]), value):
+        raise AssertionError(f"{path}: expected pattern {schema['pattern']!r}, got {value!r}")
 
     if isinstance(value, list):
         if "minItems" in schema and len(value) < schema["minItems"]:
@@ -270,6 +322,80 @@ def schema_matches(schema: dict[str, object], value: object) -> bool:
     return True
 
 
+def total_lines(plan: dict[str, object]) -> int:
+    return int(plan["lines_added"]) + int(plan["lines_removed"])
+
+
+def sensitive_risk_count(plan: dict[str, object]) -> int:
+    risk_tags = plan["risk_tags"]
+    if not isinstance(risk_tags, list):
+        raise AssertionError("$.risk_tags: expected array before routing validation")
+    return sum(1 for tag in risk_tags if tag in SENSITIVE_RISK_TAGS)
+
+
+def expected_budget_class(plan: dict[str, object]) -> str:
+    files_changed = int(plan["files_changed"])
+    lines = total_lines(plan)
+    if files_changed <= 10 and lines <= 500 and sensitive_risk_count(plan) == 0:
+        return "small"
+    if files_changed <= 50 and lines <= 5000:
+        return "medium"
+    return "large"
+
+
+def expected_model_profile(plan: dict[str, object]) -> str:
+    recommended_mode = plan["recommended_mode"]
+    depth_actual = plan["depth_actual"]
+    if recommended_mode == "standard" and depth_actual == "deep":
+        return "deep"
+    if recommended_mode == "standard" and depth_actual == "standard":
+        return "standard"
+    if recommended_mode in {"focused", "skip"}:
+        return "focused-fallback"
+    raise AssertionError(f"$.recommended_mode: unsupported value for routing validation: {recommended_mode!r}")
+
+
+def expected_rationale(plan: dict[str, object]) -> str:
+    risk_tags = plan["risk_tags"]
+    if not isinstance(risk_tags, list) or not all(isinstance(tag, str) for tag in risk_tags):
+        raise AssertionError("$.risk_tags: expected string array before routing validation")
+    return (
+        f"files_changed={plan['files_changed']}, "
+        f"total_lines={total_lines(plan)}, "
+        f"risk_tags=[{','.join(risk_tags)}], "
+        f"depth={plan['depth_actual']}, "
+        f"mode={plan['recommended_mode']}"
+    )
+
+
+def validate_routing_decision(plan: dict[str, object]) -> None:
+    routing_decision = plan.get("routing_decision")
+    if not isinstance(routing_decision, dict):
+        raise AssertionError("$.routing_decision: expected object")
+
+    expected = {
+        "budget_class": expected_budget_class(plan),
+        "route": ROUTE_M2,
+        "model_profile": expected_model_profile(plan),
+        "rationale": expected_rationale(plan),
+    }
+    for key, expected_value in expected.items():
+        actual = routing_decision.get(key)
+        if actual != expected_value:
+            raise AssertionError(
+                f"$.routing_decision.{key}: expected {expected_value!r}, got {actual!r}"
+            )
+
+    rationale = routing_decision["rationale"]
+    if not isinstance(rationale, str) or len(rationale) > 240:
+        raise AssertionError("$.routing_decision.rationale: expected string length <= 240")
+
+
+def validate_run_plan_semantics(schema: dict[str, object], plan: dict[str, object]) -> None:
+    validate_schema(schema, plan)
+    validate_routing_decision(plan)
+
+
 def validate_fixture(name: str, schema: dict[str, object]) -> None:
     metadata = load_json(FIXTURE_ROOT / name / "metadata.json")
     expected = load_json(FIXTURE_ROOT / name / "run-plan.expected.json")
@@ -286,7 +412,23 @@ def validate_fixture(name: str, schema: dict[str, object]) -> None:
         actual = run_preflight_template(runtime_metadata_path, diff_path)
 
     assert actual == expected, f"{name}: run-plan mismatch\nexpected={expected}\nactual={actual}"
-    validate_schema(schema, expected)
+    validate_run_plan_semantics(schema, expected)
+
+    for depth_requested, expected_name in (
+        ("deep", "run-plan.deep.expected.json"),
+        ("standard", "run-plan.standard.expected.json"),
+    ):
+        expected_override = load_json(FIXTURE_ROOT / name / expected_name)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runtime_metadata_path = Path(tmpdir) / "metadata.json"
+            runtime_metadata_path.write_text(json.dumps({"files": files}, ensure_ascii=False, indent=2) + "\n")
+            actual_override = run_preflight_template(runtime_metadata_path, diff_path, depth_requested=depth_requested)
+        assert actual_override == expected_override, (
+            f"{name} {depth_requested}: run-plan mismatch\n"
+            f"expected={expected_override}\n"
+            f"actual={actual_override}"
+        )
+        validate_schema(schema, expected_override)
 
 
 def make_diff_text(files: list[str], hunks: int, lines_added: int, lines_removed: int) -> str:
@@ -301,31 +443,107 @@ def make_diff_text(files: list[str], hunks: int, lines_added: int, lines_removed
     return "\n".join(lines) + "\n"
 
 
-def synthetic_plan(files: list[str], hunks: int, lines_added: int, lines_removed: int) -> object:
+def synthetic_plan(
+    files: list[str],
+    hunks: int,
+    lines_added: int,
+    lines_removed: int,
+    depth_requested: str = "",
+) -> object:
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
         metadata_path = tmp / "metadata.json"
         diff_path = tmp / "pr.diff"
         metadata_path.write_text(json.dumps({"files": files}, ensure_ascii=False, indent=2) + "\n")
         diff_path.write_text(make_diff_text(files, hunks, lines_added, lines_removed))
-        return run_preflight_template(metadata_path, diff_path)
+        return run_preflight_template(metadata_path, diff_path, depth_requested=depth_requested)
 
 
 def validate_threshold_behavior(schema: dict[str, object]) -> None:
+    compact_default = synthetic_plan(["src/module.ts"], 1, 100, 50)
+    assert compact_default["depth_actual"] == "standard"
+    assert compact_default["depth_source"] == "default"
+    assert compact_default["depth_requested"] is None
+    assert compact_default["depth_reason"] == DEPTH_REASON_DEFAULT_STANDARD
+    assert compact_default["depth_downgraded"] is False
+    assert compact_default["depth_downgrade_reason"] is None
+    validate_schema(schema, compact_default)
+
+    security_auto = synthetic_plan(["src/auth/login.go"], 2, 100, 50)
+    assert security_auto["risk_tags"] == ["security"]
+    assert security_auto["depth_actual"] == "deep"
+    assert security_auto["depth_source"] == "auto"
+    assert security_auto["depth_requested"] is None
+    assert security_auto["depth_reason"] == DEPTH_REASON_AUTO_DEEP
+    validate_schema(schema, security_auto)
+
+    requested_deep = synthetic_plan(["src/module.ts"], 1, 100, 50, depth_requested="deep")
+    assert requested_deep["depth_actual"] == "deep"
+    assert requested_deep["depth_source"] == "argument"
+    assert requested_deep["depth_requested"] == "deep"
+    assert requested_deep["depth_reason"] == DEPTH_REASON_ARGUMENT_DEEP
+    validate_schema(schema, requested_deep)
+
+    requested_standard = synthetic_plan(["src/auth/login.go"], 1, 100, 50, depth_requested="standard")
+    assert requested_standard["depth_actual"] == "standard"
+    assert requested_standard["depth_source"] == "argument"
+    assert requested_standard["depth_requested"] == "standard"
+    assert requested_standard["depth_reason"] == DEPTH_REASON_ARGUMENT_STANDARD
+    validate_schema(schema, requested_standard)
+
+    just_under_guard = synthetic_plan(["src/auth/login.go"], 80, 4999, 0, depth_requested="deep")
+    assert just_under_guard["depth_actual"] == "deep"
+    assert just_under_guard["depth_downgraded"] is False
+    validate_schema(schema, just_under_guard)
+
+    exactly_guard = synthetic_plan(["src/auth/login.go"], 80, 5000, 0, depth_requested="deep")
+    assert exactly_guard["depth_actual"] == "deep"
+    assert exactly_guard["depth_downgraded"] is False
+    validate_schema(schema, exactly_guard)
+
     line_heavy = synthetic_plan([f"src/module_{index}.ts" for index in range(20)], 80, 5001, 0)
     assert line_heavy["depth_actual"] == "standard"
+    assert line_heavy["depth_source"] == "default"
+    assert line_heavy["depth_reason"] == DEPTH_REASON_LARGE_DEFAULT
+    assert line_heavy["depth_downgraded"] is False
     assert line_heavy["recommended_mode"] == "standard"
-    validate_schema(schema, line_heavy)
+    assert line_heavy["routing_decision"]["model_profile"] == "standard"
+    validate_run_plan_semantics(schema, line_heavy)
+
+    downgraded = synthetic_plan([f"src/module_{index}.ts" for index in range(20)], 80, 5001, 0, depth_requested="deep")
+    assert downgraded["depth_actual"] == "standard"
+    assert downgraded["depth_source"] == "argument"
+    assert downgraded["depth_requested"] == "deep"
+    assert downgraded["depth_downgraded"] is True
+    assert downgraded["depth_reason"] == DEPTH_REASON_DOWNGRADED
+    assert downgraded["depth_downgrade_reason"] == DEPTH_REASON_DOWNGRADED
+    validate_schema(schema, downgraded)
 
     focused = synthetic_plan([f"src/file_{index}.ts" for index in range(51)], 120, 800, 400)
     assert focused["recommended_mode"] == "focused"
     assert focused["skip_reason"] is None
-    validate_schema(schema, focused)
+    assert focused["depth_actual"] == "standard"
+    assert focused["routing_decision"]["model_profile"] == "focused-fallback"
+    validate_run_plan_semantics(schema, focused)
+
+    focused_deep = synthetic_plan([f"src/file_{index}.ts" for index in range(51)], 120, 800, 400, depth_requested="deep")
+    assert focused_deep["recommended_mode"] == "focused"
+    assert focused_deep["depth_actual"] == "deep"
+    assert focused_deep["depth_source"] == "argument"
+    validate_schema(schema, focused_deep)
 
     skipped = synthetic_plan([f"src/file_{index}.ts" for index in range(101)], 240, 1500, 900)
     assert skipped["recommended_mode"] == "skip"
     assert isinstance(skipped["skip_reason"], str) and skipped["skip_reason"]
-    validate_schema(schema, skipped)
+    assert skipped["depth_actual"] == "standard"
+    assert skipped["routing_decision"]["model_profile"] == "focused-fallback"
+    validate_run_plan_semantics(schema, skipped)
+
+    skipped_deep = synthetic_plan([f"src/file_{index}.ts" for index in range(101)], 240, 1500, 900, depth_requested="deep")
+    assert skipped_deep["recommended_mode"] == "skip"
+    assert skipped_deep["depth_actual"] == "deep"
+    assert skipped_deep["depth_source"] == "argument"
+    validate_schema(schema, skipped_deep)
 
     duration_case = run_duration_template(
         focused,
@@ -334,7 +552,88 @@ def validate_threshold_behavior(schema: dict[str, object]) -> None:
     )
     assert duration_case["actual_duration_ms"] == 1200000
     assert duration_case["risk_tags"] == focused["risk_tags"]
-    validate_schema(schema, duration_case)
+    assert duration_case["depth_source"] == focused["depth_source"]
+    assert duration_case["depth_reason"] == focused["depth_reason"]
+    assert duration_case["depth_downgraded"] == focused["depth_downgraded"]
+    assert duration_case["routing_decision"] == focused["routing_decision"]
+    validate_run_plan_semantics(schema, duration_case)
+
+
+def validate_routing_matrix(schema: dict[str, object]) -> None:
+    # Section 2 of Issue #39 is authoritative: standard+deep maps to
+    # model_profile=deep, and line-heavy (>5000) PRs become budget_class=large.
+    cases = [
+        (
+            [f"src/small_{index}.ts" for index in range(5)],
+            20,
+            200,
+            0,
+            "small",
+            "standard",
+            "standard",
+            "standard",
+        ),
+        (
+            [f"src/line_heavy_{index}.ts" for index in range(5)],
+            80,
+            6000,
+            0,
+            "large",
+            "standard",
+            "standard",
+            "standard",
+        ),
+        (
+            ["src/auth/security.ts", *[f"src/security_case_{index}.ts" for index in range(29)]],
+            60,
+            2000,
+            0,
+            "medium",
+            "standard",
+            "standard",
+            "standard",
+        ),
+        (
+            [f"src/focused_{index}.ts" for index in range(60)],
+            100,
+            3000,
+            0,
+            "large",
+            "focused",
+            "standard",
+            "focused-fallback",
+        ),
+        (
+            ["db/migrations/001.sql", *[f"src/skipped_{index}.ts" for index in range(119)]],
+            200,
+            5000,
+            3000,
+            "large",
+            "skip",
+            "standard",
+            "focused-fallback",
+        ),
+        (
+            ["src/auth/login.ts", *[f"src/sensitive_small_{index}.ts" for index in range(7)]],
+            20,
+            400,
+            0,
+            "medium",
+            "standard",
+            "deep",
+            "deep",
+        ),
+    ]
+    for files, hunks, lines_added, lines_removed, budget_class, recommended_mode, depth_actual, model_profile in cases:
+        plan = synthetic_plan(files, hunks, lines_added, lines_removed)
+        routing_decision = plan["routing_decision"]
+        assert plan["recommended_mode"] == recommended_mode, plan
+        assert plan["depth_actual"] == depth_actual, plan
+        assert routing_decision["budget_class"] == budget_class, plan
+        assert routing_decision["route"] == ROUTE_M2, plan
+        assert routing_decision["model_profile"] == model_profile, plan
+        assert routing_decision["rationale"] == expected_rationale(plan), plan
+        validate_run_plan_semantics(schema, plan)
 
 
 def validate_risk_tag_detection() -> None:
@@ -346,6 +645,17 @@ def validate_risk_tag_detection() -> None:
             f"expected={sorted(expected_tags)}\n"
             f"actual={sorted(actual_tags)}"
         )
+
+
+def validate_invalid_depth_argument_rejected() -> None:
+    for invalid in ("deeper", "deep standard"):
+        try:
+            synthetic_plan(["src/module.ts"], 1, 1, 0, depth_requested=invalid)
+        except AssertionError as exc:
+            if f"unsupported depth_requested: {invalid}" not in str(exc):
+                raise AssertionError(f"unexpected invalid depth error for {invalid!r}: {exc}") from exc
+        else:
+            raise AssertionError(f"invalid depth argument {invalid!r} must fail instead of being silently ignored")
 
 
 def validate_paginated_files_template() -> None:
@@ -380,7 +690,7 @@ def validate_paginated_files_pipefail() -> None:
 def validate_step5_write_order() -> None:
     text = SKILL_PATH.read_text()
     duration_index = text.index('tmp_run_plan=~/claude-loop-pr-codex/$org-$repository-$pr_number/run-plan.json.tmp')
-    completed_index = text.index('{state:"completed",started_at:$started_at,finished_at:$finished_at,exit_code:0,head_sha:$head_sha}')
+    completed_index = text.index('{state:"completed",started_at:$started_at,finished_at:$finished_at,exit_code:0,head_sha:$head_sha,stage:"explainer",failed_stage:null}')
     if duration_index > completed_index:
         raise AssertionError("run-plan update must be documented before completed status update")
 
@@ -442,16 +752,57 @@ def validate_step2b_jq_allowlist_docs() -> None:
             raise AssertionError(f"Step 2b metadata allowlist docs missing required snippet: {snippet}")
 
 
+def validate_depth_argument_docs() -> None:
+    text = SKILL_PATH.read_text()
+    required_snippets = [
+        'argument-hint: "[--deep|--standard]"',
+        "The user invoked this with: `$ARGUMENTS`",
+        '$depth_requested = "deep"',
+        '$depth_requested = "standard"',
+        "複数引数が含まれる場合",
+        "unsupported argument",
+        "silent ignore",
+        "`depth_actual`（`standard` / `deep`）と `recommended_mode`（`standard` / `focused` / `skip`）は直交した軸",
+        "{DEPTH_GUIDANCE}",
+        "`--deep` 明示時も `depth_actual = \"standard\"` に強制",
+    ]
+    for snippet in required_snippets:
+        if snippet not in text:
+            raise AssertionError(f"depth argument docs missing required snippet: {snippet}")
+
+    if "depth_actual = \"deep\"\n    else \"deep\"" in text:
+        raise AssertionError("depth default must not remain deep")
+
+    readme = (ROOT / "README.md").read_text()
+    readme_snippets = [
+        "## Depth control",
+        "/pr-codex:review --deep",
+        "/pr-codex:review --standard",
+        "`depth_source=auto`",
+        "`depth_source=argument`, `depth_requested=deep`, `depth_downgraded=true`, `depth_downgrade_reason`",
+        "`depth_source=default`, `depth_downgraded=false`, `depth_reason` に大規模ガード理由を記録",
+        "`recommended_mode` (`standard` / `focused` / `skip`) は depth とは直交する別軸",
+        "GitHub への自動投稿範囲は depth では拡大しない",
+    ]
+    for snippet in readme_snippets:
+        if snippet not in readme:
+            raise AssertionError(f"README depth docs missing required snippet: {snippet}")
+
+
 def validate_review_preflight_supplement_docs() -> None:
     text = SKILL_PATH.read_text()
     line = single_line_containing(text, "## 補足` に preflight 情報")
     required_terms = [
         'skip_reason != null',
         'recommended_mode != "standard"',
-        'depth_actual != "deep"',
+        'depth_actual != "standard"',
+        'depth_source != "default"',
+        "depth_downgraded == true",
+        "`changed lines > 5000`",
         'files_changed',
         'lines_added',
         'lines_removed',
+        'depth_reason',
         'risk_tags',
     ]
     for term in required_terms:
@@ -486,7 +837,7 @@ def validate_escape_rule_docs() -> None:
 
     preprocessing_line = single_line_containing(
         text,
-        "{REVIEW_CRITERIA}` / `{RUN_PLAN_GUIDANCE}` を bash double-quote 内へ差し込む前",
+        "{REVIEW_CRITERIA}` / `{RUN_PLAN_GUIDANCE}` / `{DEPTH_GUIDANCE}` を bash double-quote 内へ差し込む前",
     )
     constraint_line = single_line_containing(
         text,
@@ -494,7 +845,7 @@ def validate_escape_rule_docs() -> None:
     )
     preprocessing_rule = extract_escape_rule(
         preprocessing_line,
-        r"両方とも (?P<rule>.+?) の順でエスケープする",
+        r"3つとも (?P<rule>.+?) の順でエスケープする",
         "Step 4 preprocessing",
     )
     constraint_rule = extract_escape_rule(
@@ -514,8 +865,12 @@ def validate_schema_contract(schema: dict[str, object]) -> None:
     items = schema["properties"]["risk_tags"]["items"]
     assert items["enum"] == RISK_TAG_ENUM, f"risk_tags enum mismatch: {items['enum']}"
 
+    assert schema["properties"]["depth_actual"]["enum"] == ["deep", "standard"]
+    assert schema["properties"]["depth_source"]["enum"] == ["argument", "auto", "default"]
+    assert schema["properties"]["depth_requested"]["enum"] == ["deep", "standard", None]
+
     skip_plan = synthetic_plan([f"src/file_{index}.ts" for index in range(101)], 1, 1, 0)
-    validate_schema(schema, skip_plan)
+    validate_run_plan_semantics(schema, skip_plan)
 
     missing_skip_reason = dict(skip_plan, skip_reason=None)
     if schema_matches(schema, missing_skip_reason):
@@ -528,6 +883,85 @@ def validate_schema_contract(schema: dict[str, object]) -> None:
     if schema_matches(schema, focused_with_reason):
         raise AssertionError("schema must reject non-skip recommended_mode with non-null skip_reason")
 
+    missing_routing = dict(skip_plan)
+    del missing_routing["routing_decision"]
+    if schema_matches(schema, missing_routing):
+        raise AssertionError("schema must reject missing routing_decision")
+
+    routing_schema = schema["properties"]["routing_decision"]
+    routing_decision = dict(skip_plan["routing_decision"])
+    extra_routing = dict(skip_plan, routing_decision=dict(routing_decision, provider="private-model"))
+    if schema_matches(schema, extra_routing):
+        raise AssertionError("schema must reject extra routing_decision properties")
+
+    invalid_route = dict(skip_plan, routing_decision=dict(routing_decision, route="claude+codex+specialist"))
+    if schema_matches(schema, invalid_route):
+        raise AssertionError("schema must reject M2 route enum violations")
+
+    invalid_profile = dict(skip_plan, routing_decision=dict(routing_decision, model_profile="gpt-5.5"))
+    if schema_matches(schema, invalid_profile):
+        raise AssertionError("schema must reject provider/model-like model_profile enum violations")
+
+    invalid_rationale = dict(skip_plan, routing_decision=dict(routing_decision, rationale="x" * 241))
+    if schema_matches(schema, invalid_rationale):
+        raise AssertionError("schema must reject overlong routing rationale")
+
+    mismatched_profile = dict(skip_plan, routing_decision=dict(routing_decision, model_profile="standard"))
+    try:
+        validate_run_plan_semantics(schema, mismatched_profile)
+    except AssertionError as exc:
+        if "$.routing_decision.model_profile" not in str(exc):
+            raise
+    else:
+        raise AssertionError("validator must reject model_profile inconsistent with recommended_mode/depth_actual")
+
+    assert routing_schema["properties"]["route"]["enum"] == [ROUTE_M2]
+    assert routing_schema["properties"]["model_profile"]["enum"] == ["standard", "deep", "focused-fallback"]
+
+    argument_plan = synthetic_plan(["src/module.ts"], 1, 1, 0, depth_requested="standard")
+    validate_run_plan_semantics(schema, argument_plan)
+
+    argument_without_request = dict(argument_plan, depth_requested=None)
+    if schema_matches(schema, argument_without_request):
+        raise AssertionError("schema must reject depth_source=argument without depth_requested")
+
+    standard_requested_but_deep = dict(argument_plan, depth_actual="deep")
+    if schema_matches(schema, standard_requested_but_deep):
+        raise AssertionError("schema must reject depth_requested=standard with depth_actual=deep")
+
+    deep_requested_but_standard_without_downgrade = dict(
+        synthetic_plan(["src/module.ts"], 1, 1, 0, depth_requested="deep"),
+        depth_actual="standard",
+    )
+    if schema_matches(schema, deep_requested_but_standard_without_downgrade):
+        raise AssertionError("schema must reject depth_requested=deep standard actual without downgrade")
+
+    default_with_request = dict(synthetic_plan(["src/module.ts"], 1, 1, 0), depth_requested="standard")
+    if schema_matches(schema, default_with_request):
+        raise AssertionError("schema must reject non-argument depth_source with depth_requested")
+
+    default_with_deep_actual = dict(synthetic_plan(["src/module.ts"], 1, 1, 0), depth_actual="deep")
+    if schema_matches(schema, default_with_deep_actual):
+        raise AssertionError("schema must reject depth_source=default with depth_actual=deep")
+
+    auto_with_standard_actual = dict(synthetic_plan(["src/auth/login.go"], 1, 1, 0), depth_actual="standard")
+    if schema_matches(schema, auto_with_standard_actual):
+        raise AssertionError("schema must reject depth_source=auto with depth_actual=standard")
+
+    downgraded = synthetic_plan(["src/module.ts"], 1, 5001, 0, depth_requested="deep")
+    validate_run_plan_semantics(schema, downgraded)
+
+    downgraded_without_reason = dict(downgraded, depth_downgrade_reason=None)
+    if schema_matches(schema, downgraded_without_reason):
+        raise AssertionError("schema must reject downgraded depth without depth_downgrade_reason")
+
+    not_downgraded_with_reason = dict(
+        synthetic_plan(["src/module.ts"], 1, 1, 0, depth_requested="deep"),
+        depth_downgrade_reason="unexpected",
+    )
+    if schema_matches(schema, not_downgraded_with_reason):
+        raise AssertionError("schema must reject depth_downgrade_reason when not downgraded")
+
 
 def main() -> None:
     schema = load_json(SCHEMA_PATH)
@@ -537,9 +971,12 @@ def main() -> None:
     for fixture in ("small", "medium", "large"):
         validate_fixture(fixture, schema)
     validate_threshold_behavior(schema)
+    validate_routing_matrix(schema)
     validate_risk_tag_detection()
+    validate_invalid_depth_argument_rejected()
     validate_completed_head_check_before_files()
     validate_step2b_jq_allowlist_docs()
+    validate_depth_argument_docs()
     validate_review_preflight_supplement_docs()
     validate_step5_write_order()
     validate_escape_rule_docs()
