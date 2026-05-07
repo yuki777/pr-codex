@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/yuki777/pr-codex/main/schemas/expected-findings.v1.json",
+  "title": "pr-codex fixture expected findings v1",
+  "description": "Fixture oracle wrapper used by deterministic regression scoring. This is intentionally separate from canonical findings.v1 runtime artifacts.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "fixture_id",
+    "source",
+    "pr_intent",
+    "expected_findings"
+  ],
+  "properties": {
+    "schema_version": {"const": "expected-findings.v1"},
+    "fixture_id": {"$ref": "#/$defs/non_empty_string"},
+    "source": {"$ref": "#/$defs/source"},
+    "pr_intent": {"$ref": "#/$defs/non_empty_string"},
+    "scoring_gate": {"$ref": "#/$defs/scoring_gate"},
+    "expected_findings": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/expected_finding"}
+    }
+  },
+  "$defs": {
+    "non_empty_string": {"type": "string", "minLength": 1},
+    "sha": {"type": "string", "pattern": "^[0-9a-fA-F]{7,64}$"},
+    "severity": {"enum": ["must_fix", "should_fix", "nit", "note"]},
+    "category": {"enum": ["bug", "security", "performance", "tests", "design", "code_quality", "consistency", "runtime_error"]},
+    "axis_value": {"enum": ["yes", "no", "unknown"]},
+    "evidence_level": {"enum": ["suspicion", "corroborated", "trigger_path_identified", "impact_explained", "verified"]},
+    "strictness_profile": {"enum": ["must_fix_strict", "should_fix_lax", "noise_filter"]},
+    "expected_outcome": {"enum": ["known_bug", "known_false_positive_trap", "acceptable_risk", "out_of_scope", "no_expected_finding"]},
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "pr_number", "base_sha", "head_sha", "source_url", "license", "frozen_patch_path"],
+      "properties": {
+        "repository": {"type": "string", "pattern": "^[^/\\s]+/[^/\\s]+$"},
+        "pr_number": {"type": "integer", "minimum": 1},
+        "pr_title": {"$ref": "#/$defs/non_empty_string"},
+        "base_sha": {"$ref": "#/$defs/sha"},
+        "head_sha": {"$ref": "#/$defs/sha"},
+        "merge_commit_sha": {"$ref": "#/$defs/sha"},
+        "source_url": {"type": "string", "minLength": 1},
+        "license": {"$ref": "#/$defs/non_empty_string"},
+        "license_notice_path": {"$ref": "#/$defs/non_empty_string"},
+        "frozen_patch_path": {"$ref": "#/$defs/non_empty_string"},
+        "retrieved_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "scoring_gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "exact_pass_rate_min": {"type": "number", "minimum": 0, "maximum": 1},
+        "acceptable_pass_rate_min": {"type": "number", "minimum": 0, "maximum": 1},
+        "false_positive_rate_max": {"type": "number", "minimum": 0, "maximum": 1},
+        "recall_known_bug_min": {"type": "number", "minimum": 0, "maximum": 1}
+      }
+    },
+    "axes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["real", "triggerable", "impactful", "general"],
+      "properties": {
+        "real": {"$ref": "#/$defs/axis_value"},
+        "triggerable": {"$ref": "#/$defs/axis_value"},
+        "impactful": {"$ref": "#/$defs/axis_value"},
+        "general": {"$ref": "#/$defs/axis_value"}
+      }
+    },
+    "axis_overrides": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "real": {"$ref": "#/$defs/axis_values"},
+        "triggerable": {"$ref": "#/$defs/axis_values"},
+        "impactful": {"$ref": "#/$defs/axis_values"},
+        "general": {"$ref": "#/$defs/axis_values"}
+      }
+    },
+    "axis_values": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/axis_value"}
+    },
+    "location_match": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path"],
+      "properties": {
+        "path": {"$ref": "#/$defs/non_empty_string"},
+        "line": {"type": "integer", "minimum": 1},
+        "line_range": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {"type": "integer", "minimum": 1}
+        }
+      }
+    },
+    "acceptable_alternative": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "path_glob": {"$ref": "#/$defs/non_empty_string"},
+        "line_range": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {"type": "integer", "minimum": 1}
+        },
+        "title_regex": {"$ref": "#/$defs/non_empty_string"},
+        "problem_regex": {"$ref": "#/$defs/non_empty_string"},
+        "category": {"$ref": "#/$defs/category"}
+      }
+    },
+    "expected_finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "expected_outcome", "title", "category", "expected_axes", "strictness_profile", "minimum_evidence_level"],
+      "properties": {
+        "id": {"$ref": "#/$defs/non_empty_string"},
+        "expected_outcome": {"$ref": "#/$defs/expected_outcome"},
+        "title": {"$ref": "#/$defs/non_empty_string"},
+        "category": {"$ref": "#/$defs/category"},
+        "severity": {"$ref": "#/$defs/severity"},
+        "acceptable_severities": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/severity"}
+        },
+        "strictness_profile": {"$ref": "#/$defs/strictness_profile"},
+        "expected_axes": {"$ref": "#/$defs/axes"},
+        "acceptable_overrides": {"$ref": "#/$defs/axis_overrides"},
+        "minimum_evidence_level": {"$ref": "#/$defs/evidence_level"},
+        "location_match": {"$ref": "#/$defs/location_match"},
+        "acceptable_alternatives": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/acceptable_alternative"}
+        },
+        "should_be_caught_by": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/non_empty_string"}
+        },
+        "out_of_scope_reason": {"$ref": "#/$defs/non_empty_string"},
+        "oracle_notes": {"$ref": "#/$defs/non_empty_string"}
+      }
+    }
+  }
+}

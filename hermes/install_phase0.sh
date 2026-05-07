@@ -59,6 +59,7 @@ ROOT_DIR="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
 mkdir -p "$HERMES_ROOT/scripts" "$HERMES_ROOT/automation/pr-codex"
 install -m 0755 "$ROOT_DIR/hermes/scripts/_pr_codex_common.py" "$HERMES_ROOT/scripts/_pr_codex_common.py"
 install -m 0755 "$ROOT_DIR/hermes/scripts/pr_codex_watch.py" "$HERMES_ROOT/scripts/pr_codex_watch.py"
+install -m 0755 "$ROOT_DIR/hermes/scripts/issue_triager_publish.py" "$HERMES_ROOT/scripts/issue_triager_publish.py"
 install -m 0755 "$ROOT_DIR/hermes/scripts/pr_codex_daily_digest.py" "$HERMES_ROOT/scripts/pr_codex_daily_digest.py"
 install -m 0755 "$ROOT_DIR/hermes/scripts/pr_codex_kanban_health.py" "$HERMES_ROOT/scripts/pr_codex_kanban_health.py"
 

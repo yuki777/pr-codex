@@ -34,18 +34,18 @@ class ValidateRunPlanRoutingTest(unittest.TestCase):
         self.assertIsInstance(plan, dict)
         return plan  # type: ignore[return-value]
 
-    def test_small_standard_deep_routes_to_deep_profile(self) -> None:
+    def test_small_default_standard_routes_to_standard_profile(self) -> None:
         plan = self.valid_plan()
         routing = plan["routing_decision"]
 
         self.assertEqual(plan["recommended_mode"], "standard")
-        self.assertEqual(plan["depth_actual"], "deep")
+        self.assertEqual(plan["depth_actual"], "standard")
         self.assertEqual(
             routing,
             {
                 "budget_class": "small",
                 "route": ROUTE_M2,
-                "model_profile": "deep",
+                "model_profile": "standard",
                 "rationale": expected_rationale(plan),
             },
         )
@@ -91,7 +91,7 @@ class ValidateRunPlanRoutingTest(unittest.TestCase):
         plan = self.valid_plan()
 
         bad_profile = copy.deepcopy(plan)
-        bad_profile["routing_decision"]["model_profile"] = "standard"
+        bad_profile["routing_decision"]["model_profile"] = "deep"
         with self.assertRaisesRegex(AssertionError, r"routing_decision\.model_profile"):
             validate_run_plan_semantics(self.schema, bad_profile)
 

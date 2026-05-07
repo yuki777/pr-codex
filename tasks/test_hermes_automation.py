@@ -352,6 +352,7 @@ class InstallerScriptTests(unittest.TestCase):
         text = (ROOT / "hermes" / "install_phase0.sh").read_text()
         self.assertIn('HERMES_ROOT="${PR_CODEX_HERMES_ROOT:-$HOME/.hermes}"', text)
         self.assertNotIn("${HERMES_HOME", text)
+        self.assertIn('issue_triager_publish.py" "$HERMES_ROOT/scripts/issue_triager_publish.py"', text)
         self.assertIn('--state "$STATE_PATH"', text)
         self.assertIn('--outbox "$OUTBOX_PATH"', text)
         self.assertIn("--state $STATE_PATH --outbox $OUTBOX_PATH --sink hermes", text)
@@ -364,6 +365,16 @@ class InstallerScriptTests(unittest.TestCase):
         self.assertEqual(config["outbox_path"], "$PR_CODEX_HERMES_ROOT/automation/pr-codex/tasks.jsonl")
         self.assertEqual(config["github_auto_marker_trusted_authors_env"], "PR_CODEX_HERMES_AUTO_AUTHORS")
         self.assertEqual(config["github_auto_marker_trusted_apps_env"], "PR_CODEX_HERMES_AUTO_APPS")
+        self.assertFalse(config["phase_1b"]["issue_triage_publish"]["enabled"])
+        self.assertEqual(
+            config["phase_1b"]["issue_triage_publish"]["env_flag"],
+            "PR_CODEX_HERMES_ISSUE_TRIAGE_PUBLISH",
+        )
+        self.assertEqual(
+            config["phase_1b"]["issue_triage_publish"]["idempotency_key"],
+            "issue_triage:publish:#<N>:<sha8>",
+        )
+        self.assertFalse(config["safety"]["github_writes_issue_triage"])
         for job in config["cron"]:
             command = job["command"]
             self.assertIn('test -n "$PR_CODEX_HERMES_ROOT"', command)

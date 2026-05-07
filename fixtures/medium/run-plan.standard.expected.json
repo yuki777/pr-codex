@@ -9,9 +9,9 @@
     "codex"
   ],
   "depth_actual": "standard",
-  "depth_source": "default",
-  "depth_reason": "no depth argument and no high-risk small-PR signal; selected default standard",
-  "depth_requested": null,
+  "depth_source": "argument",
+  "depth_reason": "requested --standard",
+  "depth_requested": "standard",
   "depth_downgraded": false,
   "depth_downgrade_reason": null,
   "recommended_mode": "standard",

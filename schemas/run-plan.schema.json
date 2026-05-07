@@ -13,6 +13,11 @@
     "risk_tags",
     "selected_hunters",
     "depth_actual",
+    "depth_source",
+    "depth_reason",
+    "depth_requested",
+    "depth_downgraded",
+    "depth_downgrade_reason",
     "recommended_mode",
     "skip_reason",
     "routing_decision",
@@ -70,6 +75,38 @@
       "enum": [
         "deep",
         "standard"
+      ]
+    },
+    "depth_source": {
+      "type": "string",
+      "enum": [
+        "argument",
+        "auto",
+        "default"
+      ]
+    },
+    "depth_reason": {
+      "type": "string",
+      "minLength": 1
+    },
+    "depth_requested": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "deep",
+        "standard",
+        null
+      ]
+    },
+    "depth_downgraded": {
+      "type": "boolean"
+    },
+    "depth_downgrade_reason": {
+      "type": [
+        "string",
+        "null"
       ]
     },
     "recommended_mode": {
@@ -176,6 +213,173 @@
       "else": {
         "properties": {
           "skip_reason": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "depth_source": {
+            "const": "argument"
+          }
+        },
+        "required": [
+          "depth_source"
+        ]
+      },
+      "then": {
+        "properties": {
+          "depth_requested": {
+            "type": "string",
+            "enum": [
+              "deep",
+              "standard"
+            ]
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "depth_requested": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "depth_downgraded": {
+            "const": true
+          }
+        },
+        "required": [
+          "depth_downgraded"
+        ]
+      },
+      "then": {
+        "properties": {
+          "depth_actual": {
+            "const": "standard"
+          },
+          "depth_source": {
+            "const": "argument"
+          },
+          "depth_requested": {
+            "const": "deep"
+          },
+          "depth_downgrade_reason": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "depth_downgrade_reason": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "depth_requested": {
+            "const": "standard"
+          }
+        },
+        "required": [
+          "depth_requested"
+        ]
+      },
+      "then": {
+        "properties": {
+          "depth_actual": {
+            "const": "standard"
+          },
+          "depth_downgraded": {
+            "const": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "depth_requested": {
+            "const": "deep"
+          },
+          "depth_downgraded": {
+            "const": false
+          }
+        },
+        "required": [
+          "depth_requested",
+          "depth_downgraded"
+        ]
+      },
+      "then": {
+        "properties": {
+          "depth_actual": {
+            "const": "deep"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "depth_source": {
+            "const": "auto"
+          }
+        },
+        "required": [
+          "depth_source"
+        ]
+      },
+      "then": {
+        "properties": {
+          "depth_actual": {
+            "const": "deep"
+          },
+          "depth_requested": {
+            "type": "null"
+          },
+          "depth_downgraded": {
+            "const": false
+          },
+          "depth_downgrade_reason": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "depth_source": {
+            "const": "default"
+          }
+        },
+        "required": [
+          "depth_source"
+        ]
+      },
+      "then": {
+        "properties": {
+          "depth_actual": {
+            "const": "standard"
+          },
+          "depth_requested": {
+            "type": "null"
+          },
+          "depth_downgraded": {
+            "const": false
+          },
+          "depth_downgrade_reason": {
             "type": "null"
           }
         }
