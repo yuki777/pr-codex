@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -145,6 +146,21 @@ class StageArtifactTests(unittest.TestCase):
         self.assertIn("$schema.$id", result.stderr)
         self.assertIn("$schema.properties.schema_version.const", result.stderr)
         self.assertNotIn("VALID candidates artifact", result.stdout)
+
+    def test_candidates_schema_rejects_malformed_dates_and_control_strings(self) -> None:
+        schema = json.loads(CANDIDATES_SCHEMA.read_text(encoding="utf-8"))
+        generated_at_pattern = schema["properties"]["generated_at"]["pattern"]
+        self.assertIsNotNone(re.search(generated_at_pattern, "2026-05-06T08:00:00Z"))
+        self.assertIsNotNone(re.search(generated_at_pattern, "2026-05-06T08:00:00.123+09:00"))
+        self.assertIsNone(re.search(generated_at_pattern, "not-a-date"))
+        self.assertIsNone(re.search(generated_at_pattern, "2026-05-06T08:00:00Z\n"))
+
+        string_def = schema["$defs"]["non_empty_string"]
+        non_empty_pattern = string_def["pattern"]
+        self.assertEqual(string_def["minLength"], 1)
+        self.assertIsNotNone(re.search(non_empty_pattern, "review title"))
+        self.assertIsNone(re.search(non_empty_pattern, "review title\n"))
+        self.assertIsNone(re.search(non_empty_pattern, "review\u0000title"))
 
     def test_status_stage_fields_are_backward_compatible_and_validated(self) -> None:
         legacy_running = {"state": "running", "started_at": "2026-05-06T08:00:00Z", "head_sha": "abc1234"}
