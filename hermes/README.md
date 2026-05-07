@@ -1,8 +1,9 @@
 # Hermes Agent automation for pr-codex
 
-This directory contains the Phase 0 implementation for Issue #28 (`hermes-agent`).
-It keeps cron focused on polling/delta detection and delegates real work to Hermes
-Kanban tasks assigned to profile-specific workers.
+This directory contains the Phase 0 implementation for Issue #28 (`hermes-agent`)
+plus the Phase 1B default-off publication policy for Issue #43.  It keeps cron
+focused on polling/delta detection and delegates real work to Hermes Kanban tasks
+assigned to profile-specific workers.
 
 ## Scope
 
@@ -13,6 +14,12 @@ Phase 0 is a read-only observer:
 - Seed existing open Issues/PRs so the first run only picks up future changes.
 - Produce local/Discord daily and health summaries.
 - Do **not** post to GitHub, push commits, change labels, approve, request changes, close, or merge.
+
+Phase 1B adds a dry-run/default-off issue-triager publisher.  It may append an
+Issue triage recommendation comment only when explicitly run with
+`PR_CODEX_HERMES_ISSUE_TRIAGE_PUBLISH=1`, `--publish`, and `--sink github`.
+It still must not edit labels, milestones, assignees, titles, close/reopen,
+lock/unlock, or edit existing comments.
 
 ## Files
 
@@ -28,6 +35,7 @@ hermes/
     sheriff.md
   scripts/
     _pr_codex_common.py
+    issue_triager_publish.py          # Phase 1B dry-run/default-off Issue comment publisher
     pr_codex_watch.py                # GitHub delta watcher -> Kanban task
     pr_codex_kanban_health.py        # blocked/stale/retry/ready checks
     pr_codex_daily_digest.py         # daily Issue/PR/Kanban summary
@@ -97,6 +105,30 @@ Run without Hermes by using the append-only outbox:
 python3 hermes/scripts/pr_codex_watch.py --sink outbox --json
 ```
 
+Evaluate a completed issue-triager handoff for public publication safety.  This
+prints a JSON dry-run report by default and does not write to GitHub:
+
+```bash
+python3 hermes/scripts/issue_triager_publish.py \
+  --issue 43 \
+  --triage triage-result.json \
+  --comments issue-comments.json \
+  --json
+```
+
+Actual GitHub posting is opt-in and append-only:
+
+```bash
+PR_CODEX_HERMES_ISSUE_TRIAGE_PUBLISH=1 \
+python3 hermes/scripts/issue_triager_publish.py \
+  --issue 43 \
+  --triage triage-result.json \
+  --fetch-comments \
+  --publish \
+  --sink github \
+  --json
+```
+
 Generate reports:
 
 ```bash
@@ -135,6 +167,24 @@ does not hide actionable feedback:
 <!-- hermes-auto:pr-codex pr-review v1 pr=25 head=<sha> -->
 ```
 
+Phase 1B issue-triager publication uses a more specific sentinel and publisher
+idempotency key:
+
+```markdown
+<!-- hermes-auto:pr-codex issue-triage v1 issue=#<N> hash=<sha8> -->
+```
+
+```text
+issue_triage:publish:#<N>:<sha8>
+```
+
+`hash` is the first eight characters of SHA-256 over the scrubbed public comment
+body, excluding the sentinel.  The publisher first reads existing Issue comments,
+trusts only comments that have both the sentinel and an allowed author/app, and
+skips when the same hash already exists.  If the scrubbed conclusion changes, it
+appends a new comment with the new hash rather than editing prior comments.
+Untrusted comments that paste the marker are not treated as Hermes publications.
+
 By default, the repository owner (`yuki777` for this repo) is the trusted comment
 author because the current GitHub auth posts automation comments as that user.
 Override or extend this with comma-separated environment variables when using a
@@ -145,10 +195,38 @@ export PR_CODEX_HERMES_AUTO_AUTHORS="yuki777,pr-codex-bot"
 export PR_CODEX_HERMES_AUTO_APPS="pr-codex-hermes"
 ```
 
+## Phase 1B Issue triage publication policy
+
+`issue-triager` may publish only small recommendation comments built from an
+allow-list:
+
+- classification (`bug` / `feature` / `docs` / `infra` / `other`)
+- priority recommendation (`low`, `medium`, `high`, `critical`, `urgent`, or `p0`–`p4`)
+- suggested labels, clearly marked as proposals only and constrained to short
+  GitHub label-shaped text
+- duplicate/related Issue numbers; arbitrary dependency prose is omitted
+- dependencies and ready/blocked status
+- recommended next action in 1–3 short lines
+- generic Kanban/triage summaries are not publishable; they remain internal
+  metadata unless a later policy adds a separately vetted public field
+
+The scrubber removes or masks secrets, API keys, tokens, credentials, Bearer
+headers, env secrets, local private paths (`/Users/...`, `/home/...`,
+`~/.hermes/...`, `.agent-orchestrator/...`), raw logs/stack traces, raw
+GraphQL/REST payloads, private Hermes operational details, and overlong text. If
+the candidate has no public substance after scrubbing, the publisher skips with
+`skip_reason: "all-redacted"`.
+
+Phase 1B never performs Issue edits: no close/reopen, label mutation, milestone
+mutation, assignee mutation, lock/unlock, title edit, or previous-comment edit.
+`PR_CODEX_HERMES_ISSUE_TRIAGE_PUBLISH=1` is required for GitHub writes; otherwise
+the script remains a JSON dry-run report.
+
 ## Profile policy highlights
 
 - `issue-triager`: classification, label proposals, duplicate/related Issue checks,
-  dependency graph, ready/blocked split, and recommended implementation order.
+  dependency graph, ready/blocked split, recommended implementation order, and
+  Phase 1B dry-run/default-off publication with scrubbed append-only comments.
 - `pr-reviewer`: focuses on `pr-codex` review/send contracts and posts only
   Must Fix/High confidence findings when posting is enabled in a later phase.
 - `review-triager`: decides whether new PR feedback needs action and recommends a

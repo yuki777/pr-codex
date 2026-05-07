@@ -12,6 +12,29 @@
   "github_auto_marker_prefix": "<!-- hermes-auto:",
   "github_auto_marker_trusted_authors_env": "PR_CODEX_HERMES_AUTO_AUTHORS",
   "github_auto_marker_trusted_apps_env": "PR_CODEX_HERMES_AUTO_APPS",
+  "phase_1b": {
+    "issue_triage_publish": {
+      "enabled": false,
+      "env_flag": "PR_CODEX_HERMES_ISSUE_TRIAGE_PUBLISH",
+      "script": "$PR_CODEX_HERMES_ROOT/scripts/issue_triager_publish.py",
+      "default_mode": "dry-run",
+      "sentinel": "<!-- hermes-auto:pr-codex issue-triage v1 issue=#<N> hash=<sha8> -->",
+      "idempotency_key": "issue_triage:publish:#<N>:<sha8>",
+      "allowed_github_write": "append_issue_comment_only",
+      "forbidden_github_writes": [
+        "close",
+        "reopen",
+        "label_add",
+        "label_remove",
+        "milestone_change",
+        "assignee_change",
+        "lock",
+        "unlock",
+        "title_edit",
+        "comment_edit"
+      ]
+    }
+  },
   "profiles": [
     "issue-triager",
     "pr-reviewer",
@@ -41,6 +64,7 @@
   ],
   "safety": {
     "github_writes": false,
+    "github_writes_issue_triage": false,
     "push_commits": false,
     "auto_label": false,
     "auto_assign": false,
