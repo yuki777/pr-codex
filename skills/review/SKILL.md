@@ -810,7 +810,9 @@ $CLAUDE_PLUGIN_ROOT/skills/review/
   ├── SKILL.md                ← 本ファイル
   └── REVIEW_CRITERIA.md      ← 4a / 4b 共通のレビュー観点本文。Step 4 前処理で Read し、{REVIEW_CRITERIA} プレースホルダに置換
 $CLAUDE_PLUGIN_ROOT/tasks/
-  └── validate_findings.py    ← canonical findings の schema / fingerprint / format / range validator
+  ├── validate_findings.py    ← canonical findings の schema / fingerprint / format / range validator
+  ├── score_fixture.py        ← F11 manual/deep eval 用の fixture scoring runner（通常レビュー中は実行しない）
+  └── m1_m2_gate.py           ← F11 M1→M2 gate report runner（運用実測値を外部入力として受ける）
 ```
 
 実行時の作業ディレクトリ:
@@ -842,6 +844,8 @@ $CLAUDE_PLUGIN_ROOT/tasks/
 本スキルは Claude Code を `--permission-mode auto` で起動することを前提とする（README の「使い方」参照）。auto mode でも、許可済みツールやコマンドの内容によっては分類器の判断で承認が必要になり得るため、本スキルではテンプレートに明示された操作だけを実行する。
 
 ローカルの書き込みは作業ディレクトリ `~/claude-loop-pr-codex/` 配下に限り、`clone-claude/` / `clone-codex/` の作成と更新、`status.json` / `metadata.json` / `run-plan.json` / `pr.diff` / `pr.diff.ranges.txt` / `claude.log` / `codex.log` / `claude-review.md` / `codex-review.md` / `findings.verified.json` / `validation-report.json` / `review.md` と、それらの `*.tmp` 一時ファイル作成のみ許可する。schema / fingerprint validation のために `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings.py ...` を実行してよいが、validator は成果物を書き換えず検証だけに使う。
+
+F11 の regression eval (`score_fixture.py` / `m1_m2_gate.py`) は通常の `/pr-codex:review` 実行フローには組み込まない。手動 deep eval で `findings.verified.json` を採点する場合のみ、README / `fixtures/README.md` の手順に従って `artifacts/` 配下へ `score-report.v1` / `m1-m2-gate.v1` を出力する。CI では固定 stub の deterministic test だけを実行し、LLM や GitHub write/API 投稿は必須経路に入れない。
 
 許可ルールは以下の allowlist に従う。
 

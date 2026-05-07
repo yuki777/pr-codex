@@ -1,0 +1,51 @@
+{
+  "schema_version": "findings.v1",
+  "producer": {
+    "name": "pr-codex-eval-stub",
+    "version": "1.7.0",
+    "run_id": "medium-scoring-stub"
+  },
+  "pr": {
+    "repository": "bearsunday/BEAR.Sunday",
+    "number": 143,
+    "base_sha": "4fc13c203f0884baaf5be32bba9b354fbd132613",
+    "head_sha": "d257c04dc9e70b92068995aa10020c135605f9b3",
+    "merge_commit_sha": "55c39de638bd80826619a679c758417ea4d0511e"
+  },
+  "generated_at": "2026-05-06T00:00:00Z",
+  "findings": [
+    {
+      "id": "7a541c145cf1de0202015c14959ddc5062b4f6e34572981bde750aa63aeaea18",
+      "fingerprint": "7a541c145cf1de0202015c14959ddc5062b4f6e34572981bde750aa63aeaea18",
+      "source_agents": [
+        "eval_stub"
+      ],
+      "merged_from": [
+        "fixtures/scoring-stubs"
+      ],
+      "location": {
+        "path": "src/Provide/Router/WebRouter.php",
+        "start_line": 1,
+        "side": "RIGHT"
+      },
+      "severity": "should_fix",
+      "category": "bug",
+      "title": "Removed assert() may allow undefined REQUEST_METHOD / REQUEST_URI to surface at runtime",
+      "problem": "Removed assert() may allow undefined REQUEST_METHOD / REQUEST_URI to surface at runtime",
+      "reason": "Deterministic scoring stub for F11 regression eval.",
+      "suggestion": "Use this artifact only as CI-safe scoring input.",
+      "evidence_level": "trigger_path_identified",
+      "axes": {
+        "real": "yes",
+        "triggerable": "unknown",
+        "impactful": "yes",
+        "general": "no"
+      },
+      "posting": {
+        "post_policy": "local_only",
+        "explanation_postable": true,
+        "audience": "human_reviewer"
+      }
+    }
+  ]
+}
