@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/yuki777/pr-codex/main/schemas/eval-report.v1.json",
+  "title": "pr-codex eval report v1",
+  "description": "F11 evaluation report. It compares baseline and iterative review runs and always carries round metrics so F5 loop behavior can be evaluated independently from finding quality.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "generated_at", "aggregate", "fixtures"],
+  "properties": {
+    "schema_version": {"const": "eval-report.v1"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "aggregate": {"$ref": "#/$defs/aggregate"},
+    "fixtures": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/fixture_result"}
+    }
+  },
+  "$defs": {
+    "non_negative_number": {"type": "number", "minimum": 0},
+    "rate": {"type": "number", "minimum": 0, "maximum": 1},
+    "round_metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "rounds_completed",
+        "max_rounds",
+        "halt_reason",
+        "elapsed_ms",
+        "time_budget_ms",
+        "verifier_fail_candidates",
+        "suppressed_candidate_count",
+        "no_new_evidence_rounds",
+        "repeated_contradiction_events",
+        "insufficient_evidence_events",
+        "oscillation_detected"
+      ],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "rounds_completed": {"type": "integer", "minimum": 0},
+        "max_rounds": {"type": "integer", "minimum": 1},
+        "halt_reason": {
+          "type": ["string", "null"],
+          "enum": [
+            null,
+            "max_rounds",
+            "time_budget",
+            "no_new_evidence",
+            "repeated_contradiction",
+            "all_candidates_verified",
+            "no_active_candidates"
+          ]
+        },
+        "elapsed_ms": {"type": "integer", "minimum": 0},
+        "time_budget_ms": {"type": "integer", "minimum": 0},
+        "verifier_fail_candidates": {"type": "integer", "minimum": 0},
+        "suppressed_candidate_count": {"type": "integer", "minimum": 0},
+        "no_new_evidence_rounds": {"type": "integer", "minimum": 0},
+        "repeated_contradiction_events": {"type": "integer", "minimum": 0},
+        "insufficient_evidence_events": {"type": "integer", "minimum": 0},
+        "oscillation_detected": {"type": "boolean"}
+      }
+    },
+    "score_metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["exact_pass_rate", "acceptable_pass_rate", "false_positive_rate"],
+      "properties": {
+        "exact_pass_rate": {"$ref": "#/$defs/rate"},
+        "acceptable_pass_rate": {"$ref": "#/$defs/rate"},
+        "false_positive_rate": {"$ref": "#/$defs/rate"}
+      }
+    },
+    "run_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["score_metrics", "round_metrics"],
+      "properties": {
+        "score_metrics": {"$ref": "#/$defs/score_metrics"},
+        "round_metrics": {"$ref": "#/$defs/round_metrics"}
+      }
+    },
+    "fixture_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fixture_id", "baseline", "iterative"],
+      "properties": {
+        "fixture_id": {"type": "string", "minLength": 1},
+        "baseline": {"$ref": "#/$defs/run_result"},
+        "iterative": {"$ref": "#/$defs/run_result"}
+      }
+    },
+    "aggregate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["baseline", "iterative", "delta"],
+      "properties": {
+        "baseline": {"$ref": "#/$defs/run_result"},
+        "iterative": {"$ref": "#/$defs/run_result"},
+        "delta": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["acceptable_pass_rate", "false_positive_rate", "avg_rounds_completed"],
+          "properties": {
+            "acceptable_pass_rate": {"type": "number"},
+            "false_positive_rate": {"type": "number"},
+            "avg_rounds_completed": {"type": "number"}
+          }
+        }
+      }
+    }
+  }
+}

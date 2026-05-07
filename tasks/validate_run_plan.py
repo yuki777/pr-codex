@@ -225,6 +225,33 @@ def run_duration_template(plan: dict[str, object], started_at: str, finished_at:
             "--argjson",
             "estimated_timeout_ms",
             str(plan["estimated_timeout_ms"]),
+            "--argjson",
+            "review_loop",
+            json.dumps(plan["review_loop"]),
+            "--argjson",
+            "rounds_completed",
+            "2",
+            "--arg",
+            "halt_reason",
+            "all_candidates_verified",
+            "--argjson",
+            "verifier_fail_candidates",
+            "1",
+            "--argjson",
+            "suppressed_candidate_count",
+            "1",
+            "--argjson",
+            "no_new_evidence_rounds",
+            "0",
+            "--argjson",
+            "repeated_contradiction_events",
+            "0",
+            "--argjson",
+            "insufficient_evidence_events",
+            "0",
+            "--argjson",
+            "oscillation_detected",
+            "false",
             "--arg",
             "started_at",
             started_at,
@@ -245,6 +272,8 @@ def json_type_matches(expected: str, value: object) -> bool:
         return isinstance(value, int) and not isinstance(value, bool)
     if expected == "string":
         return isinstance(value, str)
+    if expected == "boolean":
+        return isinstance(value, bool)
     if expected == "null":
         return value is None
     if expected == "boolean":
@@ -552,6 +581,10 @@ def validate_threshold_behavior(schema: dict[str, object]) -> None:
     )
     assert duration_case["actual_duration_ms"] == 1200000
     assert duration_case["risk_tags"] == focused["risk_tags"]
+    assert duration_case["review_loop"]["round_metrics"]["rounds_completed"] == 2
+    assert duration_case["review_loop"]["round_metrics"]["halt_reason"] == "all_candidates_verified"
+    assert duration_case["review_loop"]["round_metrics"]["verifier_fail_candidates"] == 1
+    validate_schema(schema, duration_case)
     assert duration_case["depth_source"] == focused["depth_source"]
     assert duration_case["depth_reason"] == focused["depth_reason"]
     assert duration_case["depth_downgraded"] == focused["depth_downgraded"]
@@ -698,6 +731,8 @@ def validate_step5_write_order() -> None:
     required_snippets = [
         'tmp_run_plan=~/claude-loop-pr-codex/$org-$repository-$pr_number/run-plan.json.tmp',
         '> "$tmp_run_plan" && test -s "$tmp_run_plan" && mv "$tmp_run_plan" ~/claude-loop-pr-codex/$org-$repository-$pr_number/run-plan.json',
+        '--argjson review_loop "$review_loop_json"',
+        'review_loop: ($review_loop | .round_metrics = {',
     ]
     for snippet in required_snippets:
         if snippet not in block:
@@ -865,6 +900,14 @@ def validate_schema_contract(schema: dict[str, object]) -> None:
     items = schema["properties"]["risk_tags"]["items"]
     assert items["enum"] == RISK_TAG_ENUM, f"risk_tags enum mismatch: {items['enum']}"
 
+    review_loop_schema = schema["properties"].get("review_loop")
+    assert isinstance(review_loop_schema, dict), "run-plan schema must include review_loop"
+    halting_policy = review_loop_schema["properties"]["halting_policy"]
+    for key in ("max_rounds", "time_budget_ms", "no_new_evidence_rounds", "repeated_contradiction_limit"):
+        assert key in halting_policy["properties"], f"halting_policy missing {key}"
+    round_metrics = review_loop_schema["properties"]["round_metrics"]
+    for key in ("rounds_completed", "halt_reason", "verifier_fail_candidates", "repeated_contradiction_events"):
+        assert key in round_metrics["properties"], f"round_metrics missing {key}"
     assert schema["properties"]["depth_actual"]["enum"] == ["deep", "standard"]
     assert schema["properties"]["depth_source"]["enum"] == ["argument", "auto", "default"]
     assert schema["properties"]["depth_requested"]["enum"] == ["deep", "standard", None]

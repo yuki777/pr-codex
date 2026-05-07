@@ -9,6 +9,7 @@ GitHub PRを **Claude Code** と **Codex CLI** の2者レビュー方式で自�
 - **冪等実行**: status.json による状態管理で、完了済みPRのスキップや失敗時の再実行に対応
 - **最小権限**: 各レビューツールは読み取り専用で動作し、PRへのコメント投稿時はユーザー承認を得てから行う
 - **生成と投稿を分離**: レビュー生成 (`/pr-codex:review`) と投稿 (`/pr-codex:send`) を別スキルに分け、投稿前にユーザーが内容を承認する
+- **反復精緻化 + halting**: `refine` / `challenge` / `verify` を round 管理し、`max_rounds` / `time_budget_ms` / `no_new_evidence` / `repeated_contradiction` で停止する
 
 ## 必要なもの
 
@@ -92,6 +93,9 @@ cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
 1. **PR候補の取得** — GitHub Search API で `review-requested` のPRを一覧取得
 2. **候補の選定** — 未レビュー・失敗・追加コミットありの最初の1件を選定
 3. **作業ディレクトリの準備** — PRブランチを各ツール用に個別に shallow clone
+4. **2者レビュー実行** — Claude Code と Codex CLI が並行してレビュー
+5. **反復精緻化と結果の統合** — 両者の指摘を `refine` / `challenge` / `verify` round で精査し、halting 後に `review-rounds.json` / `findings.verified.json` / `review.md` を生成
+6. **結果報告** — レビュー結果の要約をユーザーに報告
 4. **stage 化されたレビュー実行** — 既存 Step を logical stage として扱う（ranker / hunter / verifier / explainer）
    - ranker: `run-plan.json` で PR risk/area と実行方針を分類
    - hunter: Claude Code と Codex CLI が並行して広めに候補を集め、`findings.candidates.json` を残す
@@ -231,6 +235,7 @@ python3 tasks/m1_m2_gate.py \
   │     ├── findings.verified.json # canonical findings (`schemas/findings.v1.json`)
   │     ├── findings.sarif        # SARIF v2.1.0 派生成果物。M2 では local-only / upload しない
   │     ├── validation-report.json # validation の副成果物（canonical findings とは分離）
+  │     ├── review-rounds.json    # F5 refine/challenge/verify round artifact。verifier FAIL 候補は local_only で保持
   │     ├── review.md             # 統合レビュー（最終成果物）
   │     ├── preflight-prompt.md   # /pr-codex:send Step 4.5 の Codex verifier prompt
   │     ├── preflight-codex.md    # /pr-codex:send Step 4.5 の人間可読 verifier 結果
@@ -251,6 +256,7 @@ python3 tasks/m1_m2_gate.py \
               ├── preflight-prompt.md
               ├── preflight-codex.md
               ├── preflight-result.json
+              ├── review-rounds.json
               └── ... (他ファイルも一緒に保管される)
 ```
 
@@ -273,6 +279,7 @@ mv ~/claude-loop-pr-codex/sent/yuki777-pr-codex-24 \
 - `recommended_mode == "skip"` の場合だけ `skip_reason` を非空にし、それ以外は `skip_reason=null` にする。`recommended_mode` は depth と直交し、GitHub への自動投稿範囲は depth では拡大しない
 - hunter → verifier 境界の debug artifact は `schemas/findings.candidates.v1.json` (JSON Schema Draft 2020-12) で定義する。`findings.candidates.json` は `id == fingerprint` や 4軸 / evidence / posting policy を要求せず、verifier が canonical findings へ揃える
 - canonical runtime artifact は `schemas/findings.v1.json` (JSON Schema Draft 2020-12) で定義する
+- F5 の round artifact は `schemas/review-rounds.v1.json` で定義し、`review-rounds.json` に `max_rounds` / `time_budget_ms` / `no_new_evidence_rounds` / `repeated_contradiction_limit` と round metrics を保存する
 - fixture oracle は `schemas/expected-findings.v1.json` で定義する。runtime artifact とは分離し、`expected_outcome` / `acceptable_overrides` / `strictness_profile` / `minimum_evidence_level` など採点用メタデータを保持する
 - fixture scoring の出力は `schemas/score-report.v1.json`、M1→M2 gate report は `schemas/m1-m2-gate.v1.json` で定義する
 - `findings.verified.json` は top-level `generated_at` を持ち、per-finding `created_at` は持たない
@@ -310,6 +317,21 @@ mv ~/claude-loop-pr-codex/sent/yuki777-pr-codex-24 \
 - `result.partialFingerprints.canonical` は canonical `finding.id` と同じ安定 fingerprint。`result.guid` は SARIF 公式 schema の GUID 制約を満たすため、この fingerprint から導出した deterministic UUIDv5 を使う
 - `result.fixes[]` は M2 では出力しない。`suggestion` は `message.text` に含め、機械適用可能な修正としては扱わない
 - `posting.post_policy=local_only` は `suppressions: [{kind: "external", status: "accepted", justification: "local_only per pr-codex post_policy"}]` を付ける。`posting.post_policy=suppress` は SARIF に出力しない。Nit は `post_policy` が壊れていても SARIF 側で suppression を要求する
+
+## Review rounds / halting policy
+
+`/pr-codex:review` の Step 4c は、single-pass で final findings を確定せず、候補を `refine` / `challenge` / `verify` の round で精緻化する。停止条件は `run-plan.json.review_loop.halting_policy` と `review-rounds.json.policy` に同じ値で残す。
+
+既定の halting policy:
+
+- `max_rounds = 3` — round 数の上限。到達したら `halt_reason=max_rounds`
+- `time_budget_ms = estimated_timeout_ms` — 追加 round 開始前に予算を確認し、超過なら `halt_reason=time_budget`
+- `no_new_evidence_rounds = 1` — 新しい根拠がない round が続く場合は `halt_reason=no_new_evidence`
+- `repeated_contradiction_limit = 2` — 同じ contradiction signature が繰り返されたら `halt_reason=repeated_contradiction` とし、oscillation を止める
+- `verifier_fail_policy = local_artifact_only` — `verifier FAIL` 候補は `review-rounds.json.rounds[].rejected_candidates[]` に `local_only=true` で残し、`findings.verified.json` / `review.md` / GitHub 投稿 payload には含めない
+- `insufficient_evidence_policy = suppress_to_local_artifact` — 根拠不足候補も local artifact のみ。raw log / secret / token / authorization / private key は保存しない
+
+`run-plan.json.review_loop.round_metrics` は完了時に `rounds_completed` / `halt_reason` / `verifier_fail_candidates` / `suppressed_candidate_count` / `no_new_evidence_rounds` / `repeated_contradiction_events` / `insufficient_evidence_events` / `oscillation_detected` を持つ。F11 eval report (`schemas/eval-report.v1.json`) は baseline と iterative run の両方に `round_metrics` を含め、round 有無による timeout completion / false positive / oscillation 差分を比較できるようにする。
 
 ## Preflight result schema
 
