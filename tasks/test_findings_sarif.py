@@ -18,7 +18,7 @@ GENERATOR_PATH = TASKS / "generate_findings_sarif.py"
 VALIDATOR_PATH = TASKS / "validate_findings_sarif.py"
 sys.path.insert(0, str(TASKS))
 
-from generate_findings_sarif import SarifGenerationError, build_sarif, must_fix_count  # noqa: E402
+from generate_findings_sarif import SarifGenerationError, build_sarif, must_fix_count, scrub_text  # noqa: E402
 from validate_findings import compute_fingerprint  # noqa: E402
 from validate_findings_sarif import validate_findings_sarif  # noqa: E402
 
@@ -188,6 +188,40 @@ class FindingsSarifTest(unittest.TestCase):
         invalid_location["location"] = {"path": r"C:\Users\alice\repo\src\App.php", "start_line": 10, "side": "RIGHT"}
         with self.assertRaisesRegex(SarifGenerationError, "repository-relative paths"):
             build_sarif(canonical_artifact([invalid_location]), metadata=metadata(), ranges=None)
+
+    def test_general_posix_absolute_paths_are_scrubbed_from_messages_and_rejected_as_locations(self) -> None:
+        finding = make_finding(
+            severity="should_fix",
+            category="bug",
+            title="`path` exposes /tmp/pr-codex-secret.txt",
+            path="src/App.php",
+            line=10,
+            post_policy="body_summary",
+        )
+        finding["problem"] = "Temp path /tmp/pr-codex-secret.txt and mount path /mnt/c/Users/alice/repo leak host context."
+        finding["reason"] = "Workspace path /workspace/build/repo and var path /var/folders/cache are host-local context."
+        finding["suggestion"] = "Keep URLs like https://example.com/tmp/file and //cdn.example.com/asset.js intact, but redact host paths."
+        refresh_fingerprint(finding)
+        sarif = build_sarif(canonical_artifact([finding]), metadata=metadata(), ranges={"src/App.php": [(1, 20)]})
+        message = sarif["runs"][0]["results"][0]["message"]["text"]
+        self.assertIn("<absolute-path>", message)
+        for leaked in ("/tmp/pr-codex-secret.txt", "/mnt/c/Users/alice", "/workspace/build", "/var/folders"):
+            self.assertNotIn(leaked, message)
+        self.assertIn("https://example.com/tmp/file", message)
+        self.assertIn("//cdn.example.com/asset.js", message)
+
+        invalid_location = copy.deepcopy(finding)
+        invalid_location["location"] = {"path": "/tmp/repo/src/App.php", "start_line": 10, "side": "RIGHT"}
+        with self.assertRaisesRegex(SarifGenerationError, "repository-relative paths"):
+            build_sarif(canonical_artifact([invalid_location]), metadata=metadata(), ranges=None)
+
+    def test_scrubbed_file_uri_suffix_rejects_general_posix_absolute_paths(self) -> None:
+        self.assertEqual(scrub_text("file:///tmp/pr-codex-secret.txt"), "<absolute-path>")
+        artifact = canonical_artifact()
+        sarif = build_sarif(artifact, metadata=metadata(), ranges={"src/App.php": [(1, 20)]})
+        sarif["runs"][0]["results"][0]["message"]["text"] = "Leaked <absolute-path>:/tmp/pr-codex-secret.txt"
+        errors = validate_findings_sarif(self.schema, sarif, findings=artifact)
+        self.assertTrue(any("message.text: must not leak host absolute paths" in error for error in errors), errors)
 
     def test_empty_findings_still_emit_valid_empty_results(self) -> None:
         artifact = canonical_artifact([])
