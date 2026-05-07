@@ -14,6 +14,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 TASKS = ROOT / "tasks"
 CANDIDATES_SCHEMA = ROOT / "schemas" / "findings.candidates.v1.json"
+FINDINGS_SCHEMA = ROOT / "schemas" / "findings.v1.json"
 CANDIDATES_VALIDATOR = TASKS / "validate_candidates.py"
 STATUS_VALIDATOR = TASKS / "validate_status.py"
 SKILL = ROOT / "skills" / "review" / "SKILL.md"
@@ -129,6 +130,22 @@ class StageArtifactTests(unittest.TestCase):
         metadata["head_sha"] = "a" * 40
         self.assert_invalid_candidates(valid_candidates(), "$.pr.head_sha: must match metadata.head_sha", metadata)
 
+    def test_candidates_cli_rejects_wrong_schema_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            data_path = Path(tmp) / "findings.candidates.json"
+            data_path.write_text(json.dumps(valid_candidates(), ensure_ascii=True), encoding="utf-8")
+            result = subprocess.run(
+                [sys.executable, str(CANDIDATES_VALIDATOR), "--schema", str(FINDINGS_SCHEMA), "--data", str(data_path)],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertIn("invalid candidates schema file", result.stderr)
+        self.assertIn("$schema.$id", result.stderr)
+        self.assertIn("$schema.properties.schema_version.const", result.stderr)
+        self.assertNotIn("VALID candidates artifact", result.stdout)
+
     def test_status_stage_fields_are_backward_compatible_and_validated(self) -> None:
         legacy_running = {"state": "running", "started_at": "2026-05-06T08:00:00Z", "head_sha": "abc1234"}
         self.assertEqual(validate_status(legacy_running), [])
@@ -168,11 +185,14 @@ class StageArtifactTests(unittest.TestCase):
             "logical stage: explainer",
             "findings.candidates.json",
             "python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_candidates.py",
+            "python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_status.py --data ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json",
             "failed_stage",
             "selected_hunters` は ranker 出力の interface",
         ):
             self.assertIn(snippet, text)
         self.assertIn('selected_hunters: ["claude", "codex"]', text)
+        self.assertGreaterEqual(text.count("python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_status.py"), 3)
+        self.assertIn("status.json` を `tasks/validate_status.py` で検証", README.read_text(encoding="utf-8"))
 
     def test_stage_docs_define_roles_inputs_outputs_and_halting(self) -> None:
         text = STAGES_DOC.read_text(encoding="utf-8")

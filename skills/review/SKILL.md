@@ -359,11 +359,11 @@ date -u +%Y-%m-%dT%H:%M:%S+00:00
 ```
 
 - いつ使うか: 作業ディレクトリと clone の準備完了後に実行する
-- 判定条件: `status.json` が `running` で作成される
+- 判定条件: `status.json` が `running` で作成され、`tasks/validate_status.py` を通過する
 - 次アクション: metadata 作成へ進む
 
 ```bash
-jq -n --arg started_at "$started_at" --arg head_sha "$head_sha" '{state:"running",started_at:$started_at,head_sha:$head_sha,stage:"ranker",failed_stage:null}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json
+jq -n --arg started_at "$started_at" --arg head_sha "$head_sha" '{state:"running",started_at:$started_at,head_sha:$head_sha,stage:"ranker",failed_stage:null}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json && python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_status.py --data ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json
 ```
 
 - いつ使うか: `status.json` 作成後に実行する
@@ -831,20 +831,20 @@ jq -n --argjson files_changed "$files_changed" --argjson hunks "$hunks" --argjso
 ```
 
 - いつ使うか: 上の `run-plan.json` 更新成功直後に実行する
-- 判定条件: `status.json` の `state` が `completed` になる
+- 判定条件: `status.json` の `state` が `completed` になり、`tasks/validate_status.py` を通過する
 - 次アクション: Step 6 の結果報告へ進む
 
 ```bash
-jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" --arg head_sha "$head_sha" '{state:"completed",started_at:$started_at,finished_at:$finished_at,exit_code:0,head_sha:$head_sha,stage:"explainer",failed_stage:null}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json
+jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" --arg head_sha "$head_sha" '{state:"completed",started_at:$started_at,finished_at:$finished_at,exit_code:0,head_sha:$head_sha,stage:"explainer",failed_stage:null}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json && python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_status.py --data ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json
 ```
 
 - いつ使うか: Step 4a または 4b が timeout / 非ゼロ終了した場合、権限不足などで処理継続不可の場合、**または Step 4c のスコープ検証で `claude-review.md` / `codex-review.md` のいずれかが `PR_DIFF_UNAVAILABLE` のみだった場合**に実行する
 - 事前条件: `$failed_stage` を `ranker` / `hunter` / `verifier` / `explainer` のいずれか 1 つに設定する。metadata/files/diff/run-plan 生成失敗は `ranker`、4a/4b timeout/非ゼロ/`PR_DIFF_UNAVAILABLE`/candidate validation 失敗は `hunter`、4軸/range/fingerprint/Must Fix 件数/`findings.verified.json` validator 失敗は `verifier`、temp write または temp→final `mv` 失敗は `explainer` とする
-- 判定条件: `status.json` の `state` が `failed` かつ `failed_stage` が `$failed_stage` と一致する
+- 判定条件: `status.json` の `state` が `failed` かつ `failed_stage` が `$failed_stage` と一致し、`tasks/validate_status.py` を通過する
 - 次アクション: Step 6 の結果報告へ進む
 
 ```bash
-jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" --arg head_sha "$head_sha" --arg failed_stage "$failed_stage" '{state:"failed",started_at:$started_at,finished_at:$finished_at,exit_code:1,head_sha:$head_sha,stage:$failed_stage,failed_stage:$failed_stage}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json
+jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" --arg head_sha "$head_sha" --arg failed_stage "$failed_stage" '{state:"failed",started_at:$started_at,finished_at:$finished_at,exit_code:1,head_sha:$head_sha,stage:$failed_stage,failed_stage:$failed_stage}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json && python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_status.py --data ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json
 ```
 
 ### Step 6: 結果報告
@@ -928,7 +928,7 @@ $CLAUDE_PLUGIN_ROOT/tasks/
 
 本スキルは Claude Code を `--permission-mode auto` で起動することを前提とする（README の「使い方」参照）。auto mode でも、許可済みツールやコマンドの内容によっては分類器の判断で承認が必要になり得るため、本スキルではテンプレートに明示された操作だけを実行する。
 
-ローカルの書き込みは作業ディレクトリ `~/claude-loop-pr-codex/` 配下に限り、`clone-claude/` / `clone-codex/` の作成と更新、`status.json` / `metadata.json` / `run-plan.json` / `pr.diff` / `pr.diff.ranges.txt` / `claude.log` / `codex.log` / `claude-review.md` / `codex-review.md` / `findings.candidates.json` / `findings.verified.json` / `validation-report.json` / `review.md` と、それらの `*.tmp` 一時ファイル作成のみ許可する。schema / fingerprint validation のために `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_candidates.py ...` と `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings.py ...` を実行してよいが、validator は成果物を書き換えず検証だけに使う。
+ローカルの書き込みは作業ディレクトリ `~/claude-loop-pr-codex/` 配下に限り、`clone-claude/` / `clone-codex/` の作成と更新、`status.json` / `metadata.json` / `run-plan.json` / `pr.diff` / `pr.diff.ranges.txt` / `claude.log` / `codex.log` / `claude-review.md` / `codex-review.md` / `findings.candidates.json` / `findings.verified.json` / `validation-report.json` / `review.md` と、それらの `*.tmp` 一時ファイル作成のみ許可する。schema / fingerprint / status validation のために `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_candidates.py ...` と `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings.py ...` と `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_status.py ...` を実行してよいが、validator は成果物を書き換えず検証だけに使う。
 
 F11 の regression eval (`score_fixture.py` / `m1_m2_gate.py`) は通常の `/pr-codex:review` 実行フローには組み込まない。手動 deep eval で `findings.verified.json` を採点する場合のみ、README / `fixtures/README.md` の手順に従って `artifacts/` 配下へ `score-report.v1` / `m1-m2-gate.v1` を出力する。CI では固定 stub の deterministic test だけを実行し、LLM や GitHub write/API 投稿は必須経路に入れない。
 
@@ -946,7 +946,7 @@ F11 の regression eval (`score_fixture.py` / `m1_m2_gate.py`) は通常の `/pr
    - `pr.diff.ranges.txt` は Step 3 の `awk` の標準出力を `>` でリダイレクトして作成する
    - `claude-review.md` / `codex-review.md` / `claude.log` / `codex.log` は Step 4a / 4b の標準出力・標準エラーを `>` / `2>` でリダイレクトして作成する
 7. Step 4a / 4b の timeout は必ず `1200000` に固定する
-8. テンプレートに明示された `git fetch` / `git checkout FETCH_HEAD` / `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_candidates.py ...` / `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings.py ...` / temp file から final artifact への `mv` / 成果物ファイル作成以外の状態変更操作は実行しない。禁止例: `git push` / `git merge` / `git reset --*` / `git clean -fd[x]` / `git stash` / `git commit` / `git tag` / `git branch -D`、`rm -rf` 系、`gh pr` / `gh issue` の write 操作、および GitHub / Backlog / DocBase の write 系 MCP ツール
+8. テンプレートに明示された `git fetch` / `git checkout FETCH_HEAD` / `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_candidates.py ...` / `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings.py ...` / `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_status.py ...` / temp file から final artifact への `mv` / 成果物ファイル作成以外の状態変更操作は実行しない。禁止例: `git push` / `git merge` / `git reset --*` / `git clean -fd[x]` / `git stash` / `git commit` / `git tag` / `git branch -D`、`rm -rf` 系、`gh pr` / `gh issue` の write 操作、および GitHub / Backlog / DocBase の write 系 MCP ツール
 9. 1回の実行で選定・処理する PR は 1 件のみとする
 10. Step 4a / 4b のプロンプト中に含まれる `{REVIEW_CRITERIA}` / `{RUN_PLAN_GUIDANCE}` / `{DEPTH_GUIDANCE}` プレースホルダは、Step 4 前処理で Read した `REVIEW_CRITERIA.md` と `run-plan.json` を元に Claude 側で置換したうえで、Bash ツールに渡す完全体のコマンド文字列として使う。`{REVIEW_CRITERIA}` / `{RUN_PLAN_GUIDANCE}` / `{DEPTH_GUIDANCE}` のいずれも bash double-quote 内で安全になるよう、差し込み前に **`\` → `\\`、`"` → `\"`、`$` → `\$`、`` ` `` → `\``** の順でエスケープする。シェルでのコマンド置換 (`$()`) やヒアドキュメントは使わない
 

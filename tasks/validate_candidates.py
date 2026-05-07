@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 EXPECTED_SCHEMA_VERSION = "findings.candidates.v1"
+EXPECTED_SCHEMA_ID = "https://raw.githubusercontent.com/yuki777/pr-codex/main/schemas/findings.candidates.v1.json"
 SHA_RE = re.compile(r"^[0-9a-fA-F]{7,64}$")
 REPOSITORY_RE = re.compile(r"^[^/\s]+/[^/\s]+$")
 RFC3339_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$")
@@ -96,6 +97,37 @@ def add_unexpected(errors: list[str], path: str, obj: Any, allowed: set[str]) ->
         extra = sorted(set(obj) - allowed)
         if extra:
             errors.append(f"{path}: unexpected properties: {', '.join(extra)}")
+
+
+def validate_schema_file(schema: Any) -> list[str]:
+    """Ensure --schema is the candidates schema, not just any JSON schema.
+
+    The runtime gate intentionally requires callers to pass
+    schemas/findings.candidates.v1.json so wiring mistakes (for example passing
+    schemas/findings.v1.json) fail before artifact validation.
+    """
+
+    if not isinstance(schema, dict):
+        return ["$schema: must be an object"]
+
+    errors: list[str] = []
+    if schema.get("$id") != EXPECTED_SCHEMA_ID:
+        errors.append(f"$schema.$id: must equal '{EXPECTED_SCHEMA_ID}'")
+
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        errors.append("$schema.properties: must be an object")
+        return errors
+
+    schema_version = properties.get("schema_version")
+    if not isinstance(schema_version, dict) or schema_version.get("const") != EXPECTED_SCHEMA_VERSION:
+        errors.append(f"$schema.properties.schema_version.const: must equal '{EXPECTED_SCHEMA_VERSION}'")
+
+    candidates = properties.get("candidates")
+    if not isinstance(candidates, dict) or candidates.get("type") != "array":
+        errors.append("$schema.properties.candidates.type: must equal 'array'")
+
+    return errors
 
 
 def require_keys(errors: list[str], path: str, obj: dict[str, Any], required: set[str]) -> None:
@@ -261,8 +293,11 @@ def main() -> int:
         print(f"INVALID: {exc}", file=sys.stderr)
         return 1
 
-    if not isinstance(schema, dict) or schema.get("$id") is None:
+    schema_errors = validate_schema_file(schema)
+    if schema_errors:
         print(f"{args.schema}: invalid candidates schema file", file=sys.stderr)
+        for error in schema_errors:
+            print(f"- {error}", file=sys.stderr)
         return 2
 
     errors = validate_candidates(data, metadata)
