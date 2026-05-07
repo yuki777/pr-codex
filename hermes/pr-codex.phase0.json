@@ -60,6 +60,12 @@
       "schedule": "0 9 * * *",
       "profile": "sheriff",
       "command": "test -n \"$PR_CODEX_HERMES_ROOT\" && python3 \"$PR_CODEX_HERMES_ROOT/scripts/pr_codex_daily_digest.py\" --repo yuki777/pr-codex --board pr-codex --tenant yuki777/pr-codex --state \"$PR_CODEX_HERMES_ROOT/automation/pr-codex/state.json\" --outbox \"$PR_CODEX_HERMES_ROOT/automation/pr-codex/tasks.jsonl\" --sink hermes --json"
+    },
+    {
+      "name": "pr-codex-developer-bridge",
+      "schedule": "every 15m",
+      "profile": "sheriff",
+      "command": "test -n \"$PR_CODEX_HERMES_ROOT\" && python3 \"$PR_CODEX_HERMES_ROOT/scripts/pr_codex_developer_bridge.py\" --repo yuki777/pr-codex --board pr-codex --json"
     }
   ],
   "safety": {
@@ -71,5 +77,15 @@
     "auto_approve": false,
     "auto_merge": false
   },
-  "hermes_root_env": "PR_CODEX_HERMES_ROOT"
+  "hermes_root_env": "PR_CODEX_HERMES_ROOT",
+  "phase_2b": {
+    "review_feedback_lifecycle": {
+      "enabled": true,
+      "script": "$PR_CODEX_HERMES_ROOT/scripts/pr_codex_developer_bridge.py",
+      "review_author": "chatgpt-codex-connector",
+      "policy": "every chatgpt-codex-connector review thread requires an explicit Japanese reply after fix, triage, or deferral",
+      "task_idempotency_key": "developer:auto:codex-thread-reply:<repo>:<pr>:<head_sha>:<thread_id>:v1",
+      "premerge_gate": "block/warn when any open PR has unreplied chatgpt-codex-connector review threads"
+    }
+  }
 }
