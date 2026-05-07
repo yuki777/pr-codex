@@ -1,0 +1,85 @@
+{
+  "schema_version": "findings.v1",
+  "producer": {
+    "name": "pr-codex-eval-stub",
+    "version": "1.7.0",
+    "run_id": "large-scoring-stub"
+  },
+  "pr": {
+    "repository": "bearsunday/BEAR.Sunday",
+    "number": 171,
+    "base_sha": "839b7d96f0b0afc048f487d7491e1139dd246f81",
+    "head_sha": "e2d7bf9d7010c4519f069b4a5a6d67113abe84a1",
+    "merge_commit_sha": "0e2595448ba34e3de77571b35b3faeb4ddba7eec"
+  },
+  "generated_at": "2026-05-06T00:00:00Z",
+  "findings": [
+    {
+      "id": "d643adba9e825b7029f319fbe971b9b94972aaf501d3b57d5ca0e5c9338cb9e0",
+      "fingerprint": "d643adba9e825b7029f319fbe971b9b94972aaf501d3b57d5ca0e5c9338cb9e0",
+      "source_agents": [
+        "eval_stub"
+      ],
+      "merged_from": [
+        "fixtures/scoring-stubs"
+      ],
+      "location": {
+        "path": "psalm.xml",
+        "start_line": 1,
+        "side": "RIGHT"
+      },
+      "severity": "should_fix",
+      "category": "consistency",
+      "title": "psalm.xml phpVersion still 7.4 while composer.json requires PHP ^8.0",
+      "problem": "psalm.xml phpVersion still 7.4 while composer.json requires PHP ^8.0",
+      "reason": "Deterministic scoring stub for F11 regression eval.",
+      "suggestion": "Use this artifact only as CI-safe scoring input.",
+      "evidence_level": "corroborated",
+      "axes": {
+        "real": "yes",
+        "triggerable": "yes",
+        "impactful": "yes",
+        "general": "no"
+      },
+      "posting": {
+        "post_policy": "local_only",
+        "explanation_postable": true,
+        "audience": "human_reviewer"
+      }
+    },
+    {
+      "id": "a650771913522a7bda29932d313e5bb467f0acd337748f10ddf4f169d0a5d8ae",
+      "fingerprint": "a650771913522a7bda29932d313e5bb467f0acd337748f10ddf4f169d0a5d8ae",
+      "source_agents": [
+        "eval_stub"
+      ],
+      "merged_from": [
+        "fixtures/scoring-stubs"
+      ],
+      "location": {
+        "path": "rector.php",
+        "start_line": 1,
+        "side": "RIGHT"
+      },
+      "severity": "nit",
+      "category": "code_quality",
+      "title": "rector.php registers AnnotationBindingRector::class twice",
+      "problem": "rector.php registers AnnotationBindingRector::class twice",
+      "reason": "Deterministic scoring stub for F11 regression eval.",
+      "suggestion": "Use this artifact only as CI-safe scoring input.",
+      "evidence_level": "suspicion",
+      "axes": {
+        "real": "yes",
+        "triggerable": "no",
+        "impactful": "no",
+        "general": "no"
+      },
+      "posting": {
+        "post_policy": "local_only",
+        "explanation_postable": false,
+        "not_postable_reason": "low_evidence_suspicion",
+        "audience": "human_reviewer"
+      }
+    }
+  ]
+}

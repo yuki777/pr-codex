@@ -1,0 +1,17 @@
+{
+  "schema_version": "findings.v1",
+  "producer": {
+    "name": "pr-codex-eval-stub",
+    "version": "1.7.0",
+    "run_id": "small-scoring-stub"
+  },
+  "pr": {
+    "repository": "bearsunday/BEAR.Sunday",
+    "number": 164,
+    "base_sha": "190ba62385bdf76e70f9e174289230ca979e9c70",
+    "head_sha": "68924ee3530f0fe170abed50f9ac19e204aadc0b",
+    "merge_commit_sha": "736947a5c67507c1bb6ac95da0429694e874ad7e"
+  },
+  "generated_at": "2026-05-06T00:00:00Z",
+  "findings": []
+}

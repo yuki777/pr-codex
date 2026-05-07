@@ -16,7 +16,7 @@ GitHub PRを **Claude Code** と **Codex CLI** の2者レビュー方式で自�
 - Codex CLI (`codex-cli 0.128.0` 以上、`codex --ask-for-approval never -m gpt-5.5 ... exec` が使えること)
 - GitHub CLI (`gh`)
 - `jq`（SKILL.md 内の全テンプレートで利用する。macOS 標準では未インストール）
-- `python3`（同梱 validator `tasks/validate_candidates.py` / `tasks/validate_findings.py` / `tasks/validate_status.py` / `tasks/validate_preflight_result.py` で `findings.candidates.json` / `findings.verified.json` / `status.json` / `preflight-result.json` を検証するため）
+- `python3`（同梱 validator / eval runner で `findings.candidates.json` / `findings.verified.json` / `status.json` / `preflight-result.json` / fixture scoring artifact を検証するため）
 
 ## セットアップ
 
@@ -49,7 +49,7 @@ cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
 ```
 
 - `--permission-mode auto` — `/loop` を非対話で回すために auto mode で起動する。auto mode は分類器による安全チェックでツール実行を自動承認またはブロックするため、すべての操作が無条件に通るわけではない。本スキルはテンプレートに明示した操作だけを実行し、ローカル書き込みは `~/claude-loop-pr-codex/` 配下の成果物作成に限定する
-- `--effort max` — `low` / `medium` / `high` / `xhigh` / `max` のうち `max` を指定し、レビュー時の推論深度を最も深くする
+- `--effort max` — Claude Code 本体の推論設定。`/pr-codex:review --deep` / `--standard` の depth policy とは別軸
 - Codex CLI 側のレビューと投稿前検証は、スキル内で `-m gpt-5.5` を指定して実行する。レビュー実行では `model_reasoning_effort` をスキル側で上書きせず、ユーザー config の値を使う。投稿前検証は `--ignore-user-config` でユーザー config から切り離す
 - Codex CLI は `codex-cli 0.128.0` 以降のみ対応する。旧バージョン向けテンプレートは打ち切り、`--sandbox read-only` / `--color never` / `--ephemeral` を並べる旧形式ではなく、`-c sandbox_mode=read-only` と preflight 限定の `--ignore-user-config` を使う
 
@@ -59,9 +59,32 @@ cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
 # 手動実行でレビューする
 /pr-codex:review
 
+# 深くレビューする（高リスク・小規模PR向け）
+/pr-codex:review --deep
+
+# 高速 path を明示する
+/pr-codex:review --standard
+
 # 10分間隔で自動レビューする
 /loop 10m /pr-codex:review
 ```
+
+## Depth control
+
+`/pr-codex:review` はレビュー深度を `standard` / `deep` の 2 値で記録する。既定はコストと 20 分 timeout を優先する `standard` で、`deep` は高リスク・小規模 PR または手動指定向け。
+
+| 入力 / signal | selected depth | artifact |
+| --- | --- | --- |
+| `/pr-codex:review --deep` かつ `lines_added + lines_removed <= 5000` | `deep` | `depth_source=argument`, `depth_requested=deep`, `depth_downgraded=false` |
+| `/pr-codex:review --deep` かつ `lines_added + lines_removed > 5000` | `standard` 強制 | `depth_source=argument`, `depth_requested=deep`, `depth_downgraded=true`, `depth_downgrade_reason` |
+| `/pr-codex:review --standard` | `standard` | `depth_source=argument`, `depth_requested=standard` |
+| 引数なし、`risk_tags` に `security` または `data_migration` を含み、`files_changed <= 20` かつ `lines_added + lines_removed <= 1500` | `deep` | `depth_source=auto` |
+| 引数なしで上記以外 | `standard` | `depth_source=default` |
+| 引数なし、かつ `lines_added + lines_removed > 5000` | `standard` | `depth_source=default`, `depth_downgraded=false`, `depth_reason` に大規模ガード理由を記録 |
+
+`run-plan.json` には `depth_actual` / `depth_source` / `depth_reason` / `depth_requested` / `depth_downgraded` / `depth_downgrade_reason` を保存するため、standard/deep の選択は deterministic に追跡できる。
+
+`recommended_mode` (`standard` / `focused` / `skip`) は depth とは直交する別軸。`recommended_mode` は「観点や対象範囲の絞り込み」、depth は「1観点あたりの掘り下げ深さ」を表す。たとえば `recommended_mode=focused` かつ `depth_actual=deep` の組み合わせは有効で、focused fallback / skip recommendation と矛盾しない。
 
 ## レビューフロー
 
@@ -111,12 +134,76 @@ Issue #28 の Phase 0 実装として、`hermes/` 配下に pr-codex 専用の H
 
 - `hermes/profiles/` — `issue-triager` / `pr-reviewer` / `review-triager` / `developer` / `sheriff` の profile 方針
 - `hermes/scripts/pr_codex_watch.py` — GitHub の Issue / PR / review 差分を polling し、冪等に Kanban task 化
+- `hermes/scripts/issue_triager_publish.py` — Phase 1B の issue-triager コメント投稿ポリシーを dry-run/default-off で評価
 - `hermes/scripts/pr_codex_kanban_health.py` — blocked / stale / retry / ready 放置 task の検出
 - `hermes/scripts/pr_codex_daily_digest.py` — daily digest 生成
 - `hermes/install_phase0.sh` — ローカルの `~/.hermes/` へ profile/script/board/state を導入する補助スクリプト
 - `hermes/pr-codex.phase0.json` — board/profile/cron/safety の Phase 0 設定
 
-Phase 0 は read-only observer です。GitHub への自動コメント、label/milestone/assignee 変更、push、approve、merge は行いません。詳細は [`hermes/README.md`](hermes/README.md) を参照してください。
+Phase 0 は read-only observer です。Phase 1B では issue-triager の GitHub Issue コメント投稿ポリシーを文書化し、sentinel/idempotency/scrub/dry-run report を追加していますが、既定では投稿しません。label/milestone/assignee 変更、close/reopen、push、approve、merge は行いません。詳細は [`hermes/README.md`](hermes/README.md) を参照してください。
+
+## Regression eval / fixture scoring (F11)
+
+CI では LLM を起動せず、固定 fixture と stub artifact だけで schema / runner の deterministic smoke test を行う。手動 deep eval では実レビューで生成した `findings.verified.json` を fixture oracle と比較し、M1→M2 gate report に集約する。
+
+### CI-safe smoke
+
+```bash
+python3 -m unittest discover -s tasks -p "test_*.py"
+```
+
+このテストは `fixtures/<size>/scoring-stubs/*.findings.verified.json` を使い、`expected-findings.v1` / `score-report.v1` / `m1-m2-gate.v1` の validation と scoring runner の分岐を確認する。実 LLM / `gh api` / GitHub write 操作は含めない。
+
+### Manual deep eval
+
+実レビューの出力を採点する場合は、fixture ごとに `findings.verified.json` を用意して `artifacts/`（gitignore 済み）へ score report を出す。
+
+```bash
+mkdir -p artifacts
+
+python3 tasks/score_fixture.py \
+  --expected fixtures/small/expected-findings.json \
+  --actual /path/to/small/findings.verified.json \
+  --out artifacts/score-small.json
+
+python3 tasks/score_fixture.py \
+  --expected fixtures/medium/expected-findings.json \
+  --actual /path/to/medium/findings.verified.json \
+  --out artifacts/score-medium.json
+
+python3 tasks/score_fixture.py \
+  --expected fixtures/large/expected-findings.json \
+  --actual /path/to/large/findings.verified.json \
+  --out artifacts/score-large.json
+```
+
+M1→M2 gate は運用実測値を `m1-m2-inputs.v1` として外部供給する。未計測項目は省略でき、省略された criteria は `unknown` として記録される（unknown は fail にはしない）。
+
+```json
+{
+  "schema_version": "m1-m2-inputs.v1",
+  "payload_422_count": 0,
+  "must_fix_count_by_source": {
+    "findings_verified": 2,
+    "review_md": 2,
+    "payload": 2
+  },
+  "step_4_5_pass_rate_baseline": 0.78,
+  "step_4_5_pass_rate_current": 0.81,
+  "run_plan_emitted": true,
+  "loop_completion_rate_baseline": 0.92,
+  "loop_completion_rate_current": 0.95
+}
+```
+
+```bash
+python3 tasks/m1_m2_gate.py \
+  --score-reports artifacts/score-small.json artifacts/score-medium.json artifacts/score-large.json \
+  --inputs artifacts/m1-m2-inputs.json \
+  --out artifacts/m1-m2-gate.json
+```
+
+`m1-m2-gate.json` は `payload_compat_422` / `must_fix_count_consistency` / `step_4_5_pass_rate` / `run_plan_emitted` / `loop_completion_rate` / `fixture_scoring_gate` を `pass` / `fail` / `unknown` で記録し、総合結果を `pass` / `fail` / `blocked_by_unknowns` に集約する。`fixture_scoring_gate` は small / medium / large の3 fixture が揃っていることに加え、各 `score-report.v1` に埋め込まれた oracle 由来の `scoring_gate` / `oracle_sha256` / `expected_finding_ids` と `gate_checks` の閾値が fixture ごとの固定 oracle と一致することも確認する。
 
 ## ファイル構成
 
@@ -125,6 +212,7 @@ Phase 0 は read-only observer です。GitHub への自動コメント、label/
   ├── $org-$repo-$pr/             # 進行中 / 未投稿のレビュー
   │     ├── status.json           # 実行状態（running / completed / failed）
   │     ├── metadata.json         # PR情報（org, repo, pr_number, head_sha 等）
+  │     ├── run-plan.json         # preflight 指標、recommended_mode、選択された depth と理由
   │     ├── pr.diff               # PR 差分 (unified diff)
   │     ├── pr.diff.ranges.txt    # GitHub inline comment 可能範囲
   │     ├── clone-claude/         # Claude Code 用 shallow clone
@@ -169,8 +257,14 @@ mv ~/claude-loop-pr-codex/sent/yuki777-pr-codex-24 \
 
 ## Schema
 
+- `run-plan.json` は `schemas/run-plan.schema.json` で定義し、review の depth policy と `recommended_mode` を記録する
+- `depth_actual` は `standard` / `deep` の 2 値。`depth_source` は `argument` / `auto` / `default`、`depth_requested` は明示指定がない場合 `null`
+- `depth_downgraded == true` の場合は `depth_requested=deep` / `depth_actual=standard` / `depth_downgrade_reason` 非空でなければならない
+- `recommended_mode == "skip"` の場合だけ `skip_reason` を非空にし、それ以外は `skip_reason=null` にする。`recommended_mode` は depth と直交し、GitHub への自動投稿範囲は depth では拡大しない
 - hunter → verifier 境界の debug artifact は `schemas/findings.candidates.v1.json` (JSON Schema Draft 2020-12) で定義する。`findings.candidates.json` は `id == fingerprint` や 4軸 / evidence / posting policy を要求せず、verifier が canonical findings へ揃える
 - canonical runtime artifact は `schemas/findings.v1.json` (JSON Schema Draft 2020-12) で定義する
+- fixture oracle は `schemas/expected-findings.v1.json` で定義する。runtime artifact とは分離し、`expected_outcome` / `acceptable_overrides` / `strictness_profile` / `minimum_evidence_level` など採点用メタデータを保持する
+- fixture scoring の出力は `schemas/score-report.v1.json`、M1→M2 gate report は `schemas/m1-m2-gate.v1.json` で定義する
 - `findings.verified.json` は top-level `generated_at` を持ち、per-finding `created_at` は持たない
 - `findings.verified.json.pr.repository` は **投稿先の base repo** (`owner/repo`) に固定する。fork PR でも head repo ではなく、`metadata.json.repository_full_name` および `/pr-codex:send` の投稿先 `$org/$repository` と一致させる
 - M1 の `finding.id` は **`fingerprint` と同値**に固定する（retry / send の `source_finding_id` / eval harness 比較で決定論的に追跡するため）
@@ -181,6 +275,7 @@ mv ~/claude-loop-pr-codex/sent/yuki777-pr-codex-24 \
 - `status.json` は `stage` / `failed_stage` を optional に持ち、F4 以降の新規実行では failed 時に ranker / hunter / verifier / explainer のどこで停止したかを残す
 - schema 自体は `location.side` に `LEFT` も残すが、M1 の send workflow は `RIGHT` のみ受け付ける
 - `tasks/validate_findings.py` は JSON shape / enum / conditional rule / RFC3339 date-time / URI / `end_line >= start_line` / `id == fingerprint` / fingerprint 再計算 / `metadata.json` との PR context 一致を stdlib-only で検証する
+- `tasks/validate_expected_findings.py` / `tasks/validate_score_report.py` / `tasks/validate_m1_m2_gate.py` は eval artifact を stdlib-only で検証する
 
 
 ## Preflight result schema
