@@ -375,10 +375,10 @@ jq -n --arg org "$org" --arg repository "$repository" --arg repository_full_name
 ```
 
 - いつ使うか: `metadata.json` 作成直後に必ず実行する
-- 判定条件: `run-plan.json` が作成され、`files_changed` / `hunks` / `lines_added` / `lines_removed` / `risk_tags` / `selected_hunters` / `depth_actual` / `depth_source` / `depth_reason` / `depth_requested` / `depth_downgraded` / `depth_downgrade_reason` / `recommended_mode` / `skip_reason` / `estimated_stages` / `estimated_timeout_ms` / `actual_duration_ms` / `actual_tokens` が埋まる
+- 判定条件: `run-plan.json` が作成され、`files_changed` / `hunks` / `lines_added` / `lines_removed` / `risk_tags` / `selected_hunters` / `depth_actual` / `depth_source` / `depth_reason` / `depth_requested` / `depth_downgraded` / `depth_downgrade_reason` / `recommended_mode` / `skip_reason` / `routing_decision` / `estimated_stages` / `estimated_timeout_ms` / `actual_duration_ms` / `actual_tokens` が埋まる
 - 次アクション: Step 4 前処理へ進む
 
-`run-plan.json` は Step 2b の `files[]` と Step 3 の `pr.diff`、および起動時に解析した `$depth_requested` を使う preflight artifactで、**logical stage: ranker** の正式な出力である。`selected_hunters` は ranker 出力の interface として配列のまま維持するが、F4 では常に `["claude","codex"]` を出力し、F8 の routing artifact が来るまで 4a / 4b の固定テンプレートはスキップしない。`recommended_mode == "skip"` は「/loop では skip 推奨、手動では警告のみ」の**提案値**であり、M1/F4 の既定では実際のレビューを止めず `focused fallback` で継続する。
+`run-plan.json` は Step 2b の `files[]` と Step 3 の `pr.diff`、および起動時に解析した `$depth_requested` を使う preflight artifactで、**logical stage: ranker** の正式な出力である。M2 では `routing_decision` に token/duration/file-count/risk proxy 由来の `budget_class` と logical `model_profile` を残すが、USD 推定・価格表・実プロバイダ名・実モデル名・private config は絶対に書かない。`selected_hunters` は ranker 出力の interface として配列のまま維持するが、F4 では常に `["claude","codex"]` を出力し、`routing_decision.route` も M2 では常に `"claude+codex"` とする。route enum は将来 F4 の specialist routing で拡張できるよう、ここでは固定値の hook のみ残す。`recommended_mode == "skip"` は「/loop では skip 推奨、手動では警告のみ」の**提案値**であり、M1/F4/M2 の既定では実際のレビューを止めず `focused fallback` で継続する。
 
 `depth_actual`（`standard` / `deep`）と `recommended_mode`（`standard` / `focused` / `skip`）は直交した軸として扱う。depth は「1観点あたりの掘り下げ深さ」、recommended_mode は「対象観点の絞り込み」を表すため、`depth_actual="deep"` かつ `recommended_mode="focused"` のような組み合わせも有効である。
 
@@ -393,6 +393,16 @@ jq -n --arg org "$org" --arg repository "$repository" --arg repository_full_name
 - `files_changed > 100` → `recommended_mode = "skip"` と `skip_reason` を設定（ただし M1 の既定実行は skip せず focused fallback）
 
 推定 timeout は `min(1200000, 300000 + files_changed*30000 + hunks*15000 + (lines_added+lines_removed)*100 + sensitive_risk_count*90000)` の暫定式で求める。`sensitive_risk_count` は `risk_tags` のうち `security` / `data_migration` の件数。
+
+予算・routing の派生ルール:
+
+- `budget_class = "small"`: `files_changed <= 10` かつ `total_lines <= 500` かつ `sensitive_risk_count == 0`
+- `budget_class = "medium"`: `small` ではなく、`files_changed <= 50` かつ `total_lines <= 5000`
+- `budget_class = "large"`: 上記以外
+- `model_profile = "deep"`: `recommended_mode == "standard"` かつ `depth_actual == "deep"`
+- `model_profile = "standard"`: `recommended_mode == "standard"` かつ `depth_actual == "standard"`
+- `model_profile = "focused-fallback"`: `recommended_mode == "focused"` または `"skip"`（skip 提案でもレビューは止めない）
+- `rationale` は `files_changed` / `total_lines` / `risk_tags` / `depth_actual` / `recommended_mode` の決定論的な事実列のみとし、LLM 自由生成文や provider/model 名を入れない
 
 ```bash
 jq -n --arg depth_requested "$depth_requested" --slurpfile metadata ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json --rawfile diff ~/claude-loop-pr-codex/$org-$repository-$pr_number/pr.diff '
@@ -460,6 +470,20 @@ jq -n --arg depth_requested "$depth_requested" --slurpfile metadata ~/claude-loo
     end;
   def estimated_timeout_ms:
     [1200000, (300000 + (files_changed * 30000) + (hunks * 15000) + (total_lines * 100) + (sensitive_risk_count * 90000))] | min;
+  def budget_class:
+    if files_changed <= 10 and total_lines <= 500 and sensitive_risk_count == 0 then "small"
+    elif files_changed <= 50 and total_lines <= 5000 then "medium"
+    else "large"
+    end;
+  def route:
+    "claude+codex";
+  def model_profile:
+    if recommended_mode == "standard" and depth_actual == "deep" then "deep"
+    elif recommended_mode == "standard" and depth_actual == "standard" then "standard"
+    else "focused-fallback"
+    end;
+  def rationale:
+    "files_changed=\(files_changed), total_lines=\(total_lines), risk_tags=[\((risk_tags | join(",")))], depth=\(depth_actual), mode=\(recommended_mode)";
   {
     files_changed: files_changed,
     hunks: hunks,
@@ -475,6 +499,12 @@ jq -n --arg depth_requested "$depth_requested" --slurpfile metadata ~/claude-loo
     depth_downgrade_reason: depth_downgrade_reason,
     recommended_mode: recommended_mode,
     skip_reason: skip_reason,
+    routing_decision: {
+      budget_class: budget_class,
+      route: route,
+      model_profile: model_profile,
+      rationale: rationale
+    },
     estimated_stages: estimated_stages,
     estimated_timeout_ms: estimated_timeout_ms,
     actual_duration_ms: null,
@@ -491,11 +521,11 @@ Step 4a / 4b 共通のレビュー観点本文（MCP追加情報収集 / 7観点
 - 判定条件: `REVIEW_CRITERIA.md` の全文と `run-plan.json` の内容を Read ツールで取得できる
 - 次アクション:
   - 4a / 4b の Bash コマンド文字列中の `{REVIEW_CRITERIA}` を、下記の `{REVIEW_CRITERIA}` / `{RUN_PLAN_GUIDANCE}` / `{DEPTH_GUIDANCE}` 共通のエスケープ規則（`\` → `\\`、`"` → `\"`、`$` → `\$`、`` ` `` → `\``）に従って整形した本文で置換してから Bash ツールに渡す
-  - `run-plan.json` から `.files_changed` / `.hunks` / `.lines_added` / `.lines_removed` / `.risk_tags` / `.selected_hunters` / `.depth_actual` / `.depth_source` / `.depth_reason` / `.depth_requested` / `.depth_downgraded` / `.depth_downgrade_reason` / `.recommended_mode` / `.skip_reason` / `.estimated_stages` / `.estimated_timeout_ms` を保持する。Step 5 の `jq --argjson` に再利用するため、`.risk_tags` と `.selected_hunters` はそれぞれ `$risk_tags_json` / `$selected_hunters_json` として **JSON 配列文字列のまま** 保持し、数値項目も `$files_changed` / `$hunks` / `$lines_added` / `$lines_removed` / `$estimated_stages` / `$estimated_timeout_ms` として保持したうえで、以下の方針で `{RUN_PLAN_GUIDANCE}` と `{DEPTH_GUIDANCE}` を組み立てて置換する
+  - `run-plan.json` から `.files_changed` / `.hunks` / `.lines_added` / `.lines_removed` / `.risk_tags` / `.selected_hunters` / `.depth_actual` / `.depth_source` / `.depth_reason` / `.depth_requested` / `.depth_downgraded` / `.depth_downgrade_reason` / `.recommended_mode` / `.skip_reason` / `.routing_decision.budget_class` / `.routing_decision.model_profile` / `.routing_decision.route` / `.routing_decision.rationale` / `.estimated_stages` / `.estimated_timeout_ms` を保持する。Step 5 の `jq --argjson` に再利用するため、`.risk_tags` と `.selected_hunters` はそれぞれ `$risk_tags_json` / `$selected_hunters_json` として **JSON 配列文字列のまま** 保持し、数値項目も `$files_changed` / `$hunks` / `$lines_added` / `$lines_removed` / `$estimated_stages` / `$estimated_timeout_ms` として保持する。`routing_decision.route` は Step 5 で artifact を再構築するため `$route` として保持するが hunter 個別プロンプトには渡さない。以下の方針で `{RUN_PLAN_GUIDANCE}` と `{DEPTH_GUIDANCE}` を組み立てて置換する
 
 `{RUN_PLAN_GUIDANCE}` の組み立て規則:
 
-- 先頭に `recommended_mode` / `risk_tags` / `estimated_timeout_ms` を箇条書きで明記する
+- 先頭に `budget_class` / `model_profile` / `rationale` / `depth_actual` / `recommended_mode` / `risk_tags` / `estimated_timeout_ms` を箇条書きで明記する
 - `risk_tags` / `selected_hunters` は **生の JSON を埋め込まず**、`, ` 区切りの平文（空なら `none`）へ整形してから使う
 - `recommended_mode == "standard"` の場合: 既存どおり 7観点をフルに使う
 - `recommended_mode == "focused"` の場合: **security / bug / test** を最優先とし、スタイル / リネーム / 軽微な改善は correctness に直結するものだけ残す
@@ -699,7 +729,7 @@ MCP について:
    - **補完**: 見落とされていた観点が補われている場合は、根拠を確認したうえで最終 findings に反映する
    - `review.md` には最終判断のみを書く。レビュー実行者名 / モデル名 / どの生レビュー由来かを示す表現 / `両者一致` / `片方のみ` のような由来表現は書かない
 9. `review.md` は **`findings.verified.json` から派生生成** する。`must_fix` → `## 重大な問題 (Must Fix)`, `should_fix` かつ `post_policy=body_summary` → `## 改善提案 (Should Fix)`, `nit` → `## 軽微な指摘 (Nit)`, `note` や `post_policy=local_only/suppress` の項目 → `## 補足` に対応させる。`## 総評` と `## 良い点` は人間向け要約として記述してよいが、Must Fix / Should Fix の件数や内容が canonical findings と矛盾してはならない
-10. `run-plan.json` で `skip_reason != null`、`recommended_mode != "standard"`、`depth_actual != "standard"`、`depth_source != "default"`、`depth_downgraded == true`、または `depth_reason` が `changed lines > 5000` で始まる場合のいずれかに該当する場合は、`review.md` の `## 補足` に preflight 情報を最低限残す。`skip_reason != null` の場合は `- preflight: <skip_reason>。M1 の既定では focused fallback でレビューを継続した。` を含める。加えて `files_changed` / `lines_added` / `lines_removed` / `recommended_mode` / `depth_actual` / `depth_source` / `depth_reason` / `risk_tags` を明記し、レビュー範囲や重点が意図的に変わった事実を受け手が判断できるようにする
+10. `run-plan.json` で `skip_reason != null`、`recommended_mode != "standard"`、`depth_actual != "standard"`、`depth_source != "default"`、`depth_downgraded == true`、または `depth_reason` が `changed lines > 5000` で始まる場合のいずれかに該当する場合は、`review.md` の `## 補足` に preflight 情報を最低限残す。`skip_reason != null` の場合は `- preflight: <skip_reason>。M1 の既定では focused fallback でレビューを継続した。` を含める。加えて `files_changed` / `lines_added` / `lines_removed` / `recommended_mode` / `depth_actual` / `depth_source` / `depth_reason` / `risk_tags` を明記し、レビュー範囲や重点が意図的に変わった事実を受け手が判断できるようにする。`routing_decision` はローカル artifact 専用であり、`review.md` や GitHub 投稿 body へコピーしない
 11. **fingerprint 整合 gate (必須)**: 全 finding で `id == fingerprint` を確認し、さらに `path` / `category` / `title` から README の正準アルゴリズムで fingerprint を再計算した値が JSON 内の `fingerprint` と一致することを、後述の `tasks/validate_findings.py` で検証する。1 件でもずれたら Step 5 の **failed 更新** へ遷移し、final artifact を書き出してはならない
 12. **件数一致 gate (必須)**: `findings.verified.json` の `severity=must_fix` 件数と、派生生成した `review.md` の `## 重大な問題 (Must Fix)` 見出し件数は **100% 一致** させる。1 件でもずれたら Step 5 の **failed 更新** へ遷移し、completed にしてはならない
 13. 上記 runtime gate を通過した場合のみ、`findings.candidates.json` / `findings.verified.json` / `review.md`（必要なら `validation-report.json` も）をまず `*.tmp` へ `Write` ツールで書き出す
@@ -808,7 +838,7 @@ date -u +%Y-%m-%dT%H:%M:%S+00:00
 
 ```bash
 tmp_run_plan=~/claude-loop-pr-codex/$org-$repository-$pr_number/run-plan.json.tmp
-jq -n --argjson files_changed "$files_changed" --argjson hunks "$hunks" --argjson lines_added "$lines_added" --argjson lines_removed "$lines_removed" --argjson risk_tags "$risk_tags_json" --argjson selected_hunters "$selected_hunters_json" --arg depth_actual "$depth_actual" --arg depth_source "$depth_source" --arg depth_reason "$depth_reason" --arg depth_requested "$depth_requested" --argjson depth_downgraded "$depth_downgraded" --arg depth_downgrade_reason "$depth_downgrade_reason" --arg recommended_mode "$recommended_mode" --arg skip_reason "$skip_reason" --argjson estimated_stages "$estimated_stages" --argjson estimated_timeout_ms "$estimated_timeout_ms" --arg started_at "$started_at" --arg finished_at "$finished_at" '{
+jq -n --argjson files_changed "$files_changed" --argjson hunks "$hunks" --argjson lines_added "$lines_added" --argjson lines_removed "$lines_removed" --argjson risk_tags "$risk_tags_json" --argjson selected_hunters "$selected_hunters_json" --arg depth_actual "$depth_actual" --arg depth_source "$depth_source" --arg depth_reason "$depth_reason" --arg depth_requested "$depth_requested" --argjson depth_downgraded "$depth_downgraded" --arg depth_downgrade_reason "$depth_downgrade_reason" --arg recommended_mode "$recommended_mode" --arg skip_reason "$skip_reason" --arg budget_class "$budget_class" --arg model_profile "$model_profile" --arg route "$route" --arg rationale "$rationale" --argjson estimated_stages "$estimated_stages" --argjson estimated_timeout_ms "$estimated_timeout_ms" --arg started_at "$started_at" --arg finished_at "$finished_at" '{
   files_changed: $files_changed,
   hunks: $hunks,
   lines_added: $lines_added,
@@ -823,6 +853,12 @@ jq -n --argjson files_changed "$files_changed" --argjson hunks "$hunks" --argjso
   depth_downgrade_reason: (if $depth_downgrade_reason == "" or $depth_downgrade_reason == "null" then null else $depth_downgrade_reason end),
   recommended_mode: $recommended_mode,
   skip_reason: (if $skip_reason == "" or $skip_reason == "null" then null else $skip_reason end),
+  routing_decision: {
+    budget_class: $budget_class,
+    route: $route,
+    model_profile: $model_profile,
+    rationale: $rationale
+  },
   estimated_stages: $estimated_stages,
   estimated_timeout_ms: $estimated_timeout_ms,
   actual_duration_ms: (((($finished_at | strptime("%Y-%m-%dT%H:%M:%S+00:00") | mktime) - ($started_at | strptime("%Y-%m-%dT%H:%M:%S+00:00") | mktime)) * 1000)),
@@ -905,7 +941,7 @@ $CLAUDE_PLUGIN_ROOT/tasks/
   └── $org-$repository-$pr_number/
         ├── status.json
         ├── metadata.json        ← org/repository/repository_full_name/pr_number/pr_url/head_sha/base_sha/branch/base_branch/merge_commit_sha/title/files を含む
-        ├── run-plan.json        ← preflight 指標。Step 5 成功時に actual_duration_ms / actual_tokens を追記
+        ├── run-plan.json        ← preflight 指標と routing_decision。Step 5 成功時に actual_duration_ms / actual_tokens を追記
         ├── pr.diff              ← PR 差分 (unified diff)。Step 4a/4b のスコープ確定情報源
         ├── pr.diff.ranges.txt   ← コメント可能行範囲。Step 4a/4b と Step 4c の行番号検証に使う
         ├── clone-claude/        ← Claude Code 用 shallow clone (depth 50, base fetch 済み)
