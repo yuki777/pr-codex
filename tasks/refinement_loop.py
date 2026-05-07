@@ -53,7 +53,7 @@ SENSITIVE_VALUE_PATTERNS = (
     ("raw-log marker", re.compile(r"\braw[\s_-]?logs?\b", re.IGNORECASE)),
     (
         "authorization header",
-        re.compile(r"\bauthorization\s*[:=]\s*(?:bearer|basic)\s+\S+", re.IGNORECASE),
+        re.compile(r"\bauthorization\s*[:=]\s*\S+(?:\s+\S+)?", re.IGNORECASE),
     ),
     (
         "credential assignment",

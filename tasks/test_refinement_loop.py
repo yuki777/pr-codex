@@ -150,6 +150,20 @@ class RefinementLoopTest(unittest.TestCase):
         ]
         self.assertEqual([item["id"] for item in filter_postable_findings(findings, artifact)], ["passing-id"])
 
+    def test_non_bearer_authorization_header_values_are_redacted_and_rejected(self) -> None:
+        raw_candidate = {
+            "finding_id": "auth-header-candidate",
+            "title": "Non-Bearer authorization header",
+            "reason": "verifier_fail",
+            "detail": "Authorization: Token placeholder-credential-value",
+        }
+        sanitized = sanitize_local_candidate(raw_candidate)
+        self.assertEqual(sanitized["detail"], REDACTED_SENSITIVE_VALUE)
+
+        artifact = self.valid_review_rounds_artifact()
+        artifact["rounds"][0]["rejected_candidates"][0]["detail"] = "Authorization: Token placeholder-credential-value"
+        self.assert_review_rounds_cli_invalid(artifact, "sensitive/raw value is not allowed")
+
     def test_sensitive_candidate_values_are_redacted_before_artifact_write(self) -> None:
         raw_candidate = {
             "finding_id": "SECRET_TOKEN=abc123",
