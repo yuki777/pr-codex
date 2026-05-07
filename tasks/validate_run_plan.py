@@ -690,7 +690,7 @@ def validate_paginated_files_pipefail() -> None:
 def validate_step5_write_order() -> None:
     text = SKILL_PATH.read_text()
     duration_index = text.index('tmp_run_plan=~/claude-loop-pr-codex/$org-$repository-$pr_number/run-plan.json.tmp')
-    completed_index = text.index('{state:"completed",started_at:$started_at,finished_at:$finished_at,exit_code:0,head_sha:$head_sha}')
+    completed_index = text.index('{state:"completed",started_at:$started_at,finished_at:$finished_at,exit_code:0,head_sha:$head_sha,stage:"explainer",failed_stage:null}')
     if duration_index > completed_index:
         raise AssertionError("run-plan update must be documented before completed status update")
 
