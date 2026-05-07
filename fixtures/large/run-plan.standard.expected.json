@@ -20,6 +20,12 @@
   "depth_downgrade_reason": null,
   "recommended_mode": "standard",
   "skip_reason": null,
+  "routing_decision": {
+    "budget_class": "medium",
+    "route": "claude+codex",
+    "model_profile": "standard",
+    "rationale": "files_changed=20, total_lines=276, risk_tags=[dependency,infra,test_touch], depth=standard, mode=standard"
+  },
   "estimated_stages": 4,
   "estimated_timeout_ms": 1200000,
   "actual_duration_ms": null,

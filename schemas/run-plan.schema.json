@@ -20,6 +20,7 @@
     "depth_downgrade_reason",
     "recommended_mode",
     "skip_reason",
+    "routing_decision",
     "estimated_stages",
     "estimated_timeout_ms",
     "actual_duration_ms",
@@ -121,6 +122,50 @@
         "string",
         "null"
       ]
+    },
+    "routing_decision": {
+      "type": "object",
+      "description": "Deterministic M2 logical routing decision. Route enum is intentionally narrow in M2 and may be extended by F4 specialist routing; provider/model names and private config must not be exposed.",
+      "additionalProperties": false,
+      "required": [
+        "budget_class",
+        "route",
+        "model_profile",
+        "rationale"
+      ],
+      "properties": {
+        "budget_class": {
+          "type": "string",
+          "enum": [
+            "small",
+            "medium",
+            "large"
+          ]
+        },
+        "route": {
+          "type": "string",
+          "description": "Logical reviewer route. M2 emits claude+codex only; F4 may extend this enum for specialist routing.",
+          "enum": [
+            "claude+codex"
+          ]
+        },
+        "model_profile": {
+          "type": "string",
+          "description": "Logical execution profile only; never a provider or concrete model name.",
+          "enum": [
+            "standard",
+            "deep",
+            "focused-fallback"
+          ]
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240,
+          "pattern": "^[^\\r\\n]+$",
+          "description": "Deterministic fact list built from files_changed, total_lines, risk_tags, depth_actual, and recommended_mode."
+        }
+      }
     },
     "estimated_stages": {
       "type": "integer",
