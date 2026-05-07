@@ -116,10 +116,10 @@ Stage ごとの責務、input/output artifact、halting 条件は [`skills/revie
 `/pr-codex:send` の挙動:
 
 1. `~/claude-loop-pr-codex/` 配下から `status.json` が `state:completed` でかつ `findings.verified.json` / `review.md` が存在するディレクトリを1件選定する（名前昇順の先頭1件）
-2. `findings.verified.json` を必須の一次入力として `Must Fix` / `Should Fix` / `Nit` の投稿方針を抽出し、`review.md` から `## 総評` / `## 良い点` を body に使う（F13 以降は Markdown parser fallback へ切り替えず、欠落・schema 不整合・Must Fix 件数不一致なら中断する）
+2. `findings.verified.json` を必須の一次入力として `Must Fix` / `Should Fix` / `Nit` の投稿方針を抽出し、`review.md` から `## 総評` / `## 良い点` を body に使う（F13 以降は Markdown parser fallback へ切り替えず、欠落・schema 不整合なら中断する。root-cause cluster がない場合は Must Fix 件数も完全一致を要求し、cluster がある場合は canonical / Markdown / SARIF は全 finding 件数、`review-payload.json` は representative comment 件数として検証する）
 3. `Should Fix` のうち `post_policy: body_summary` の候補がある場合、上位 3 件を body の `## 非ブロッキング改善 (Should Fix)` に含めるかを確認する（default: no）
 4. `Nit` は PR に投稿せず、primary path では `nits.md` にローカル artifact として書き出す（0 件なら作成しない）
-5. Step 4.5 の verifier pipeline を schema / range / semantic / payload consistency の 4 stage で実行し、従来互換の `preflight-codex.md` に加えて `preflight-result.json` を保存する。schema stage では `findings.sarif` の schema validation と `findings.verified.json` ↔ `review.md` ↔ `review-payload.json` ↔ `findings.sarif` の Must Fix count 一致を検証し、semantic stage では Must Fix の反証、Should Fix body summary の対応関係、Nit の payload 混入を検証する
+5. Step 4.5 の verifier pipeline を schema / range / semantic / payload consistency の 4 stage で実行し、従来互換の `preflight-codex.md` に加えて `preflight-result.json` を保存する。schema stage では `findings.sarif` の schema validation と `findings.verified.json` ↔ `review.md` ↔ `review-payload.json` ↔ `findings.sarif` の Must Fix count 整合性を検証する。root-cause cluster がある場合、canonical / Markdown / SARIF は全 Must Fix finding 数を保持し、`review-payload.json` は representative inline comment 数へ減ることを許可する。semantic stage では Must Fix の反証、Should Fix body summary の対応関係、Nit の payload 混入を検証する
 6. GitHub Reviews API への payload サマリをユーザーに提示し、明示的な承認を得る
 7. 承認後、`gh api --method POST .../reviews` で投稿（`event` は Must Fix ありなら `REQUEST_CHANGES`、なければ `COMMENT`。`APPROVE` は自動では出さない）
 8. 投稿成功後、対象ディレクトリを `~/claude-loop-pr-codex/sent/$org-$repo-$pr-$head_sha_short/` に移動する（同一 PR でも HEAD 更新後の再投稿履歴が衝突しないよう、`head_sha` の先頭 7 文字を suffix に付ける）
@@ -128,7 +128,7 @@ Stage ごとの責務、input/output artifact、halting 条件は [`skills/revie
 
 ### Should Fix / Nit の取り扱い
 
-- `Must Fix` は従来どおり GitHub review の inline comment として投稿される
+- `Must Fix` は従来どおり GitHub review の inline comment として投稿される。`root_cause_clusters[]` がある場合は、各 cluster の `representative_finding_id` を inline 代表として扱い、同じ root cause の他 finding は代表コメント本文の affected findings summary に短く列挙する（canonical / SARIF / review.md には全 finding を残し、`review-payload.json` の `comments[]` だけ representative count になる。preflight の count gate は full count と representative payload count を別々に検証する）
 - `Should Fix` は自動では投稿されない。手動実行時に `yes` を選ぶと、author が見落としやすい非ブロッキング改善だけを上位 3 件まで PR body に短く同梱できる
 - `Nit` はノイズ抑制のため PR には載せず、`nits.md` に控えとして残す。投稿後は `sent/` 配下の履歴ディレクトリで確認できる
 - `findings.verified.json` がない fallback path では、従来どおり `Should Fix` / `Nit` / 補足を投稿 payload に含めない
@@ -283,6 +283,7 @@ mv ~/claude-loop-pr-codex/sent/yuki777-pr-codex-24 \
 - fixture oracle は `schemas/expected-findings.v1.json` で定義する。runtime artifact とは分離し、`expected_outcome` / `acceptable_overrides` / `strictness_profile` / `minimum_evidence_level` など採点用メタデータを保持する
 - fixture scoring の出力は `schemas/score-report.v1.json`、M1→M2 gate report は `schemas/m1-m2-gate.v1.json` で定義する
 - `findings.verified.json` は top-level `generated_at` を持ち、per-finding `created_at` は持たない
+- `findings.verified.json` は任意で top-level `root_cause_clusters[]` を持てる。各 cluster は `id` / `summary` / `representative_finding_id` / `finding_ids` を持ち、`finding.root_cause_id` から参照する。validator は cluster id の重複、未知 finding id、representative が member でない状態、representative severity が cluster 内最高 severity より低い状態を拒否する
 - `findings.verified.json.pr.repository` は **投稿先の base repo** (`owner/repo`) に固定する。fork PR でも head repo ではなく、`metadata.json.repository_full_name` および `/pr-codex:send` の投稿先 `$org/$repository` と一致させる
 - M1 の `finding.id` は **`fingerprint` と同値**に固定する（retry / send の `source_finding_id` / eval harness 比較で決定論的に追跡するため）
 - `category` は schema enum（`bug` / `security` / `performance` / `tests` / `design` / `code_quality` / `consistency` / `runtime_error`）に固定し、自由文字列の揺れを `fingerprint` に入れない
@@ -338,7 +339,7 @@ mv ~/claude-loop-pr-codex/sent/yuki777-pr-codex-24 \
 - `/pr-codex:send` Step 4.5 は `schemas/preflight-result.v1.json` に従う `preflight-result.json` を出力する
 - `verdict` は `PASS` / `FAIL` のみ。`PASS_WITH_WARNINGS` は導入せず、将来の非ブロッキング警告は `violations[].severity = "warning"` として表現する
 - `stages` は `schema_validation` / `range_validation` / `semantic_preflight` / `payload_consistency` の 4 stage を必ず含む
-- `violations[]` は `auto_fixable` と `requires_review_regeneration` を持ち、send 側で直せる payload ずれ（行範囲・event・body など）と review 再生成が必要な semantic/schema 不整合を分離する。`findings.sarif` schema validation 失敗や `canonical_must_fix != markdown_must_fix != payload_must_fix != sarif_must_fix` は `schema_validation` stage の `must_fix_count_mismatch` として FAIL にする
+- `violations[]` は `auto_fixable` と `requires_review_regeneration` を持ち、send 側で直せる payload ずれ（行範囲・event・body など）と review 再生成が必要な semantic/schema 不整合を分離する。`findings.sarif` schema validation 失敗や Must Fix count の不整合は `schema_validation` stage の `must_fix_count_mismatch` として FAIL にする。root-cause cluster がない場合は従来の `canonical_must_fix != markdown_must_fix != payload_must_fix != sarif_must_fix` 型の不一致を拒否し、cluster がある場合は `canonical_must_fix == markdown_must_fix == sarif_must_fix` かつ `payload_must_fix == representative_must_fix` を要求する
 - `tasks/validate_preflight_result.py` は `preflight-codex.md` の `RESULT_JSON` ブロック抽出と `preflight-result.json` の cross-field validation を stdlib-only で行う
 
 ### fingerprint 正準アルゴリズム

@@ -31,6 +31,13 @@
       "items": {
         "$ref": "#/$defs/finding"
       }
+    },
+    "root_cause_clusters": {
+      "type": "array",
+      "description": "Optional root-cause clustering metadata. Clusters reduce duplicate GitHub prose by selecting a representative finding while preserving every canonical finding and its severity in the local artifact.",
+      "items": {
+        "$ref": "#/$defs/root_cause_cluster"
+      }
     }
   },
   "$defs": {
@@ -438,6 +445,10 @@
         "category_label": {
           "$ref": "#/$defs/non_empty_string",
           "description": "Optional human-readable category nuance. It is explicitly not a fingerprint input; category enum remains the stable fingerprint component."
+        },
+        "root_cause_id": {
+          "$ref": "#/$defs/root_cause_id",
+          "description": "Optional reference to root_cause_clusters[].id for findings caused by the same root cause."
         }
       },
       "allOf": [
@@ -566,6 +577,42 @@
       "type": "string",
       "pattern": "^[0-9a-f]{64}$",
       "description": "Deterministic lowercase hex SHA-256. Compute lowercase_hex(sha256(path + U+001F + category + U+001F + normalized_title + U+001F + primary_symbol_or_empty)); normalized_title = title normalized with Unicode NFKC, Unicode lowercase, whitespace collapsed to one ASCII space, trimmed, and trailing Unicode punctuation (General Category P*) removed followed by a final right trim; primary_symbol = trimmed first back-ticked symbol in title, or empty string. In M1, id must equal fingerprint."
+    },
+    "root_cause_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._:-]{1,127}$",
+      "description": "Stable local root-cause cluster id. Lowercase ASCII keeps references diff-friendly and safe for public artifacts."
+    },
+    "root_cause_cluster": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "summary",
+        "representative_finding_id",
+        "finding_ids"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/root_cause_id"
+        },
+        "summary": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "representative_finding_id": {
+          "$ref": "#/$defs/fingerprint"
+        },
+        "finding_ids": {
+          "type": "array",
+          "minItems": 2,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/fingerprint"
+          },
+          "description": "All canonical findings caused by this root cause. The representative_finding_id must be one of these ids."
+        }
+      },
+      "description": "Full local cluster detail. Validators enforce that ids reference findings, the representative is a member, and the representative severity is not lower than the highest cluster severity."
     }
   }
 }

@@ -72,6 +72,17 @@ def valid_artifact() -> dict[str, object]:
     }
 
 
+def clone_finding(artifact: dict[str, object], path: str) -> dict[str, object]:
+    duplicate = copy.deepcopy(artifact["findings"][0])
+    duplicate["location"] = {"path": path, "start_line": 47, "side": "RIGHT"}
+    duplicate["title"] = f"Duplicate root cause at `{path}`."
+    duplicate_id = compute_fingerprint(duplicate)
+    duplicate["id"] = duplicate_id
+    duplicate["fingerprint"] = duplicate_id
+    artifact["findings"].append(duplicate)
+    return duplicate
+
+
 def valid_metadata() -> dict[str, object]:
     return {
         "org": "yuki777",
@@ -367,6 +378,109 @@ class ValidateFindingsTest(unittest.TestCase):
         artifact = copy.deepcopy(valid_artifact())
         artifact["findings"].append(copy.deepcopy(artifact["findings"][0]))
         self.assert_invalid_without_crash(artifact, "duplicate id/fingerprint")
+
+    def test_root_cause_cluster_metadata_is_accepted(self) -> None:
+        artifact = copy.deepcopy(valid_artifact())
+        representative = artifact["findings"][0]
+        duplicate = copy.deepcopy(representative)
+        duplicate["location"] = {
+            "path": "skills/review/SKILL.md",
+            "start_line": 47,
+            "side": "RIGHT",
+        }
+        duplicate["title"] = "`schema_path` placeholder can also be expanded in review prompt."
+        duplicate["problem"] = "The same shell-expansion root cause can corrupt review prompt construction."
+        duplicate["reason"] = "Both prompts embed shell-sensitive placeholders without isolation."
+        duplicate["suggestion"] = "Keep the shared fix at the representative finding and summarize this affected location."
+        duplicate_id = compute_fingerprint(duplicate)
+        duplicate["id"] = duplicate_id
+        duplicate["fingerprint"] = duplicate_id
+        representative["root_cause_id"] = "rc-shell-expansion"
+        duplicate["root_cause_id"] = "rc-shell-expansion"
+        artifact["findings"].append(duplicate)
+        artifact["root_cause_clusters"] = [
+            {
+                "id": "rc-shell-expansion",
+                "summary": "Shell expansion corrupts prompt placeholders in multiple review/send templates.",
+                "representative_finding_id": representative["id"],
+                "finding_ids": [representative["id"], duplicate_id],
+            }
+        ]
+        self.assertEqual(validate_artifact(self.schema, artifact), [])
+
+    def test_root_cause_cluster_references_must_be_consistent(self) -> None:
+        cases = {
+            "missing-clusters": (
+                lambda artifact: artifact["findings"][0].update(root_cause_id="rc-missing"),
+                "root_cause_id: referenced cluster is not defined",
+            ),
+            "representative-not-member": (
+                lambda artifact: artifact.update(
+                    root_cause_clusters=[
+                        {
+                            "id": "rc-bad",
+                            "summary": "Bad cluster",
+                            "representative_finding_id": artifact["findings"][0]["id"],
+                            "finding_ids": ["0" * 64, "1" * 64],
+                        }
+                    ]
+                ),
+                "representative_finding_id: must be listed in finding_ids",
+            ),
+            "unknown-finding": (
+                lambda artifact: artifact.update(
+                    root_cause_clusters=[
+                        {
+                            "id": "rc-bad",
+                            "summary": "Bad cluster",
+                            "representative_finding_id": artifact["findings"][0]["id"],
+                            "finding_ids": [artifact["findings"][0]["id"], "1" * 64],
+                        }
+                    ]
+                ),
+                "finding_ids: unknown finding id",
+            ),
+            "member-missing-root-cause-id": (
+                lambda artifact: artifact.update(
+                    root_cause_clusters=[
+                        {
+                            "id": "rc-missing-declaration",
+                            "summary": "Cluster members must declare the same root cause id.",
+                            "representative_finding_id": artifact["findings"][0]["id"],
+                            "finding_ids": [artifact["findings"][0]["id"], clone_finding(artifact, "skills/review/SKILL.md")["id"]],
+                        }
+                    ]
+                ),
+                "must declare root_cause_id=rc-missing-declaration",
+            ),
+        }
+        for name, (mutate, expected_fragment) in cases.items():
+            with self.subTest(name=name):
+                artifact = copy.deepcopy(valid_artifact())
+                mutate(artifact)
+                self.assert_invalid_without_crash(artifact, expected_fragment)
+
+    def test_root_cause_cluster_representative_must_preserve_highest_severity(self) -> None:
+        artifact = copy.deepcopy(valid_artifact())
+        representative = artifact["findings"][0]
+        representative.update(severity="should_fix", evidence_level="corroborated")
+        representative["posting"] = {"post_policy": "body_summary", "explanation_postable": True}
+        duplicate = copy.deepcopy(valid_artifact()["findings"][0])
+        duplicate["location"] = {"path": "skills/review/SKILL.md", "start_line": 47, "side": "RIGHT"}
+        duplicate["title"] = "A second highest-severity occurrence."
+        duplicate_id = compute_fingerprint(duplicate)
+        duplicate["id"] = duplicate_id
+        duplicate["fingerprint"] = duplicate_id
+        artifact["findings"].append(duplicate)
+        artifact["root_cause_clusters"] = [
+            {
+                "id": "rc-severity",
+                "summary": "Representative cannot lower a Must Fix cluster.",
+                "representative_finding_id": representative["id"],
+                "finding_ids": [representative["id"], duplicate_id],
+            }
+        ]
+        self.assert_invalid_without_crash(artifact, "representative_finding_id: representative severity must equal highest cluster severity")
 
     def test_pr_context_must_match_metadata(self) -> None:
         cases = {

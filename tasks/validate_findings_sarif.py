@@ -96,6 +96,42 @@ def canonical_must_fix_count(findings: Any) -> int:
     return sum(1 for finding in findings["findings"] if isinstance(finding, dict) and finding.get("severity") == "must_fix")
 
 
+def payload_expected_must_fix_count(findings: Any) -> int:
+    if not isinstance(findings, dict) or not isinstance(findings.get("findings"), list):
+        return -1
+    canonical_findings = [finding for finding in findings["findings"] if isinstance(finding, dict)]
+    clusters = findings.get("root_cause_clusters")
+    if not isinstance(clusters, list):
+        return canonical_must_fix_count(findings)
+
+    findings_by_id = {finding.get("id"): finding for finding in canonical_findings if isinstance(finding.get("id"), str)}
+    clustered_member_ids: set[str] = set()
+    representative_ids: set[str] = set()
+    for cluster in clusters:
+        if not isinstance(cluster, dict):
+            continue
+        finding_ids = cluster.get("finding_ids")
+        representative = cluster.get("representative_finding_id")
+        if not isinstance(finding_ids, list) or not isinstance(representative, str):
+            continue
+        members = [identifier for identifier in finding_ids if isinstance(identifier, str)]
+        if any(findings_by_id.get(identifier, {}).get("severity") == "must_fix" for identifier in members):
+            clustered_member_ids.update(members)
+            representative_ids.add(representative)
+
+    unclustered_must_fix = sum(
+        1
+        for finding in canonical_findings
+        if finding.get("severity") == "must_fix" and finding.get("id") not in clustered_member_ids
+    )
+    representative_must_fix = sum(
+        1
+        for identifier in representative_ids
+        if findings_by_id.get(identifier, {}).get("severity") == "must_fix"
+    )
+    return unclustered_must_fix + representative_must_fix
+
+
 def sarif_must_fix_count(sarif: Any) -> int:
     if not isinstance(sarif, dict):
         return -1
@@ -106,6 +142,7 @@ def sarif_must_fix_count(sarif: Any) -> int:
         for result in run.get("results", [])
         if isinstance(result, dict) and result.get("level") == "error"
     )
+
 
 
 def validate_schema_file(schema: Any) -> list[str]:
@@ -388,15 +425,28 @@ def validate_ranges(sarif: dict[str, Any], ranges_path: Path) -> list[str]:
 
 def validate_count_consistency(sarif: dict[str, Any], findings: Any | None, markdown: Path | None, payload: Path | None) -> list[str]:
     counts: dict[str, int] = {"sarif_must_fix": sarif_must_fix_count(sarif)}
+    payload_expected: int | None = None
     if findings is not None:
         counts["canonical_must_fix"] = canonical_must_fix_count(findings)
+        payload_expected = payload_expected_must_fix_count(findings)
     if markdown is not None:
         counts["markdown_must_fix"] = markdown_must_fix_count(markdown)
     if payload is not None:
         counts["payload_must_fix"] = payload_must_fix_count(payload)
-    if any(value < 0 for value in counts.values()) or len(set(counts.values())) != 1:
+
+    full_counts = {key: value for key, value in counts.items() if key != "payload_must_fix"}
+    if any(value < 0 for value in counts.values()) or len(set(full_counts.values())) != 1:
         return ["must_fix_count_mismatch: " + ", ".join(f"{key}={value}" for key, value in sorted(counts.items()))]
+    if payload is not None:
+        expected = payload_expected if payload_expected is not None else next(iter(full_counts.values()))
+        if expected < 0 or counts["payload_must_fix"] != expected:
+            return [
+                "must_fix_count_mismatch: "
+                + ", ".join(f"{key}={value}" for key, value in sorted(counts.items()))
+                + f", payload_expected_must_fix={expected}"
+            ]
     return []
+
 
 
 def validate_findings_sarif(

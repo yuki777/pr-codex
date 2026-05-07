@@ -387,6 +387,54 @@ class FindingsSarifTest(unittest.TestCase):
         self.assertEqual(validated.returncode, 0, validated.stderr)
         self.assertEqual(json.loads(validated.stdout), {"canonical_must_fix": 1, "markdown_must_fix": 1, "payload_must_fix": 1, "sarif_must_fix": 1})
 
+    def test_count_consistency_allows_cluster_representative_payload(self) -> None:
+        representative = make_finding(
+            severity="must_fix",
+            category="bug",
+            title="`guard` misses null input",
+            path="src/App.php",
+            line=10,
+            post_policy="inline",
+        )
+        sibling = make_finding(
+            severity="must_fix",
+            category="bug",
+            title="`guard` misses empty input",
+            path="src/App.php",
+            line=12,
+            post_policy="inline",
+        )
+        representative["root_cause_id"] = "rc-guard-validation"
+        sibling["root_cause_id"] = "rc-guard-validation"
+        artifact = canonical_artifact([representative, sibling])
+        artifact["root_cause_clusters"] = [
+            {
+                "id": "rc-guard-validation",
+                "summary": "The same guard omits invalid input validation in adjacent branches.",
+                "representative_finding_id": representative["id"],
+                "finding_ids": [representative["id"], sibling["id"]],
+            }
+        ]
+        sarif = build_sarif(artifact, metadata=metadata(), ranges={"src/App.php": [(1, 20)]})
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            markdown_path = tmp_path / "review.md"
+            payload_path = tmp_path / "review-payload.json"
+            markdown_path.write_text(
+                "## 重大な問題 (Must Fix)\n\n"
+                "### `src/App.php:L10`\n\n"
+                "### `src/App.php:L12`\n",
+                encoding="utf-8",
+            )
+            payload_path.write_text(
+                json.dumps({"comments": [{"path": "src/App.php", "line": 10, "side": "RIGHT", "body": "representative"}]}),
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                validate_findings_sarif(self.schema, sarif, findings=artifact, markdown_path=markdown_path, payload_path=payload_path),
+                [],
+            )
+
     def test_payload_count_includes_out_of_range_body_section(self) -> None:
         artifact = canonical_artifact()
         sarif = build_sarif(artifact, metadata=metadata(), ranges={"src/App.php": [(1, 20)]})
