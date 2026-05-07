@@ -97,12 +97,15 @@ test -f ~/claude-loop-pr-codex/$dir_name/findings.verified.json
 
 ### Step 2.5: plugin root / schema / validator path の解決
 
-Step 3 と Step 4.5 の verifier pipeline で `{SCHEMA_PATH}` / `{VALIDATOR_PATH}` / `{PREFLIGHT_SCHEMA_PATH}` / `{PREFLIGHT_VALIDATOR_PATH}` を絶対パスへ置換できるよう、ここで各 path を保持する。`$CLAUDE_PLUGIN_ROOT` が未設定・不明な場合は review skill と同じ手順（`echo "$CLAUDE_PLUGIN_ROOT"`、空なら `**/pr-codex/skills/review/REVIEW_CRITERIA.md` の探索結果から plugin root を逆算）で絶対パスを確定する。
+Step 3 と Step 4.5 の verifier pipeline で `{SCHEMA_PATH}` / `{VALIDATOR_PATH}` / `{SARIF_SCHEMA_PATH}` / `{SARIF_VALIDATOR_PATH}` / `{SARIF_GENERATOR_PATH}` / `{PREFLIGHT_SCHEMA_PATH}` / `{PREFLIGHT_VALIDATOR_PATH}` を絶対パスへ置換できるよう、ここで各 path を保持する。`$CLAUDE_PLUGIN_ROOT` が未設定・不明な場合は review skill と同じ手順（`echo "$CLAUDE_PLUGIN_ROOT"`、空なら `**/pr-codex/skills/review/REVIEW_CRITERIA.md` の探索結果から plugin root を逆算）で絶対パスを確定する。
 
 保持する値:
 
 - `schema_path = <plugin-root>/schemas/findings.v1.json`
 - `validator_path = <plugin-root>/tasks/validate_findings.py`
+- `sarif_schema_path = <plugin-root>/schemas/sarif-2.1.0.json`
+- `sarif_validator_path = <plugin-root>/tasks/validate_findings_sarif.py`
+- `sarif_generator_path = <plugin-root>/tasks/generate_findings_sarif.py`
 - `preflight_schema_path = <plugin-root>/schemas/preflight-result.v1.json`
 - `preflight_validator_path = <plugin-root>/tasks/validate_preflight_result.py`
 
@@ -349,21 +352,21 @@ payload は Write ツールで `~/claude-loop-pr-codex/$dir_name/review-payload.
 
 ### Step 4.5: 投稿前 verifier pipeline (Codex セルフレビュー)
 
-Claude が生成した `review-payload.json` を Codex CLI に独立検証させ、投稿直前の検証を **4 stage verifier pipeline** として実行する。Step 5 第2ステップ（最終承認プロンプト）の直前で必ず実行する。`findings.verified.json` は必須入力であり、Markdown fallback は使わない。検証では `comments[]` への Must Fix 以外の混入、Should Fix body summary の対応関係、Nit の payload 混入、schema/side 違反、行範囲外コメント、event/body 不整合を検出する。従来互換の `preflight-codex.md` / `preflight-codex.log` は維持し、新たに構造化結果 `preflight-result.json` を出力する。検証プロンプトには `$CLAUDE_PLUGIN_ROOT/schemas/findings.v1.json` と `$CLAUDE_PLUGIN_ROOT/schemas/preflight-result.v1.json`、および両 validator の絶対パスを埋め込み、`--cd ~/claude-loop-pr-codex/$dir_name` 配下の相対 `schemas/` には依存しない。
+Claude が生成した `review-payload.json` と review 側が生成した local-only `findings.sarif` を Codex CLI に独立検証させ、投稿直前の検証を **4 stage verifier pipeline** として実行する。Step 5 第2ステップ（最終承認プロンプト）の直前で必ず実行する。`findings.verified.json` は必須入力であり、Markdown fallback は使わない。検証では `comments[]` への Must Fix 以外の混入、Should Fix body summary の対応関係、Nit の payload 混入、SARIF schema/side/post_policy 違反、行範囲外コメント、event/body 不整合を検出する。従来互換の `preflight-codex.md` / `preflight-codex.log` は維持し、新たに構造化結果 `preflight-result.json` を出力する。検証プロンプトには `$CLAUDE_PLUGIN_ROOT/schemas/findings.v1.json`、`$CLAUDE_PLUGIN_ROOT/schemas/sarif-2.1.0.json`、`$CLAUDE_PLUGIN_ROOT/schemas/preflight-result.v1.json`、および各 validator/generator の絶対パスを埋め込み、`--cd ~/claude-loop-pr-codex/$dir_name` 配下の相対 `schemas/` には依存しない。
 
-`findings.verified.json` 検証プロンプトには `$CLAUDE_PLUGIN_ROOT/schemas/findings.v1.json` の**絶対パス**（Step 2.5 で解決した `schema_path`）と同梱 validator の絶対パス（`validator_path`）を埋め込む。`preflight-result.json` 抽出/検証には `preflight_schema_path` と `preflight_validator_path` を使い、Codex の出力崩れを `PASS` と誤判定しない。
+`findings.verified.json` 検証プロンプトには `$CLAUDE_PLUGIN_ROOT/schemas/findings.v1.json` の**絶対パス**（Step 2.5 で解決した `schema_path`）と同梱 validator の絶対パス（`validator_path`）を埋め込む。SARIF 検証には `sarif_schema_path` / `sarif_validator_path` / `sarif_generator_path` を使う。`preflight-result.json` 抽出/検証には `preflight_schema_path` と `preflight_validator_path` を使い、Codex の出力崩れを `PASS` と誤判定しない。
 
 #### 4 stage と既存観点の対応
 
-Codex は以下の 4 stage を順に判定する。各 stage は前段の結論に依存せず、毎回 `findings.verified.json` / `review-payload.json` / `review.md` / `pr.diff` / `pr.diff.ranges.txt` / `metadata.json` / 当該 finding 抜粋を根拠として再検証する。既存観点として、Must Fix 対応、Should Fix body summary の 1:1 対応と 3 件上限、Nit の payload 混入禁止、body セクション順序も stage 内で検証する。
+Codex は以下の 4 stage を順に判定する。各 stage は前段の結論に依存せず、毎回 `findings.verified.json` / `findings.sarif` / `review-payload.json` / `review.md` / `pr.diff` / `pr.diff.ranges.txt` / `metadata.json` / 当該 finding 抜粋を根拠として再検証する。既存観点として、Must Fix 対応、Should Fix body summary の 1:1 対応と 3 件上限、Nit の payload 混入禁止、body セクション順序も stage 内で検証する。
 
 
 | Stage | 検証観点 |
 | --- | --- |
-| 1. `schema_validation` | `findings.verified.json` の `schema_version == "findings.v1"`、同梱 validator validation、top-level `pr.*` と `metadata.json` の一致、全 finding の `id == fingerprint` と正準 fingerprint 再計算一致 |
+| 1. `schema_validation` | `findings.verified.json` の `schema_version == "findings.v1"`、同梱 validator validation、top-level `pr.*` と `metadata.json` の一致、全 finding の `id == fingerprint` と正準 fingerprint 再計算一致、`findings.sarif` の schema validation、`canonical_must_fix == markdown_must_fix == payload_must_fix == sarif_must_fix` |
 | 2. `range_validation` | `payload.comments[]` の `path` が `metadata.json.files[]` に含まれること、`line` / `start_line` が `pr.diff.ranges.txt` の同一 hunk 範囲内にあること |
 | 3. `semantic_preflight` | `payload.comments[]` が `severity == "must_fix"` の finding だけに対応すること、Should Fix / Nit / Note の inline 混入がないこと、Nit が body に混入していないこと、4 軸 + `evidence_level` gate、反証 prompt |
-| 4. `payload_consistency` | `event` 判定、`body` 冒頭の `## 総評` 一致、`## 良い点` 一致、`findings.verified.json` ↔ `review.md` ↔ `review-payload.json` の Must Fix 件数一致、Should Fix body summary の 1:1 対応・3 件上限・セクション順序 |
+| 4. `payload_consistency` | `event` 判定、`body` 冒頭の `## 総評` 一致、`## 良い点` 一致、`findings.verified.json` ↔ `review.md` ↔ `review-payload.json` ↔ `findings.sarif` の Must Fix 件数一致、Should Fix body summary の 1:1 対応・3 件上限・セクション順序 |
 
 semantic preflight の反証 prompt は Must Fix finding のみに適用する。Codex は各 Must Fix finding について「この指摘が誤りである可能性」を 1 つだけ、1〜2 文で探索する。`pr.diff` / `pr.diff.ranges.txt` / `metadata.json` / 当該 finding 抜粋だけを根拠にし、反証を挙げられない場合のみ採用する。反証を挙げられた場合は `counterargument_succeeded` violation として `requires_review_regeneration=true` で報告する（反証成功 = 不採用 / FAIL）。
 
@@ -375,6 +378,8 @@ Codex は `preflight-result.json` の `violations[]` を以下の安定 `rule` �
 | --- | --- | --- | --- |
 | `schema_validation` | `schema_version_mismatch` | false | true |
 | `schema_validation` | `findings_validator_failed` | false | true |
+| `schema_validation` | `sarif_schema_invalid` | false | true |
+| `schema_validation` | `must_fix_count_mismatch` | false | true |
 | `schema_validation` | `id_fingerprint_mismatch` | false | true |
 | `schema_validation` | `pr_context_mismatch` | false | true |
 | `range_validation` | `path_not_in_files` | true | false |
@@ -415,7 +420,7 @@ Codex は `preflight-codex.md` の末尾付近に `### RESULT_JSON` 見出しと
 
 - いつ使うか: Step 4 で `review-payload.json` を生成した直後、Codex verifier コマンドの直前に必ず作成する
 - 作成方法: Write ツールで `~/claude-loop-pr-codex/$dir_name/preflight-prompt.md` に以下の prompt 本文を書き出す。`file_path` は `~` と `$dir_name` を実値へ展開した絶対パスで渡す
-- 置換ルール: `{SCHEMA_PATH}` / `{VALIDATOR_PATH}` / `{PREFLIGHT_SCHEMA_PATH}` / `{PREFLIGHT_VALIDATOR_PATH}` は Step 2.5 で保持した絶対パスへ Claude 側で置換してから書き出す。shell で prompt 本文を展開してはならない
+- 置換ルール: `{SCHEMA_PATH}` / `{VALIDATOR_PATH}` / `{SARIF_SCHEMA_PATH}` / `{SARIF_VALIDATOR_PATH}` / `{SARIF_GENERATOR_PATH}` / `{PREFLIGHT_SCHEMA_PATH}` / `{PREFLIGHT_VALIDATOR_PATH}` は Step 2.5 で保持した絶対パスへ Claude 側で置換してから書き出す。shell で prompt 本文を展開してはならない
 - 理由: prompt 本文には Markdown backtick や JSON double quote が含まれるため、shell の double-quoted argument として渡すと command substitution / quote 分割で壊れる。prompt file + stdin 経由に固定し、shell は本文を解釈しない
 
 ```markdown
@@ -426,8 +431,12 @@ Codex は `preflight-codex.md` の末尾付近に `### RESULT_JSON` 見出しと
 ## 入力ファイル
 - review-payload.json: 投稿予定の GitHub Reviews API payload
 - findings.verified.json: canonical findings（必須の source of truth）
+- findings.sarif: review 側で canonical から派生した local-only SARIF v2.1.0 artifact（GitHub Code Scanning upload はしない）
 - {SCHEMA_PATH}: canonical findings schema（絶対パス）
 - {VALIDATOR_PATH}: 同梱 findings validator（絶対パス）
+- {SARIF_SCHEMA_PATH}: OASIS SARIF v2.1.0 schema（絶対パス）
+- {SARIF_VALIDATOR_PATH}: 同梱 SARIF validator（絶対パス）
+- {SARIF_GENERATOR_PATH}: 同梱 SARIF generator（絶対パス）
 - {PREFLIGHT_SCHEMA_PATH}: preflight-result schema（絶対パス）
 - {PREFLIGHT_VALIDATOR_PATH}: preflight-result validator（絶対パス）
 - review.md: 統合レビューの全文
@@ -448,6 +457,8 @@ Codex は `preflight-codex.md` の末尾付近に `### RESULT_JSON` 見出しと
 2. 絶対パス {SCHEMA_PATH} と {VALIDATOR_PATH} を読み、可能なら `python3 {VALIDATOR_PATH} --schema {SCHEMA_PATH} --data findings.verified.json --metadata metadata.json` を実行して適合していること。実行できない場合も同梱 validator と同じ条件（required / enum / additionalProperties / allOf / if/then / format / range / fingerprint 再計算 / metadata.json との PR context 一致 / 4 軸 gate）で手動検証する。schema または validator 実体を読めない場合は FAIL
 3. findings.verified.json の top-level pr.repository / pr.number / pr.head_sha / pr.base_sha が metadata.json の repository_full_name / pr_number / head_sha / base_sha と一致し、metadata.json.repository_full_name が投稿先 org/repository と一致すること
 4. 全 finding で id == fingerprint が成り立ち、同梱 validator と同じ正準アルゴリズムで再計算した fingerprint と一致すること
+5. findings.sarif が存在し、絶対パス {SARIF_SCHEMA_PATH} / {SARIF_VALIDATOR_PATH} で `python3 {SARIF_VALIDATOR_PATH} --schema {SARIF_SCHEMA_PATH} --data findings.sarif --findings findings.verified.json --ranges pr.diff.ranges.txt --markdown review.md --payload review-payload.json` を実行して PASS すること。存在しない場合は `python3 {SARIF_GENERATOR_PATH} --findings findings.verified.json --metadata metadata.json --ranges pr.diff.ranges.txt --output findings.sarif` で再生成してから検証してよいが、GitHub へ upload してはならない。空の `pr.diff.ranges.txt` は「コメント可能範囲なし」として扱い、非空 findings / SARIF results がある場合は生成・検証ともに FAIL とする（`--ranges` 未指定時だけ range gate 無効）
+6. Must Fix 件数が `canonical_must_fix == markdown_must_fix == payload_must_fix == sarif_must_fix` であること。SARIF 側は `level == "error"` の result 件数で数える。不一致は rule=must_fix_count_mismatch, stage=schema_validation, auto_fixable=false, requires_review_regeneration=true とする
 
 ## STAGE 2: range_validation
 以下を確認し、STAGE 2: PASS または STAGE 2: FAIL を出力してください。
@@ -468,11 +479,13 @@ Codex は `preflight-codex.md` の末尾付近に `### RESULT_JSON` 見出しと
 1. payload.event が 'Must Fix が1件以上（body 末尾へ退避した範囲外 Must Fix も含む）→ REQUEST_CHANGES / 0件 → COMMENT' のルールに従うこと
 2. payload.body の冒頭が review.md の '## 総評' セクション本文と一致すること（先頭・末尾の空白を除く）
 3. payload.body 中の '## 良い点' セクションがある場合、review.md の '## 良い点' 本文と一致すること
-4. findings.verified.json にある Must Fix 件数と review.md の Must Fix 見出し件数が一致し、payload.comments[] と body 末尾へ退避した Must Fix の合計件数とも整合すること
+4. findings.verified.json にある Must Fix 件数、review.md の Must Fix 見出し件数、payload.comments[] と body 末尾へ退避した Must Fix の合計件数、findings.sarif の `level=error` result 件数がすべて整合すること
 
 ## violation 分類表
 - schema_version_mismatch: stage=schema_validation, auto_fixable=false, requires_review_regeneration=true
 - findings_validator_failed: stage=schema_validation, auto_fixable=false, requires_review_regeneration=true
+- sarif_schema_invalid: stage=schema_validation, auto_fixable=false, requires_review_regeneration=true
+- must_fix_count_mismatch: stage=schema_validation, auto_fixable=false, requires_review_regeneration=true
 - id_fingerprint_mismatch: stage=schema_validation, auto_fixable=false, requires_review_regeneration=true
 - pr_context_mismatch: stage=schema_validation, auto_fixable=false, requires_review_regeneration=true
 - path_not_in_files: stage=range_validation, auto_fixable=true, requires_review_regeneration=false
@@ -583,6 +596,7 @@ Step 3.75 の Should Fix body inclusion opt-in（候補がある場合のみ表�
 event: <REQUEST_CHANGES | COMMENT>
 findings source: ~/claude-loop-pr-codex/<$dir_name>/findings.verified.json
 review file: ~/claude-loop-pr-codex/<$dir_name>/review.md
+SARIF artifact: ~/claude-loop-pr-codex/<$dir_name>/findings.sarif (local-only, Code Scanning upload なし)
 body プレビュー:
   <$summary の先頭 200 文字。長ければ "..." で省略>
 インラインコメント: Must Fix N 件
@@ -702,6 +716,7 @@ test ! -d ~/claude-loop-pr-codex/$dir_name && test -d ~/claude-loop-pr-codex/sen
 - `findings.verified.json` の schema / fingerprint validation が同梱 validator + `schemas/findings.v1.json` で失敗 → ユーザーに通知して処理中断（Markdown fallback へは切り替えない）
 - `findings.verified.json.pr.*` が `metadata.json` の投稿先 repo / PR number / head/base SHA と一致しない → ユーザーに通知して処理中断（Markdown fallback へは切り替えない）
 - `findings.verified.json` の Must Fix 件数と `review.md` の Must Fix 見出し件数が不一致 → ユーザーに通知して処理中断（Markdown fallback へは切り替えない）
+- `findings.sarif` が存在しない、または `tasks/validate_findings_sarif.py --schema $sarif_schema_path --data findings.sarif --findings findings.verified.json --ranges pr.diff.ranges.txt --markdown review.md --payload review-payload.json` に失敗 → schema_validation FAIL として投稿を中断する。`findings.sarif` は local-only artifact であり、M2 では upload しない
 - `findings.verified.json` の Must Fix に `location.side != RIGHT` が含まれる → ユーザーに通知して処理中断（M1 では old-side 投稿を扱わない）
 - `findings.verified.json` の Must Fix に `posting.post_policy != inline` または `explanation_postable != true` が含まれる → ユーザーに通知して処理中断（M1 では安全に自動投稿しない）
 - `review.md` に Must Fix が一件も無い → それでも `event: COMMENT` + body (総評 + 良い点 + opt-in された Should Fix body summary) のみで投稿する（インラインコメント配列は空）
@@ -729,7 +744,7 @@ test ! -d ~/claude-loop-pr-codex/$dir_name && test -d ~/claude-loop-pr-codex/sen
 9. 1 回の実行で処理する対象ディレクトリは 1 件のみとする
 10. 投稿前の Step 5 承認プロンプトは必須。自動投稿はしない。Should Fix body summary は default no とし、Step 3.75 で明示 opt-in された場合だけ上位 3 件を body に含める
 11. Step 3 の `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings.py ...` を **必ず**実行する。`findings.verified.json` 欠落または validator 失敗時に payload 生成や Markdown fallback へ進んではならない
-12. Step 4.5 の verifier pipeline は **必須**。スキップしてはならない。`preflight-result.json.verdict == "PASS"` と `preflight-codex.md` の `VERDICT: PASS` を確認するまで Step 5 に進まない。schema 検証観点では `$CLAUDE_PLUGIN_ROOT/schemas/findings.v1.json` と `$CLAUDE_PLUGIN_ROOT/schemas/preflight-result.v1.json` の絶対パスを prompt / 抽出コマンドに埋め込み、`--cd` 配下の相対 `schemas/` には依存しない
+12. Step 4.5 の verifier pipeline は **必須**。スキップしてはならない。`preflight-result.json.verdict == "PASS"` と `preflight-codex.md` の `VERDICT: PASS` を確認するまで Step 5 に進まない。schema 検証観点では `$CLAUDE_PLUGIN_ROOT/schemas/findings.v1.json`、`$CLAUDE_PLUGIN_ROOT/schemas/sarif-2.1.0.json`、`$CLAUDE_PLUGIN_ROOT/schemas/preflight-result.v1.json` の絶対パスを prompt / 抽出コマンドに埋め込み、`--cd` 配下の相対 `schemas/` には依存しない
 
 ## ファイル構成
 
@@ -739,10 +754,13 @@ test ! -d ~/claude-loop-pr-codex/$dir_name && test -d ~/claude-loop-pr-codex/sen
 $CLAUDE_PLUGIN_ROOT/skills/send/
   └── SKILL.md                ← 本ファイル
 $CLAUDE_PLUGIN_ROOT/tasks/
-  ├── validate_findings.py    ← findings.verified.json の schema / fingerprint / format / range validator
+  ├── validate_findings.py        ← findings.verified.json の schema / fingerprint / format / range validator
+  ├── generate_findings_sarif.py  ← findings.verified.json から local-only SARIF を生成
+  ├── validate_findings_sarif.py  ← findings.sarif の schema / count consistency validator
   └── validate_preflight_result.py ← preflight-result.json の抽出 / schema / cross-field validator
 $CLAUDE_PLUGIN_ROOT/schemas/
   ├── findings.v1.json
+  ├── sarif-2.1.0.json
   └── preflight-result.v1.json
 ```
 
@@ -754,6 +772,7 @@ $CLAUDE_PLUGIN_ROOT/schemas/
         ├── status.json            ← state:completed
         ├── metadata.json
         ├── findings.verified.json  ← primary input (`schemas/findings.v1.json`)
+        ├── findings.sarif          ← local-only SARIF v2.1.0 artifact（upload しない）
         ├── validation-report.json  ← review 側の副成果物（あれば保持）
         ├── review.md              ← 投稿元
         ├── pr.diff
@@ -778,6 +797,7 @@ $CLAUDE_PLUGIN_ROOT/schemas/
               ├── status.json
               ├── metadata.json
               ├── findings.verified.json
+              ├── findings.sarif          ← local-only SARIF。GitHub Code Scanning upload は自動化しない
               ├── validation-report.json
               ├── review.md
               ├── review-payload.json    ← 追加: 投稿した payload

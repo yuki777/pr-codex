@@ -16,7 +16,8 @@ GitHub PRを **Claude Code** と **Codex CLI** の2者レビュー方式で自�
 - Codex CLI (`codex-cli 0.128.0` 以上、`codex --ask-for-approval never -m gpt-5.5 ... exec` が使えること)
 - GitHub CLI (`gh`)
 - `jq`（SKILL.md 内の全テンプレートで利用する。macOS 標準では未インストール）
-- `python3`（同梱 validator / eval runner で `findings.candidates.json` / `findings.verified.json` / `status.json` / `preflight-result.json` / fixture scoring artifact を検証するため）
+- `python3`（同梱 validator / eval runner で `findings.candidates.json` / `findings.verified.json` / `status.json` / `preflight-result.json` / `findings.sarif` / fixture scoring artifact を検証するため）
+- Python package `jsonschema` (`python3 -m pip install 'jsonschema>=4,<5'`) — `tasks/validate_findings_sarif.py` が同梱 OASIS SARIF v2.1.0 schema に対して official schema validation を行うため
 
 ## セットアップ
 
@@ -95,7 +96,7 @@ cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
    - ranker: `run-plan.json` で PR risk/area と実行方針を分類
    - hunter: Claude Code と Codex CLI が並行して広めに候補を集め、`findings.candidates.json` を残す
    - verifier: 4軸 + evidence ladder + counterexample で絞り込み、`findings.verified.json` を canonical artifact にする
-   - explainer: verified findings から `review.md` と local-only artifact を派生生成する
+   - explainer: verified findings から `review.md` と local-only `findings.sarif` を派生生成する
 5. **結果報告** — レビュー結果の要約をユーザーに報告
 
 Stage ごとの責務、input/output artifact、halting 条件は [`skills/review/STAGES.md`](skills/review/STAGES.md) を参照してください。
@@ -114,7 +115,7 @@ Stage ごとの責務、input/output artifact、halting 条件は [`skills/revie
 2. `findings.verified.json` を必須の一次入力として `Must Fix` / `Should Fix` / `Nit` の投稿方針を抽出し、`review.md` から `## 総評` / `## 良い点` を body に使う（F13 以降は Markdown parser fallback へ切り替えず、欠落・schema 不整合・Must Fix 件数不一致なら中断する）
 3. `Should Fix` のうち `post_policy: body_summary` の候補がある場合、上位 3 件を body の `## 非ブロッキング改善 (Should Fix)` に含めるかを確認する（default: no）
 4. `Nit` は PR に投稿せず、primary path では `nits.md` にローカル artifact として書き出す（0 件なら作成しない）
-5. Step 4.5 の verifier pipeline を schema / range / semantic / payload consistency の 4 stage で実行し、従来互換の `preflight-codex.md` に加えて `preflight-result.json` を保存する。semantic stage では Must Fix の反証、Should Fix body summary の対応関係、Nit の payload 混入を検証する
+5. Step 4.5 の verifier pipeline を schema / range / semantic / payload consistency の 4 stage で実行し、従来互換の `preflight-codex.md` に加えて `preflight-result.json` を保存する。schema stage では `findings.sarif` の schema validation と `findings.verified.json` ↔ `review.md` ↔ `review-payload.json` ↔ `findings.sarif` の Must Fix count 一致を検証し、semantic stage では Must Fix の反証、Should Fix body summary の対応関係、Nit の payload 混入を検証する
 6. GitHub Reviews API への payload サマリをユーザーに提示し、明示的な承認を得る
 7. 承認後、`gh api --method POST .../reviews` で投稿（`event` は Must Fix ありなら `REQUEST_CHANGES`、なければ `COMMENT`。`APPROVE` は自動では出さない）
 8. 投稿成功後、対象ディレクトリを `~/claude-loop-pr-codex/sent/$org-$repo-$pr-$head_sha_short/` に移動する（同一 PR でも HEAD 更新後の再投稿履歴が衝突しないよう、`head_sha` の先頭 7 文字を suffix に付ける）
@@ -127,6 +128,13 @@ Stage ごとの責務、input/output artifact、halting 条件は [`skills/revie
 - `Should Fix` は自動では投稿されない。手動実行時に `yes` を選ぶと、author が見落としやすい非ブロッキング改善だけを上位 3 件まで PR body に短く同梱できる
 - `Nit` はノイズ抑制のため PR には載せず、`nits.md` に控えとして残す。投稿後は `sent/` 配下の履歴ディレクトリで確認できる
 - `findings.verified.json` がない fallback path では、従来どおり `Should Fix` / `Nit` / 補足を投稿 payload に含めない
+
+### Local artifacts と GitHub 投稿対象の境界
+
+- GitHub Reviews API に送るのは `review-payload.json` の `body` と `comments[]` のみ。`comments[]` は Must Fix の inline comment だけを含む
+- `findings.verified.json` は canonical source、`review.md` / `review-payload.json` / `findings.sarif` / `nits.md` は派生成果物。canonical を単一の真実源とし、派生成果物を手で編集して canonical に逆流させない
+- `findings.sarif` は M2 では **local-only artifact**。GitHub Code Scanning への upload、CI からの公開、PR への添付は自動化しない（M3 の別 Issue で扱う）
+- `posting.post_policy=suppress` の finding は SARIF にも出さず、canonical 内部記録だけに残す。`local_only` と `nit` は SARIF `suppressions[]` を付けてノイズ公開の経路を閉じる
 
 ## Hermes Agent 自動化 (Phase 0)
 
@@ -221,6 +229,7 @@ python3 tasks/m1_m2_gate.py \
   │     ├── codex-review.md       # Codex CLI の生レビュー (hunter)
   │     ├── findings.candidates.json # hunter → verifier 境界の候補 (`schemas/findings.candidates.v1.json`)
   │     ├── findings.verified.json # canonical findings (`schemas/findings.v1.json`)
+  │     ├── findings.sarif        # SARIF v2.1.0 派生成果物。M2 では local-only / upload しない
   │     ├── validation-report.json # validation の副成果物（canonical findings とは分離）
   │     ├── review.md             # 統合レビュー（最終成果物）
   │     ├── preflight-prompt.md   # /pr-codex:send Step 4.5 の Codex verifier prompt
@@ -234,6 +243,7 @@ python3 tasks/m1_m2_gate.py \
         └── $org-$repo-$pr-$head_sha_short/ # 投稿後にここへ移動される
               ├── findings.candidates.json
               ├── findings.verified.json
+              ├── findings.sarif        # local-only SARIF。Code Scanning upload は自動化しない
               ├── review.md
               ├── nits.md               # Nit があった場合のみ
               ├── review-payload.json   # 投稿した GitHub Reviews API の payload
@@ -289,13 +299,24 @@ mv ~/claude-loop-pr-codex/sent/yuki777-pr-codex-24 \
 - Timeout 完了率の実測比較は #36 (F11 regression eval) の fixture/eval 完了後に行う。本リポジトリ内の回帰確認は `python3 tasks/validate_run_plan.py` と `python3 -m unittest discover -s tasks -p "test_*.py"` を流し、routing fields と既存 timeout proxy が悪化していないことを確認する
 - Budget class はレビュー観点や Must Fix 検出を抑制するためには使わない。`focused-fallback` でも security / bug / test を優先しつつレビュー自体は継続する
 
+## SARIF derived artifact
+
+- `tasks/generate_findings_sarif.py` は `findings.verified.json` から SARIF v2.1.0 `findings.sarif` を一方向生成する。`schema_version == "findings.v1"` 専用で、canonical への逆変換はしない
+- `schemas/sarif-2.1.0.json` は OASIS SARIF v2.1.0 schema を同梱したもの。`tasks/validate_findings_sarif.py` は Python `jsonschema` でこの schema に対する official schema validation を行い、さらに pr-codex cross-artifact rule（side=RIGHT、fingerprint、post_policy、Must Fix count）をオフラインで検証する
+- `--ranges pr.diff.ranges.txt` を指定した場合、SARIF location は同一 path の RIGHT-side hunk 範囲内に必ず入る必要がある。`--ranges` 未指定は range gate 無効、指定したファイルが空の場合は「コメント可能範囲なし」として非空 finding の SARIF 生成/検証を失敗させる
+- SARIF の `message.text` と `artifactLocation.uri` は GitHub 投稿前 scrub と同じ姿勢で扱い、POSIX / Windows drive / UNC / `file://` の host absolute path を message では `<absolute-path>` に scrub し、location では repository-relative path 以外を拒否する
+- rule は category enum 8 種（`pr-codex/bug` など）を固定列挙する。`severity` は `must_fix → error` / `should_fix → warning` / `nit → note` / `note → none` に写像する
+- `security` category の `must_fix` は `properties.security_severity_label = "high"` を付ける。F7 では label のみで、security high/critical の inline 抑制ロジックは変更しない
+- `result.partialFingerprints.canonical` は canonical `finding.id` と同じ安定 fingerprint。`result.guid` は SARIF 公式 schema の GUID 制約を満たすため、この fingerprint から導出した deterministic UUIDv5 を使う
+- `result.fixes[]` は M2 では出力しない。`suggestion` は `message.text` に含め、機械適用可能な修正としては扱わない
+- `posting.post_policy=local_only` は `suppressions: [{kind: "external", status: "accepted", justification: "local_only per pr-codex post_policy"}]` を付ける。`posting.post_policy=suppress` は SARIF に出力しない。Nit は `post_policy` が壊れていても SARIF 側で suppression を要求する
 
 ## Preflight result schema
 
 - `/pr-codex:send` Step 4.5 は `schemas/preflight-result.v1.json` に従う `preflight-result.json` を出力する
 - `verdict` は `PASS` / `FAIL` のみ。`PASS_WITH_WARNINGS` は導入せず、将来の非ブロッキング警告は `violations[].severity = "warning"` として表現する
 - `stages` は `schema_validation` / `range_validation` / `semantic_preflight` / `payload_consistency` の 4 stage を必ず含む
-- `violations[]` は `auto_fixable` と `requires_review_regeneration` を持ち、send 側で直せる payload ずれ（行範囲・event・body など）と review 再生成が必要な semantic/schema 不整合を分離する
+- `violations[]` は `auto_fixable` と `requires_review_regeneration` を持ち、send 側で直せる payload ずれ（行範囲・event・body など）と review 再生成が必要な semantic/schema 不整合を分離する。`findings.sarif` schema validation 失敗や `canonical_must_fix != markdown_must_fix != payload_must_fix != sarif_must_fix` は `schema_validation` stage の `must_fix_count_mismatch` として FAIL にする
 - `tasks/validate_preflight_result.py` は `preflight-codex.md` の `RESULT_JSON` ブロック抽出と `preflight-result.json` の cross-field validation を stdlib-only で行う
 
 ### fingerprint 正準アルゴリズム

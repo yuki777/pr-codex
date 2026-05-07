@@ -728,21 +728,21 @@ MCP について:
    - **相違点**: 一部の生レビューにだけある指摘は、`pr.diff` と checkout 済みソースで 4軸 (`real` / `triggerable` / `impactful` / `general`) を明示的に埋め、落とす理由（`no` / `unknown`）を優先探索して採否と重要度を決める。採用したい理由だけで Must Fix にしない
    - **補完**: 見落とされていた観点が補われている場合は、根拠を確認したうえで最終 findings に反映する
    - `review.md` には最終判断のみを書く。レビュー実行者名 / モデル名 / どの生レビュー由来かを示す表現 / `両者一致` / `片方のみ` のような由来表現は書かない
-9. `review.md` は **`findings.verified.json` から派生生成** する。`must_fix` → `## 重大な問題 (Must Fix)`, `should_fix` かつ `post_policy=body_summary` → `## 改善提案 (Should Fix)`, `nit` → `## 軽微な指摘 (Nit)`, `note` や `post_policy=local_only/suppress` の項目 → `## 補足` に対応させる。`## 総評` と `## 良い点` は人間向け要約として記述してよいが、Must Fix / Should Fix の件数や内容が canonical findings と矛盾してはならない
+9. `review.md` と `findings.sarif` は **`findings.verified.json` から派生生成** する。`review.md` は `must_fix` → `## 重大な問題 (Must Fix)`, `should_fix` かつ `post_policy=body_summary` → `## 改善提案 (Should Fix)`, `nit` → `## 軽微な指摘 (Nit)`, `note` や `post_policy=local_only/suppress` の項目 → `## 補足` に対応させる。`findings.sarif` は `tasks/generate_findings_sarif.py` で canonical から一方向生成し、M2 では local-only artifact として保存する（GitHub Code Scanning upload はしない）。`## 総評` と `## 良い点` は人間向け要約として記述してよいが、Must Fix / Should Fix の件数や内容が canonical findings と矛盾してはならない
 10. `run-plan.json` で `skip_reason != null`、`recommended_mode != "standard"`、`depth_actual != "standard"`、`depth_source != "default"`、`depth_downgraded == true`、または `depth_reason` が `changed lines > 5000` で始まる場合のいずれかに該当する場合は、`review.md` の `## 補足` に preflight 情報を最低限残す。`skip_reason != null` の場合は `- preflight: <skip_reason>。M1 の既定では focused fallback でレビューを継続した。` を含める。加えて `files_changed` / `lines_added` / `lines_removed` / `recommended_mode` / `depth_actual` / `depth_source` / `depth_reason` / `risk_tags` を明記し、レビュー範囲や重点が意図的に変わった事実を受け手が判断できるようにする。`routing_decision` はローカル artifact 専用であり、`review.md` や GitHub 投稿 body へコピーしない
 11. **fingerprint 整合 gate (必須)**: 全 finding で `id == fingerprint` を確認し、さらに `path` / `category` / `title` から README の正準アルゴリズムで fingerprint を再計算した値が JSON 内の `fingerprint` と一致することを、後述の `tasks/validate_findings.py` で検証する。1 件でもずれたら Step 5 の **failed 更新** へ遷移し、final artifact を書き出してはならない
-12. **件数一致 gate (必須)**: `findings.verified.json` の `severity=must_fix` 件数と、派生生成した `review.md` の `## 重大な問題 (Must Fix)` 見出し件数は **100% 一致** させる。1 件でもずれたら Step 5 の **failed 更新** へ遷移し、completed にしてはならない
-13. 上記 runtime gate を通過した場合のみ、`findings.candidates.json` / `findings.verified.json` / `review.md`（必要なら `validation-report.json` も）をまず `*.tmp` へ `Write` ツールで書き出す
-14. **同梱 validator gate (必須)**: `findings.candidates.json.tmp` を `tasks/validate_candidates.py` で検証し、その後 `findings.verified.json.tmp` を `tasks/validate_findings.py` で検証する。必須フィールド欠落、型不一致、enum 不一致、`posting` / `evidence_level` 条件違反、4軸 gate 違反、`pr.number` 非整数、RFC3339 / URI format 不正、`end_line < start_line`、`id != fingerprint`、fingerprint 再計算不一致、`metadata.json` の投稿先 repo / PR number / head/base SHA と `findings.verified.json.pr.*` の不一致など 1 件でも contract に反したら Step 5 の **failed 更新** へ遷移し、final artifact を書き出してはならない
-15. temp write と同梱 validator が成功した場合のみ Bash の `mv` で final path へ反映する。途中で temp write / validator / `mv` のいずれかが失敗した場合は Step 5 の **failed 更新** へ遷移し、completed にしてはならない
+12. **件数一致 gate (必須)**: `findings.verified.json` の `severity=must_fix` 件数と、派生生成した `review.md` の `## 重大な問題 (Must Fix)` 見出し件数、および `findings.sarif` の `level=error` result 件数は **100% 一致** させる。1 件でもずれたら Step 5 の **failed 更新** へ遷移し、completed にしてはならない
+13. 上記 runtime gate を通過した場合のみ、`findings.candidates.json` / `findings.verified.json` / `review.md`（必要なら `validation-report.json` も）をまず `*.tmp` へ `Write` ツールで書き出す。`findings.sarif.tmp` は `tasks/generate_findings_sarif.py` で canonical tmp から生成する
+14. **同梱 validator gate (必須)**: `findings.candidates.json.tmp` を `tasks/validate_candidates.py` で検証し、その後 `findings.verified.json.tmp` を `tasks/validate_findings.py` で検証し、さらに `findings.sarif.tmp` を `tasks/validate_findings_sarif.py` で `schemas/sarif-2.1.0.json` へ検証する。必須フィールド欠落、型不一致、enum 不一致、`posting` / `evidence_level` 条件違反、4軸 gate 違反、`pr.number` 非整数、RFC3339 / URI format 不正、`end_line < start_line`、`id != fingerprint`、fingerprint 再計算不一致、`metadata.json` の投稿先 repo / PR number / head/base SHA と `findings.verified.json.pr.*` の不一致、SARIF schema/side/range/post_policy/Must Fix count 不一致など 1 件でも contract に反したら Step 5 の **failed 更新** へ遷移し、final artifact を書き出してはならない
+15. temp write と同梱 validator が成功した場合のみ Bash の `mv` で final path へ反映する。途中で temp write / SARIF 生成 / validator / `mv` のいずれかが失敗した場合は Step 5 の **failed 更新** へ遷移し、completed にしてはならない
 
 - いつ使うか: `claude-review.md` と `codex-review.md` の両方が揃った後
-- 判定条件: `findings.candidates.json.tmp` が同梱 validator を通過し、全 finding で `id == fingerprint` が成り立ち、`review.md` と Must Fix 件数が一致し、`findings.verified.json.tmp` が同梱 validator を通過したうえで temp file → final path の反映まで完了する（`PR_DIFF_UNAVAILABLE` の場合は生成しない）
-- 次アクション: 書き出し後 Step 5 へ進む（`PR_DIFF_UNAVAILABLE` / `id != fingerprint` / 件数不一致 / temp write failure / validator failure / `mv` failure があった場合は Step 5 failed 分岐へ）
+- 判定条件: `findings.candidates.json.tmp` が同梱 validator を通過し、全 finding で `id == fingerprint` が成り立ち、`review.md` / `findings.sarif` と Must Fix 件数が一致し、`findings.verified.json.tmp` と `findings.sarif.tmp` が同梱 validator を通過したうえで temp file → final path の反映まで完了する（`PR_DIFF_UNAVAILABLE` の場合は生成しない）
+- 次アクション: 書き出し後 Step 5 へ進む（`PR_DIFF_UNAVAILABLE` / `id != fingerprint` / 件数不一致 / temp write failure / SARIF generation failure / validator failure / `mv` failure があった場合は Step 5 failed 分岐へ）
 
 `Write` ツールは `~` やシェル変数（`$org` 等）を展開しない。`file_path` にはホームディレクトリを `$HOME` の実値（例: `/Users/adachi`）に展開済みの絶対パスを渡し、`$org` / `$repository` / `$pr_number` も実値に置換してから呼び出すこと。`findings.candidates.json` / `findings.verified.json` の JSON 本文も、プレースホルダを残さず実値で埋める。temp file を使う場合も同様に絶対パスで指定する。
 
-temp file 書き出し後、final artifact へ反映する前に以下の同梱 validator を必ず順番に実行する。`$CLAUDE_PLUGIN_ROOT` が shell 環境で未設定の場合は、Step 4 前処理で解決した plugin root の絶対パスに置換してから Bash ツールへ渡す（コマンド構造は変えない）。この validator は stdlib-only で、npm cache やネットワークを使わず、作業ディレクトリ外へ書き込まない。
+temp file 書き出し後、final artifact へ反映する前に以下の同梱 validator を必ず順番に実行する。`$CLAUDE_PLUGIN_ROOT` が shell 環境で未設定の場合は、Step 4 前処理で解決した plugin root の絶対パスに置換してから Bash ツールへ渡す（コマンド構造は変えない）。canonical findings validator / candidates validator / status validator は stdlib-only、SARIF validator は Python package `jsonschema>=4,<5` を使って同梱 OASIS schema を検証する。いずれも成果物を書き換えず検証だけに使い、npm cache やネットワークを使わず、作業ディレクトリ外へ書き込まない。
 
 ```bash
 python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_candidates.py --schema $CLAUDE_PLUGIN_ROOT/schemas/findings.candidates.v1.json --data ~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.candidates.json.tmp --metadata ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json
@@ -752,7 +752,17 @@ python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_candidates.py --schema $CLAUDE_PLUGIN
 python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings.py --schema $CLAUDE_PLUGIN_ROOT/schemas/findings.v1.json --data ~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.verified.json.tmp --metadata ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json
 ```
 
-temp file を final artifact に反映する際は、以下の `mv` テンプレートだけを使う。`review.md` を先に反映し、その後 `findings.candidates.json`、最後に `findings.verified.json` を反映する。これにより `findings.verified.json` だけが残る状態を避け、completed 更新前に send primary path の前提が成立しないようにする。
+続いて、canonical tmp から local-only SARIF を生成し、OASIS SARIF schema と pr-codex cross-artifact rule（RIGHT side、diff range、post_policy、Must Fix count）で検証する。`findings.sarif` は M2 では GitHub Code Scanning へ upload せず、`findings.verified.json` と同じディレクトリに保存するだけにする。`--ranges pr.diff.ranges.txt` を指定した生成/検証では、空の `pr.diff.ranges.txt` は「コメント可能範囲なし」として扱い、非空 finding / SARIF result を PASS させてはならない（`--ranges` 未指定時だけ range gate 無効）。
+
+```bash
+python3 $CLAUDE_PLUGIN_ROOT/tasks/generate_findings_sarif.py --findings ~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.verified.json.tmp --metadata ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json --ranges ~/claude-loop-pr-codex/$org-$repository-$pr_number/pr.diff.ranges.txt --output ~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.sarif.tmp
+```
+
+```bash
+python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings_sarif.py --schema $CLAUDE_PLUGIN_ROOT/schemas/sarif-2.1.0.json --data ~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.sarif.tmp --findings ~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.verified.json.tmp --ranges ~/claude-loop-pr-codex/$org-$repository-$pr_number/pr.diff.ranges.txt --markdown ~/claude-loop-pr-codex/$org-$repository-$pr_number/review.md.tmp
+```
+
+temp file を final artifact に反映する際は、以下の `mv` テンプレートだけを使う。`review.md` を先に反映し、その後 `findings.candidates.json`、`findings.verified.json`、最後に `findings.sarif` を反映する。これにより `findings.verified.json` だけが残る状態を避け、completed 更新前に send primary path の前提が成立しないようにする。
 
 ```bash
 mv ~/claude-loop-pr-codex/$org-$repository-$pr_number/review.md.tmp ~/claude-loop-pr-codex/$org-$repository-$pr_number/review.md
@@ -764,6 +774,10 @@ mv ~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.candidates.json.t
 
 ```bash
 mv ~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.verified.json.tmp ~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.verified.json
+```
+
+```bash
+mv ~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.sarif.tmp ~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.sarif
 ```
 
 副成果物 `validation-report.json` を出す場合のみ、最後に以下を実行してよい。
@@ -927,11 +941,17 @@ $CLAUDE_PLUGIN_ROOT/skills/review/
   ├── REVIEW_CRITERIA.md      ← 4a / 4b 共通のレビュー観点本文。Step 4 前処理で Read し、{REVIEW_CRITERIA} プレースホルダに置換
   └── STAGES.md               ← ranker / hunter / verifier / explainer の責務・artifact・halting 条件
 $CLAUDE_PLUGIN_ROOT/tasks/
-  ├── validate_candidates.py  ← hunter candidates の schema / metadata validator
-  ├── validate_findings.py    ← canonical findings の schema / fingerprint / format / range validator
-  ├── validate_status.py      ← status.json stage / failed_stage validator
-  ├── score_fixture.py        ← F11 manual/deep eval 用の fixture scoring runner（通常レビュー中は実行しない）
-  └── m1_m2_gate.py           ← F11 M1→M2 gate report runner（運用実測値を外部入力として受ける）
+  ├── validate_candidates.py      ← hunter candidates の schema / metadata validator
+  ├── validate_findings.py        ← canonical findings の schema / fingerprint / format / range validator
+  ├── generate_findings_sarif.py  ← canonical findings から local-only findings.sarif を生成
+  ├── validate_findings_sarif.py  ← SARIF schema / post_policy / count consistency validator
+  ├── validate_status.py          ← status.json stage / failed_stage validator
+  ├── score_fixture.py            ← F11 manual/deep eval 用の fixture scoring runner（通常レビュー中は実行しない）
+  └── m1_m2_gate.py               ← F11 M1→M2 gate report runner（運用実測値を外部入力として受ける）
+$CLAUDE_PLUGIN_ROOT/schemas/
+  ├── findings.candidates.v1.json
+  ├── findings.v1.json
+  └── sarif-2.1.0.json
 ```
 
 実行時の作業ディレクトリ:
@@ -950,10 +970,12 @@ $CLAUDE_PLUGIN_ROOT/tasks/
         ├── codex-review.md      ← Codex CLI の生レビュー (hunter)
         ├── findings.candidates.json ← hunter → verifier 境界の候補 artifact (`schemas/findings.candidates.v1.json`)
         ├── findings.verified.json ← canonical findings (`schemas/findings.v1.json`)
+        ├── findings.sarif       ← SARIF v2.1.0 派生成果物（local-only / upload しない）
         ├── validation-report.json ← validation の副成果物（optional）
         ├── review.md            ← 統合レビュー（最終成果物）
         ├── findings.candidates.json.tmp ← Step 4c の一時ファイル（失敗時に残り得る）
         ├── findings.verified.json.tmp  ← Step 4c の一時ファイル（失敗時に残り得る）
+        ├── findings.sarif.tmp   ← Step 4c の一時ファイル（失敗時に残り得る）
         ├── validation-report.json.tmp  ← Step 4c の一時ファイル（optional）
         ├── review.md.tmp        ← Step 4c の一時ファイル（失敗時に残り得る）
         ├── claude.log
@@ -964,7 +986,7 @@ $CLAUDE_PLUGIN_ROOT/tasks/
 
 本スキルは Claude Code を `--permission-mode auto` で起動することを前提とする（README の「使い方」参照）。auto mode でも、許可済みツールやコマンドの内容によっては分類器の判断で承認が必要になり得るため、本スキルではテンプレートに明示された操作だけを実行する。
 
-ローカルの書き込みは作業ディレクトリ `~/claude-loop-pr-codex/` 配下に限り、`clone-claude/` / `clone-codex/` の作成と更新、`status.json` / `metadata.json` / `run-plan.json` / `pr.diff` / `pr.diff.ranges.txt` / `claude.log` / `codex.log` / `claude-review.md` / `codex-review.md` / `findings.candidates.json` / `findings.verified.json` / `validation-report.json` / `review.md` と、それらの `*.tmp` 一時ファイル作成のみ許可する。schema / fingerprint / status validation のために `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_candidates.py ...` と `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings.py ...` と `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_status.py ...` を実行してよいが、validator は成果物を書き換えず検証だけに使う。
+ローカルの書き込みは作業ディレクトリ `~/claude-loop-pr-codex/` 配下に限り、`clone-claude/` / `clone-codex/` の作成と更新、`status.json` / `metadata.json` / `run-plan.json` / `pr.diff` / `pr.diff.ranges.txt` / `claude.log` / `codex.log` / `claude-review.md` / `codex-review.md` / `findings.candidates.json` / `findings.verified.json` / `findings.sarif` / `validation-report.json` / `review.md` と、それらの `*.tmp` 一時ファイル作成のみ許可する。schema / fingerprint / status / SARIF validation のために `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_candidates.py ...`、`python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings.py ...`、`python3 $CLAUDE_PLUGIN_ROOT/tasks/generate_findings_sarif.py ...`、`python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings_sarif.py ...`、`python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_status.py ...` を実行してよいが、validator は成果物を書き換えず検証だけに使う。
 
 F11 の regression eval (`score_fixture.py` / `m1_m2_gate.py`) は通常の `/pr-codex:review` 実行フローには組み込まない。手動 deep eval で `findings.verified.json` を採点する場合のみ、README / `fixtures/README.md` の手順に従って `artifacts/` 配下へ `score-report.v1` / `m1-m2-gate.v1` を出力する。CI では固定 stub の deterministic test だけを実行し、LLM や GitHub write/API 投稿は必須経路に入れない。
 
@@ -976,13 +998,13 @@ F11 の regression eval (`score_fixture.py` / `m1_m2_gate.py`) は通常の `/pr
 4. シェル演算子はテンプレート中に明示された `|` `<` `>` `2>` `&&` のみ許可する。パイプラインの upstream 失敗検知のため、テンプレート中に明示された `set -o pipefail &&` は削除せずそのまま使う
 5. JSON 生成は `jq -n --arg` / `--argjson` / `--slurpfile` / `--rawfile` を使う。ヒアドキュメントで JSON を直接組み立てない
 6. ファイル書き込みの使い分け:
-   - `findings.candidates.json.tmp` / `findings.verified.json.tmp` / `validation-report.json.tmp` / `review.md.tmp` は `Write` ツールで書き出し、gate 通過後に `mv` で final name へ反映する（`file_path` は `~` / `$...` を展開しないため、実値の絶対パスを渡す）
+   - `findings.candidates.json.tmp` / `findings.verified.json.tmp` / `validation-report.json.tmp` / `review.md.tmp` は `Write` ツールで書き出し、`findings.sarif.tmp` は `generate_findings_sarif.py` の `--output` で書き出し、gate 通過後に `mv` で final name へ反映する（`file_path` は `~` / `$...` を展開しないため、実値の絶対パスを渡す）
    - `status.json` / `metadata.json` / `run-plan.json` は `jq -n --arg` / `--argjson` / `--slurpfile` / `--rawfile` の出力を `Bash` の `>` で書く
    - `pr.diff` は Step 3 の `gh pr diff` の標準出力を `>` でリダイレクトして作成する
    - `pr.diff.ranges.txt` は Step 3 の `awk` の標準出力を `>` でリダイレクトして作成する
    - `claude-review.md` / `codex-review.md` / `claude.log` / `codex.log` は Step 4a / 4b の標準出力・標準エラーを `>` / `2>` でリダイレクトして作成する
 7. Step 4a / 4b の timeout は必ず `1200000` に固定する
-8. テンプレートに明示された `git fetch` / `git checkout FETCH_HEAD` / `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_candidates.py ...` / `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings.py ...` / `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_status.py ...` / temp file から final artifact への `mv` / 成果物ファイル作成以外の状態変更操作は実行しない。禁止例: `git push` / `git merge` / `git reset --*` / `git clean -fd[x]` / `git stash` / `git commit` / `git tag` / `git branch -D`、`rm -rf` 系、`gh pr` / `gh issue` の write 操作、および GitHub / Backlog / DocBase の write 系 MCP ツール
+8. テンプレートに明示された `git fetch` / `git checkout FETCH_HEAD` / `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_candidates.py ...` / `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings.py ...` / `python3 $CLAUDE_PLUGIN_ROOT/tasks/generate_findings_sarif.py ...` / `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings_sarif.py ...` / `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_status.py ...` / temp file から final artifact への `mv` / 成果物ファイル作成以外の状態変更操作は実行しない。禁止例: `git push` / `git merge` / `git reset --*` / `git clean -fd[x]` / `git stash` / `git commit` / `git tag` / `git branch -D`、`rm -rf` 系、`gh pr` / `gh issue` の write 操作、および GitHub / Backlog / DocBase の write 系 MCP ツール
 9. 1回の実行で選定・処理する PR は 1 件のみとする
 10. Step 4a / 4b のプロンプト中に含まれる `{REVIEW_CRITERIA}` / `{RUN_PLAN_GUIDANCE}` / `{DEPTH_GUIDANCE}` プレースホルダは、Step 4 前処理で Read した `REVIEW_CRITERIA.md` と `run-plan.json` を元に Claude 側で置換したうえで、Bash ツールに渡す完全体のコマンド文字列として使う。`{REVIEW_CRITERIA}` / `{RUN_PLAN_GUIDANCE}` / `{DEPTH_GUIDANCE}` のいずれも bash double-quote 内で安全になるよう、差し込み前に **`\` → `\\`、`"` → `\"`、`$` → `\$`、`` ` `` → `\``** の順でエスケープする。シェルでのコマンド置換 (`$()`) やヒアドキュメントは使わない
 
