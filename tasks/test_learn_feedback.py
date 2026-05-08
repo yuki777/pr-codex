@@ -209,6 +209,19 @@ class LearnFeedbackTests(unittest.TestCase):
         self.assertNotIn("glpat-", artifact_text)
         self.assertIn("[REDACTED_TOKEN]", artifact_text)
 
+    def test_learn_skill_wires_user_invocation_arguments_to_helper(self):
+        skill = (ROOT / "skills" / "learn" / "SKILL.md").read_text(encoding="utf-8")
+
+        for snippet in (
+            "$ARGUMENTS",
+            "SNAPSHOT_JSON=",
+            "OUTPUT_DIR=",
+            "set -- $ARGUMENTS",
+            "--input \"$SNAPSHOT_JSON\"",
+            "--output-dir \"$OUTPUT_DIR\"",
+        ):
+            self.assertIn(snippet, skill)
+
     def test_write_feedback_artifacts_removes_stale_signal_files_on_rerun(self):
         payload = self.fixture_payload()
         with tempfile.TemporaryDirectory() as tmpdir:

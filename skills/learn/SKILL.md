@@ -37,13 +37,25 @@ artifact は token らしき値とローカルパスを redaction し、コメ�
 
 ## 使い方
 
-既に snapshot JSON がある場合:
+`/pr-codex:learn [snapshot.json] [output-dir]` として呼び出されたら、Claude は `$ARGUMENTS` を次のように解釈して `tasks/learn_feedback.py` に渡す。
 
 ```bash
+set -- $ARGUMENTS
+SNAPSHOT_JSON="${1:?snapshot.json を指定してください}"
+OUTPUT_DIR="${2:?output-dir を指定してください}"
+
 python3 tasks/learn_feedback.py \
-  --input /path/to/feedback-snapshot.json \
-  --output-dir ~/claude-loop-pr-codex/learn/<org>-<repo>-<pr>-<head_sha_short>
+  --input "$SNAPSHOT_JSON" \
+  --output-dir "$OUTPUT_DIR"
 ```
+
+例:
+
+```bash
+/pr-codex:learn feedback.json out
+```
+
+上記は `python3 tasks/learn_feedback.py --input "feedback.json" --output-dir "out"` として実行する。
 
 `snapshot` には少なくとも次のキーを含める。
 
