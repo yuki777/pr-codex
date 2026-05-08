@@ -260,8 +260,31 @@ class LearnFeedbackTests(unittest.TestCase):
         self.assertEqual(artifact_by_thread["PRRT_open_1"]["signal"], "false_positive")
         self.assertEqual(artifact_by_thread["PRRT_open_1"]["source"], "label_comment.false_positive")
 
+    def test_build_feedback_learning_result_prefers_label_only_false_positive_over_resolved_or_outdated_threads(
+        self,
+    ):
+        payload = self.fixture_payload()
+        payload["comments"] = []
+
+        result, artifacts = learn_feedback.build_feedback_learning_result(
+            payload, generated_at="2026-05-08T00:00:00Z"
+        )
+
+        self.assertEqual(result["summary"], {"addressed": 0, "superseded": 0, "false_positive": 2, "ignored": 2})
+        artifact_by_thread = {artifact["thread_id"]: artifact for artifact in artifacts}
+        self.assertEqual(artifact_by_thread["PRRT_resolved_1"]["signal"], "false_positive")
+        self.assertEqual(artifact_by_thread["PRRT_resolved_1"]["source"], "pr_label.false_positive")
+        self.assertNotIn("feedback_comment_id", artifact_by_thread["PRRT_resolved_1"])
+        self.assertEqual(artifact_by_thread["PRRT_outdated_1"]["signal"], "false_positive")
+        self.assertEqual(artifact_by_thread["PRRT_outdated_1"]["source"], "pr_label.false_positive")
+        self.assertIn(
+            {"thread_id": "PRRT_open_1", "reason": "no_explicit_learning_signal"},
+            result["ignored_threads"],
+        )
+
     def test_build_feedback_learning_result_ignores_untrusted_false_positive_issue_comment(self):
         payload = self.fixture_payload()
+        payload["labels"] = []
         payload["comments"][0]["user"]["login"] = "fork-contributor"
         payload["comments"][0]["authorAssociation"] = "CONTRIBUTOR"
 
@@ -399,6 +422,7 @@ class LearnFeedbackTests(unittest.TestCase):
     def test_build_feedback_learning_result_ignores_untrusted_false_positive_review_reply(self):
         payload = self.fixture_payload()
         payload["comments"] = []
+        payload["labels"] = []
         payload["review_threads"][2]["comments"]["nodes"].append(
             {
                 "id": "PRRC_untrusted_false_positive_reply",
@@ -423,6 +447,7 @@ class LearnFeedbackTests(unittest.TestCase):
     def test_build_feedback_learning_result_ignores_false_positive_label_mentions_in_review_replies(self):
         payload = self.fixture_payload()
         payload["comments"] = []
+        payload["labels"] = []
         payload["review_threads"][2]["isResolved"] = True
         payload["review_threads"][2]["comments"]["nodes"].append(
             {
@@ -890,7 +915,7 @@ class LearnFeedbackTests(unittest.TestCase):
                 payload, output_dir=output_dir, generated_at="2026-05-08T00:00:00Z"
             )
 
-            payload_without_false_positive = {**payload, "comments": []}
+            payload_without_false_positive = {**payload, "comments": [], "labels": []}
             result = learn_feedback.write_feedback_artifacts(
                 payload_without_false_positive,
                 output_dir=output_dir,

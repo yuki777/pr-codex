@@ -299,6 +299,11 @@ def build_feedback_learning_result(
     review_authors = configured_review_authors(payload)
     false_positive_comments = explicit_false_positive_comment_map(payload)
     false_positive_review_replies = explicit_false_positive_review_reply_map(payload, review_threads)
+    has_label_only_false_positive = (
+        FALSE_POSITIVE_LABEL in label_names(payload)
+        and not false_positive_comments
+        and not false_positive_review_replies
+    )
     artifacts: list[dict[str, Any]] = []
     ignored: list[dict[str, str]] = []
 
@@ -321,6 +326,10 @@ def build_feedback_learning_result(
             artifact["feedback_comment_url"] = fp_comment.get("html_url") or fp_comment.get("url")
             artifact["feedback_comment_excerpt"] = safe_excerpt(fp_comment.get("body"))
             artifacts.append(artifact)
+        elif has_label_only_false_positive and (
+            thread.get("isResolved") is True or thread.get("isOutdated") is True
+        ):
+            artifacts.append(artifact_base(payload, thread, signal="false_positive", source="pr_label.false_positive"))
         elif thread.get("isResolved") is True:
             artifacts.append(artifact_base(payload, thread, signal="addressed", source="review_thread.resolved"))
         elif thread.get("isOutdated") is True:
