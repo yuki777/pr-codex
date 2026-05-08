@@ -135,7 +135,7 @@ Stage ごとの責務、input/output artifact、halting 条件は [`skills/revie
 実体は同梱 helper `$CLAUDE_PLUGIN_ROOT/tasks/learn_feedback.py` で、snapshot JSON から冪等に artifact を生成する。
 
 ```bash
-python3 $CLAUDE_PLUGIN_ROOT/tasks/learn_feedback.py --input feedback-snapshot.json --output-dir ~/claude-loop-pr-codex/learn/<org>-<repo>-<pr>-<head_sha_short>
+python3 $CLAUDE_PLUGIN_ROOT/tasks/learn_feedback.py --input feedback-snapshot.json --output-dir ~/claude-loop-pr-codex/learn/yuki777-pr-codex-60-103766c
 ```
 
 `/pr-codex:send` の挙動:

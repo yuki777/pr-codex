@@ -4,6 +4,7 @@ import importlib.util
 import io
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -34,6 +35,27 @@ class LearnFeedbackTests(unittest.TestCase):
 
         self.assertIn("python3 $CLAUDE_PLUGIN_ROOT/tasks/learn_feedback.py", text)
         self.assertNotIn("python3 tasks/learn_feedback.py", text)
+
+    def test_readme_manual_learn_example_is_pasteable_shell(self):
+        text = README.read_text(encoding="utf-8")
+        command = next(
+            line
+            for line in text.splitlines()
+            if "tasks/learn_feedback.py" in line and "--output-dir" in line
+        )
+
+        self.assertNotIn("<org>", command)
+        self.assertNotIn("<repo>", command)
+        self.assertNotIn("<pr>", command)
+        result = subprocess.run(
+            ["bash", "-n"],
+            input=command,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def fixture_payload(self):
         return {
