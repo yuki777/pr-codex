@@ -31,7 +31,10 @@ TOKEN_RE = re.compile(
     r"\b(?:authorization\s*:\s*(?:bearer|basic)\s+[^\s,;]+|gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abprs]-[A-Za-z0-9-]{20,}|(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{20,}|sk-proj-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9_-]{20,}|glpat-[A-Za-z0-9_-]{20,}|npm_[A-Za-z0-9_]{20,}|AIza[A-Za-z0-9_-]{35}|AKIA[0-9A-Z]{16}|[\"']?[A-Za-z0-9_]*(?:password|token|secret|api[_-]?key)[A-Za-z0-9_]*[\"']?\s*[:=]\s*(?:\"[^\"]*\"|'[^']*'|[^\s,;]+))",
     re.IGNORECASE,
 )
-COOKIE_HEADER_RE = re.compile(r"\b(?:set-cookie|cookie)\s*:\s*[^\r\n]+", re.IGNORECASE)
+COOKIE_HEADER_RE = re.compile(
+    r"(?<![\w-])[\"']?(?:set-cookie|cookie)[\"']?\s*:\s*(?:\"[^\"]*\"|'[^']*'|[^\r\n]+)",
+    re.IGNORECASE,
+)
 URL_USERINFO_RE = re.compile(r"\b([a-z][a-z0-9+.-]*://)[^\s/@:]+(?::[^\s/@]*)?@([^\s`'\")<>]+)", re.IGNORECASE)
 LOCAL_PATH_COMPONENT_RE = r"(?:[^\s`'\")<>,;/\\~]+(?:\s+[^\s`'\")<>,;/\\~]+)*(?=[/\\])|[^\s`'\")<>,;/\\~]+)"
 LOCAL_PATH_RE = re.compile(

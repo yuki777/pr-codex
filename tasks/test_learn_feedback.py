@@ -670,6 +670,29 @@ class LearnFeedbackTests(unittest.TestCase):
         self.assertNotIn("set-cookie-value", artifact_text)
         self.assertIn("[REDACTED_TOKEN]", artifact_text)
 
+    def test_feedback_artifacts_redact_quoted_cookie_header_fields(self):
+        payload = self.fixture_payload()
+        payload["review_threads"][0]["comments"]["nodes"][0]["body"] = (
+            'structured headers include {"Cookie": "sessionid=json-cookie-value; theme=dark", '
+            '"Set-Cookie": "sid=json-set-cookie-value; HttpOnly"}'
+        )
+        payload["comments"][0]["body"] = (
+            'pr-codex/false-positive: PRRT_open_1 copied {"Cookie": "open-json-cookie"}'
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            learn_feedback.write_feedback_artifacts(
+                payload, output_dir=Path(tmpdir), generated_at="2026-05-08T00:00:00Z"
+            )
+            artifact_text = "\n".join(path.read_text() for path in (Path(tmpdir) / "feedback-artifacts").glob("*.json"))
+
+        for raw_cookie in (
+            "json-cookie-value",
+            "json-set-cookie-value",
+            "open-json-cookie",
+        ):
+            self.assertNotIn(raw_cookie, artifact_text)
+        self.assertIn("[REDACTED_TOKEN]", artifact_text)
+
     def test_feedback_artifacts_redact_password_assignments_and_aws_access_key_ids(self):
         payload = self.fixture_payload()
         aws_access_key_id = "AK" + "IA" + "ABCDEFGHIJKLMNOP"
