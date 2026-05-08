@@ -16,6 +16,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 TASKS = ROOT / "tasks"
 README = ROOT / "README.md"
+LEARN_SKILL = ROOT / "skills" / "learn" / "SKILL.md"
 
 
 def load_module(name: str):
@@ -31,6 +32,14 @@ learn_feedback = load_module("learn_feedback")
 
 
 class LearnFeedbackTests(unittest.TestCase):
+    def test_learn_skill_falls_back_when_plugin_root_env_is_unset(self):
+        text = LEARN_SKILL.read_text(encoding="utf-8")
+
+        self.assertNotIn("${CLAUDE_PLUGIN_ROOT:?", text)
+        self.assertIn('if [ -z "${CLAUDE_PLUGIN_ROOT:-}" ]', text)
+        self.assertIn("skills/learn/SKILL.md", text)
+        self.assertIn('CLAUDE_PLUGIN_ROOT="$(cd "$CLAUDE_PLUGIN_ROOT" && pwd)"', text)
+
     def test_readme_manual_learn_example_uses_plugin_root_helper_path(self):
         text = README.read_text(encoding="utf-8")
 
@@ -676,7 +685,9 @@ class LearnFeedbackTests(unittest.TestCase):
 
         for snippet in (
             "CLAUDE_PLUGIN_ROOT=",
-            "${CLAUDE_PLUGIN_ROOT:?CLAUDE_PLUGIN_ROOT を指定してください}",
+            'if [ -z "${CLAUDE_PLUGIN_ROOT:-}" ]',
+            "skills/learn/SKILL.md",
+            'CLAUDE_PLUGIN_ROOT="$(cd "$CLAUDE_PLUGIN_ROOT" && pwd)"',
             "HELPER=\"$CLAUDE_PLUGIN_ROOT/tasks/learn_feedback.py\"",
             "python3 \"$HELPER\"",
         ):

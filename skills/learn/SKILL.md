@@ -43,7 +43,15 @@ artifact は token らしき値とローカルパスを redaction し、コメ�
 # Claude が slash-command の解釈済み引数から直接 bind する。shell で再分割しない。
 SNAPSHOT_JSON="<1 番目の引数: snapshot.json>"
 OUTPUT_DIR="<2 番目の引数: output-dir>"
-CLAUDE_PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:?CLAUDE_PLUGIN_ROOT を指定してください}"
+if [ -z "${CLAUDE_PLUGIN_ROOT:-}" ]; then
+  LEARN_SKILL_PATH="$(find "$PWD" .. -path '*/skills/learn/SKILL.md' -print -quit 2>/dev/null || true)"
+  if [ -z "$LEARN_SKILL_PATH" ]; then
+    echo "CLAUDE_PLUGIN_ROOT が未設定で、skills/learn/SKILL.md から plugin root を推定できません" >&2
+    exit 1
+  fi
+  CLAUDE_PLUGIN_ROOT="${LEARN_SKILL_PATH%/skills/learn/SKILL.md}"
+fi
+CLAUDE_PLUGIN_ROOT="$(cd "$CLAUDE_PLUGIN_ROOT" && pwd)"
 HELPER="$CLAUDE_PLUGIN_ROOT/tasks/learn_feedback.py"
 
 python3 "$HELPER" \
