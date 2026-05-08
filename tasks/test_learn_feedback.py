@@ -462,6 +462,24 @@ class LearnFeedbackTests(unittest.TestCase):
             result["ignored_threads"],
         )
 
+    def test_build_feedback_learning_result_matches_review_authors_case_insensitively(self):
+        payload = self.fixture_payload()
+        payload["review_author"] = "ChatGPT-Codex-Connector"
+
+        result, artifacts = learn_feedback.build_feedback_learning_result(
+            payload, generated_at="2026-05-08T00:00:00Z"
+        )
+
+        self.assertEqual(result["summary"], {"addressed": 1, "superseded": 1, "false_positive": 1, "ignored": 1})
+        self.assertEqual(
+            {artifact["thread_id"] for artifact in artifacts},
+            {"PRRT_resolved_1", "PRRT_outdated_1", "PRRT_open_1"},
+        )
+        self.assertEqual(
+            result["ignored_threads"],
+            [{"thread_id": "PRRT_silent_1", "reason": "no_explicit_learning_signal"}],
+        )
+
     def test_build_feedback_learning_result_ignores_other_reviewers_threads(self):
         payload = self.fixture_payload()
         payload["review_threads"].append(
