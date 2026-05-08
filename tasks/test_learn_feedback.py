@@ -271,6 +271,36 @@ class LearnFeedbackTests(unittest.TestCase):
         self.assertNotIn("/var/folders", artifact_text)
         self.assertEqual(artifact_text.count("[REDACTED_LOCAL_PATH]"), 4)
 
+    def test_feedback_artifacts_redact_pasted_private_key_blocks(self):
+        payload = self.fixture_payload()
+        payload["review_threads"][0]["comments"]["nodes"][0]["body"] = (
+            "Please do not learn this pasted credential:\n"
+            "-----BEGIN OPENSSH PRIVATE KEY-----\n"
+            "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQ==\n"
+            "-----END OPENSSH PRIVATE KEY-----\n"
+            "The fix is unrelated."
+        )
+        payload["comments"][0]["body"] = (
+            "pr-codex/false-positive: PRRT_open_1 includes another credential block.\n"
+            "-----BEGIN RSA PRIVATE KEY-----\n"
+            "MIIEpAIBAAKCAQEA0notARealCredentialExampleOnly\n"
+            "-----END RSA PRIVATE KEY-----"
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            learn_feedback.write_feedback_artifacts(
+                payload, output_dir=Path(tmpdir), generated_at="2026-05-08T00:00:00Z"
+            )
+            artifact_text = "\n".join(path.read_text() for path in (Path(tmpdir) / "feedback-artifacts").glob("*.json"))
+
+        self.assertNotIn("BEGIN OPENSSH PRIVATE KEY", artifact_text)
+        self.assertNotIn("END OPENSSH PRIVATE KEY", artifact_text)
+        self.assertNotIn("b3BlbnNzaC1rZXktdjE", artifact_text)
+        self.assertNotIn("BEGIN RSA PRIVATE KEY", artifact_text)
+        self.assertNotIn("END RSA PRIVATE KEY", artifact_text)
+        self.assertNotIn("MIIEpAIBAAKCAQEA", artifact_text)
+        self.assertIn("[REDACTED_CREDENTIAL_BLOCK]", artifact_text)
+
     def test_learn_skill_wires_user_invocation_arguments_to_helper(self):
         skill = (ROOT / "skills" / "learn" / "SKILL.md").read_text(encoding="utf-8")
 

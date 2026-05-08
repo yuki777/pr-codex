@@ -17,6 +17,10 @@ from typing import Any
 
 FALSE_POSITIVE_LABEL = "pr-codex/false-positive"
 DEFAULT_REVIEW_AUTHORS = frozenset({"chatgpt-codex-connector"})
+CREDENTIAL_BLOCK_RE = re.compile(
+    r"-----BEGIN ([A-Z0-9 ]*PRIVATE KEY)-----[\s\S]*?-----END \1-----",
+    re.IGNORECASE,
+)
 TOKEN_RE = re.compile(
     r"\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-proj-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9_-]{20,}|glpat-[A-Za-z0-9_-]{20,}|[A-Za-z0-9_]*(?:token|secret|api[_-]?key)[A-Za-z0-9_]*\s*[:=]\s*[^\s,;]+)",
     re.IGNORECASE,
@@ -27,6 +31,7 @@ LOCAL_PATH_RE = re.compile(r"(?<![\w.-])(?:/home|/Users|/mnt/[a-z]|/tmp|/root|/w
 def sanitize_text(value: str) -> str:
     """Scrub tokens and local paths from public-safe learning artifacts."""
 
+    value = CREDENTIAL_BLOCK_RE.sub("[REDACTED_CREDENTIAL_BLOCK]", value)
     value = TOKEN_RE.sub("[REDACTED_TOKEN]", value)
     value = LOCAL_PATH_RE.sub("[REDACTED_LOCAL_PATH]", value)
     return value
