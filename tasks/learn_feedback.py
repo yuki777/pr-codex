@@ -58,6 +58,29 @@ def comments_for_thread(thread: dict[str, Any]) -> list[dict[str, Any]]:
     return [comment for comment in comments if isinstance(comment, dict)]
 
 
+def review_threads_for_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return the current PR's review threads from list or PR-keyed snapshots."""
+
+    review_threads = payload.get("review_threads")
+    if review_threads is None:
+        return []
+    if isinstance(review_threads, list):
+        return [thread for thread in review_threads if isinstance(thread, dict)]
+    if isinstance(review_threads, dict):
+        pr_number = payload.get("pr_number") or payload.get("number")
+        candidate_keys = [pr_number, str(pr_number)]
+        for key in candidate_keys:
+            if key in review_threads:
+                threads = review_threads[key] or []
+                if not isinstance(threads, list):
+                    raise ValueError(f"review_threads[{key!r}] must be a list")
+                return [thread for thread in threads if isinstance(thread, dict)]
+        raise ValueError(
+            f"review_threads is keyed by PR number but has no entry for pr_number={pr_number!r}"
+        )
+    raise ValueError("review_threads must be a list or a PR-number keyed dictionary")
+
+
 def configured_review_authors(payload: dict[str, Any]) -> set[str]:
     """Return GitHub logins whose review threads belong to pr-codex."""
 
@@ -164,12 +187,13 @@ def is_trusted_false_positive_reply(comment: dict[str, Any], payload: dict[str, 
     return is_trusted_false_positive_comment(comment, payload)
 
 
-def explicit_false_positive_review_reply_map(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
+def explicit_false_positive_review_reply_map(
+    payload: dict[str, Any], review_threads: list[dict[str, Any]] | None = None
+) -> dict[str, dict[str, Any]]:
     """Map thread ids to trusted in-thread false-positive reply metadata."""
     mapping: dict[str, dict[str, Any]] = {}
-    for thread in payload.get("review_threads") or []:
-        if not isinstance(thread, dict):
-            continue
+    threads = review_threads if review_threads is not None else review_threads_for_payload(payload)
+    for thread in threads:
         thread_id = str(thread.get("id") or "")
         if not thread_id:
             continue
@@ -214,16 +238,15 @@ def build_feedback_learning_result(
     if generated_at is None:
         generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+    review_threads = review_threads_for_payload(payload)
     labels = label_names(payload)
     review_authors = configured_review_authors(payload)
     false_positive_comments = explicit_false_positive_comment_map(payload)
-    false_positive_review_replies = explicit_false_positive_review_reply_map(payload)
+    false_positive_review_replies = explicit_false_positive_review_reply_map(payload, review_threads)
     artifacts: list[dict[str, Any]] = []
     ignored: list[dict[str, str]] = []
 
-    for thread in payload.get("review_threads") or []:
-        if not isinstance(thread, dict):
-            continue
+    for thread in review_threads:
         thread_id = str(thread.get("id") or "")
         if not is_pr_codex_review_thread(thread, review_authors=review_authors):
             ignored.append({"thread_id": thread_id, "reason": "not_pr_codex_review_thread"})

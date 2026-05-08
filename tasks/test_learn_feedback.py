@@ -169,6 +169,34 @@ class LearnFeedbackTests(unittest.TestCase):
         ignored = result["ignored_threads"]
         self.assertEqual(ignored, [{"thread_id": "PRRT_silent_1", "reason": "no_explicit_learning_signal"}])
 
+    def test_build_feedback_learning_result_unwraps_review_threads_keyed_by_pr_number(self):
+        payload = self.fixture_payload()
+        payload["review_threads"] = {
+            "53": [
+                {
+                    "id": "PRRT_other_pr",
+                    "isResolved": True,
+                    "isOutdated": False,
+                    "comments": {"nodes": [{"author": {"login": "chatgpt-codex-connector"}}]},
+                }
+            ],
+            "54": payload["review_threads"],
+        }
+
+        result, artifacts = learn_feedback.build_feedback_learning_result(
+            payload, generated_at="2026-05-08T00:00:00Z"
+        )
+
+        self.assertEqual(
+            result["summary"],
+            {"addressed": 1, "superseded": 1, "false_positive": 1, "ignored": 1},
+        )
+        self.assertEqual(
+            {artifact["thread_id"] for artifact in artifacts},
+            {"PRRT_resolved_1", "PRRT_outdated_1", "PRRT_open_1"},
+        )
+        self.assertNotIn("PRRT_other_pr", {artifact["thread_id"] for artifact in artifacts})
+
     def test_build_feedback_learning_result_prefers_explicit_false_positive_over_resolved_thread(self):
         payload = self.fixture_payload()
         payload["review_threads"][0]["id"] = "PRRT_open_1"
