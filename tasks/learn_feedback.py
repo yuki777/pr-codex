@@ -239,7 +239,6 @@ def build_feedback_learning_result(
         generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     review_threads = review_threads_for_payload(payload)
-    labels = label_names(payload)
     review_authors = configured_review_authors(payload)
     false_positive_comments = explicit_false_positive_comment_map(payload)
     false_positive_review_replies = explicit_false_positive_review_reply_map(payload, review_threads)
@@ -258,7 +257,7 @@ def build_feedback_learning_result(
             artifact["feedback_comment_url"] = fp_comment.get("html_url") or fp_comment.get("url")
             artifact["feedback_comment_excerpt"] = safe_excerpt(fp_comment.get("body"))
             artifacts.append(artifact)
-        elif FALSE_POSITIVE_LABEL in labels and thread_id in false_positive_comments:
+        elif thread_id in false_positive_comments:
             artifact = artifact_base(payload, thread, signal="false_positive", source="label_comment.false_positive")
             fp_comment = false_positive_comments[thread_id]
             artifact["feedback_comment_id"] = fp_comment.get("id")
