@@ -16,9 +16,12 @@ allowed-tools: ["Bash", "Read", "Write", "Glob", "Grep"]
 - GraphQL review thread の `isOutdated: true`: `superseded` signal
 - 明示ラベル/コメント `pr-codex/false-positive`: `false_positive` signal
 
+いずれも pr-codex が投稿した review thread だけを対象にする。snapshot の `review_author` / `review_authors`（未指定時は `chatgpt-codex-connector`）と thread 先頭コメント author が一致しない thread は無視する。
+
 ## 学習しないもの
 
 - author 無反応の未解決 thread
+- pr-codex 以外（人間レビュアーや別 bot）が投稿した review thread
 - PR が merge された事実だけ
 - `<!-- hermes-auto:... -->` など bot/generated marker だけ
 - raw log、secret、ローカルパスを含む文脈

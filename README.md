@@ -123,9 +123,12 @@ Stage ごとの責務、input/output artifact、halting 条件は [`skills/revie
 - GraphQL review thread の `isOutdated: true` → `superseded`
 - 明示ラベル/コメント `pr-codex/false-positive` → `false_positive`
 
+上記はいずれも pr-codex が投稿した review thread だけに適用する。snapshot の `review_author` / `review_authors`（未指定時は `chatgpt-codex-connector`）と thread 先頭コメント author が一致しない thread は学習しない。
+
 学習しないもの:
 
 - author 無反応の未解決 thread
+- pr-codex 以外（人間レビュアーや別 bot）が投稿した review thread
 - PR が merge された事実だけ
 - bot/generated marker だけ
 

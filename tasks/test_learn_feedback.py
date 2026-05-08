@@ -53,7 +53,15 @@ class LearnFeedbackTests(unittest.TestCase):
                     "isOutdated": True,
                     "path": "tasks/example.py",
                     "line": 7,
-                    "comments": {"nodes": [{"id": "PRRC_outdated_1", "body": "High: 古い差分上の指摘です。"}]},
+                    "comments": {
+                        "nodes": [
+                            {
+                                "id": "PRRC_outdated_1",
+                                "body": "High: 古い差分上の指摘です。",
+                                "author": {"login": "chatgpt-codex-connector"},
+                            }
+                        ]
+                    },
                 },
                 {
                     "id": "PRRT_open_1",
@@ -61,7 +69,15 @@ class LearnFeedbackTests(unittest.TestCase):
                     "isOutdated": False,
                     "path": "tasks/open.py",
                     "line": 99,
-                    "comments": {"nodes": [{"id": "PRRC_open_1", "body": "誤検知として明示された指摘"}]},
+                    "comments": {
+                        "nodes": [
+                            {
+                                "id": "PRRC_open_1",
+                                "body": "誤検知として明示された指摘",
+                                "author": {"login": "chatgpt-codex-connector"},
+                            }
+                        ]
+                    },
                 },
                 {
                     "id": "PRRT_silent_1",
@@ -69,7 +85,15 @@ class LearnFeedbackTests(unittest.TestCase):
                     "isOutdated": False,
                     "path": "tasks/silent.py",
                     "line": 100,
-                    "comments": {"nodes": [{"id": "PRRC_silent_1", "body": "author 無反応のため学習しない"}]},
+                    "comments": {
+                        "nodes": [
+                            {
+                                "id": "PRRC_silent_1",
+                                "body": "author 無反応のため学習しない",
+                                "author": {"login": "chatgpt-codex-connector"},
+                            }
+                        ]
+                    },
                 },
             ],
             "labels": [{"name": "pr-codex/false-positive"}],
@@ -97,6 +121,39 @@ class LearnFeedbackTests(unittest.TestCase):
         self.assertEqual({artifact["thread_id"] for artifact in artifacts}, {"PRRT_resolved_1", "PRRT_outdated_1", "PRRT_open_1"})
         ignored = result["ignored_threads"]
         self.assertEqual(ignored, [{"thread_id": "PRRT_silent_1", "reason": "no_explicit_learning_signal"}])
+
+    def test_build_feedback_learning_result_ignores_other_reviewers_threads(self):
+        payload = self.fixture_payload()
+        payload["review_threads"].append(
+            {
+                "id": "PRRT_human_resolved",
+                "isResolved": True,
+                "isOutdated": False,
+                "path": "tasks/other.py",
+                "line": 12,
+                "comments": {
+                    "nodes": [
+                        {
+                            "id": "PRRC_human_resolved",
+                            "body": "別レビュアーの resolved 指摘なので pr-codex 学習対象ではない",
+                            "url": "https://github.test/review/human-resolved",
+                            "author": {"login": "human-reviewer"},
+                        }
+                    ]
+                },
+            }
+        )
+
+        result, artifacts = learn_feedback.build_feedback_learning_result(
+            payload, generated_at="2026-05-08T00:00:00Z"
+        )
+
+        self.assertEqual(result["summary"], {"addressed": 1, "superseded": 1, "false_positive": 1, "ignored": 2})
+        self.assertNotIn("PRRT_human_resolved", {artifact["thread_id"] for artifact in artifacts})
+        self.assertIn(
+            {"thread_id": "PRRT_human_resolved", "reason": "not_pr_codex_review_thread"},
+            result["ignored_threads"],
+        )
 
     def test_feedback_artifacts_are_public_safe_and_written_idempotently(self):
         with tempfile.TemporaryDirectory() as tmpdir:
