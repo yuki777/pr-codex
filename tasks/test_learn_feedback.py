@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
+import os
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 TASKS = ROOT / "tasks"
@@ -431,6 +435,30 @@ class LearnFeedbackTests(unittest.TestCase):
             "addressed-PRRT_resolved_1.json",
             "superseded-PRRT_outdated_1.json",
         ])
+
+    def test_main_expands_user_home_in_input_and_output_dir_arguments(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir) / "home"
+            home.mkdir()
+            payload_path = home / "feedback.json"
+            output_dir = home / "claude-loop-pr-codex" / "learn"
+            payload_path.write_text(json.dumps(self.fixture_payload()), encoding="utf-8")
+            argv = [
+                "learn_feedback.py",
+                "--input",
+                "~/feedback.json",
+                "--output-dir",
+                "~/claude-loop-pr-codex/learn",
+                "--generated-at",
+                "2026-05-08T00:00:00Z",
+            ]
+
+            with patch.dict(os.environ, {"HOME": str(home)}), patch.object(sys, "argv", argv), redirect_stdout(io.StringIO()):
+                exit_code = learn_feedback.main()
+
+            self.assertEqual(exit_code, 0)
+            self.assertTrue((output_dir / "learn-result.json").exists())
+            self.assertFalse((Path.cwd() / "~").exists())
 
 
 if __name__ == "__main__":

@@ -254,8 +254,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    payload = json.loads(args.input.read_text())
-    result = write_feedback_artifacts(payload, output_dir=args.output_dir, generated_at=args.generated_at)
+    input_path = args.input.expanduser()
+    output_dir = args.output_dir.expanduser()
+    payload = json.loads(input_path.read_text())
+    result = write_feedback_artifacts(payload, output_dir=output_dir, generated_at=args.generated_at)
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
     return 0
 
