@@ -37,12 +37,12 @@ artifact は token らしき値とローカルパスを redaction し、コメ�
 
 ## 使い方
 
-`/pr-codex:learn [snapshot.json] [output-dir]` として呼び出されたら、Claude は `$ARGUMENTS` を次のように解釈して、現在の作業ディレクトリではなく plugin root 配下の `tasks/learn_feedback.py` に渡す。
+`/pr-codex:learn [snapshot.json] [output-dir]` として呼び出されたら、Claude は `$ARGUMENTS` を shell で再分割せず、Claude が解釈済みの 1 番目の引数を `SNAPSHOT_JSON`、2 番目の引数を `OUTPUT_DIR` として直接 bind する。これにより空白を含む quoted path を保持したまま、現在の作業ディレクトリではなく plugin root 配下の `tasks/learn_feedback.py` に渡す。
 
 ```bash
-set -- $ARGUMENTS
-SNAPSHOT_JSON="${1:?snapshot.json を指定してください}"
-OUTPUT_DIR="${2:?output-dir を指定してください}"
+# Claude が slash-command の解釈済み引数から直接 bind する。shell で再分割しない。
+SNAPSHOT_JSON="<1 番目の引数: snapshot.json>"
+OUTPUT_DIR="<2 番目の引数: output-dir>"
 CLAUDE_PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:?CLAUDE_PLUGIN_ROOT を指定してください}"
 HELPER="$CLAUDE_PLUGIN_ROOT/tasks/learn_feedback.py"
 
@@ -55,9 +55,10 @@ python3 "$HELPER" \
 
 ```bash
 /pr-codex:learn feedback.json out
+/pr-codex:learn "feedback snapshot.json" "learn out"
 ```
 
-上記は `$CLAUDE_PLUGIN_ROOT/tasks/learn_feedback.py` を絶対パスとして解決してから、`--input "feedback.json" --output-dir "out"` として実行する。
+上記は `$CLAUDE_PLUGIN_ROOT/tasks/learn_feedback.py` を絶対パスとして解決してから、それぞれ `--input "feedback.json" --output-dir "out"`、`--input "feedback snapshot.json" --output-dir "learn out"` として実行する。
 
 `snapshot` には少なくとも次のキーを含める。
 

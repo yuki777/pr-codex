@@ -352,11 +352,19 @@ class LearnFeedbackTests(unittest.TestCase):
             "$ARGUMENTS",
             "SNAPSHOT_JSON=",
             "OUTPUT_DIR=",
-            "set -- $ARGUMENTS",
             "--input \"$SNAPSHOT_JSON\"",
             "--output-dir \"$OUTPUT_DIR\"",
         ):
             self.assertIn(snippet, skill)
+
+    def test_learn_skill_preserves_quoted_invocation_arguments(self):
+        skill = (ROOT / "skills" / "learn" / "SKILL.md").read_text(encoding="utf-8")
+
+        self.assertIn("Claude が解釈済みの 1 番目の引数", skill)
+        self.assertIn("空白を含む quoted path を保持", skill)
+        self.assertIn("/pr-codex:learn \"feedback snapshot.json\" \"learn out\"", skill)
+        self.assertIn("--input \"feedback snapshot.json\" --output-dir \"learn out\"", skill)
+        self.assertNotIn("set -- $ARGUMENTS", skill)
 
     def test_learn_skill_resolves_helper_from_plugin_root(self):
         skill = (ROOT / "skills" / "learn" / "SKILL.md").read_text(encoding="utf-8")
