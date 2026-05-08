@@ -19,7 +19,7 @@ FALSE_POSITIVE_LABEL = "pr-codex/false-positive"
 FALSE_POSITIVE_MARKER_RE = re.compile(rf"(?m)^\s*{re.escape(FALSE_POSITIVE_LABEL)}\s*:")
 DEFAULT_REVIEW_AUTHORS = frozenset({"chatgpt-codex-connector"})
 CREDENTIAL_BLOCK_RE = re.compile(
-    r"-----BEGIN ([A-Z0-9 ]*PRIVATE KEY)-----[\s\S]*?-----END \1-----",
+    r"-----BEGIN ([A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?)-----[\s\S]*?-----END \1-----",
     re.IGNORECASE,
 )
 TOKEN_RE = re.compile(

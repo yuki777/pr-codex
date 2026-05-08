@@ -433,6 +433,28 @@ class LearnFeedbackTests(unittest.TestCase):
         self.assertNotIn("MIIEpAIBAAKCAQEA", artifact_text)
         self.assertIn("[REDACTED_CREDENTIAL_BLOCK]", artifact_text)
 
+    def test_feedback_artifacts_redact_pgp_private_key_blocks(self):
+        payload = self.fixture_payload()
+        payload["review_threads"][0]["comments"]["nodes"][0]["body"] = (
+            "Please do not learn this pasted PGP private key block:\n"
+            "-----BEGIN PGP PRIVATE KEY BLOCK-----\n"
+            "Version: OpenPGP.js v5.0.0\n\n"
+            "lQPGBGNotARealCredentialExampleOnly\n"
+            "-----END PGP PRIVATE KEY BLOCK-----\n"
+            "The fix is unrelated."
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            learn_feedback.write_feedback_artifacts(
+                payload, output_dir=Path(tmpdir), generated_at="2026-05-08T00:00:00Z"
+            )
+            artifact_text = "\n".join(path.read_text() for path in (Path(tmpdir) / "feedback-artifacts").glob("*.json"))
+
+        self.assertNotIn("BEGIN PGP PRIVATE KEY BLOCK", artifact_text)
+        self.assertNotIn("END PGP PRIVATE KEY BLOCK", artifact_text)
+        self.assertNotIn("lQPGBGNotARealCredentialExampleOnly", artifact_text)
+        self.assertIn("[REDACTED_CREDENTIAL_BLOCK]", artifact_text)
+
     def test_learn_skill_wires_user_invocation_arguments_to_helper(self):
         skill = (ROOT / "skills" / "learn" / "SKILL.md").read_text(encoding="utf-8")
 
