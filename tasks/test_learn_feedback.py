@@ -302,7 +302,7 @@ class LearnFeedbackTests(unittest.TestCase):
         payload = self.fixture_payload()
         payload["review_threads"][0]["comments"]["nodes"][0]["body"] = (
             "logs mention /root/.ssh/id_rsa, /workspace/pr-codex/tasks/learn_feedback.py, "
-            "and /var/folders/xy/secret.txt"
+            "and /var/folders/xy/secret.txt plus /private/var/folders/zz/credential.sock"
         )
         with tempfile.TemporaryDirectory() as tmpdir:
             learn_feedback.write_feedback_artifacts(
@@ -313,7 +313,8 @@ class LearnFeedbackTests(unittest.TestCase):
         self.assertNotIn("/root/.ssh/id_rsa", artifact_text)
         self.assertNotIn("/workspace/pr-codex", artifact_text)
         self.assertNotIn("/var/folders", artifact_text)
-        self.assertEqual(artifact_text.count("[REDACTED_LOCAL_PATH]"), 4)
+        self.assertNotIn("/private/var/folders", artifact_text)
+        self.assertEqual(artifact_text.count("[REDACTED_LOCAL_PATH]"), 5)
 
     def test_feedback_artifacts_redact_pasted_private_key_blocks(self):
         payload = self.fixture_payload()

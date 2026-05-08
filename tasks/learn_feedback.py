@@ -25,7 +25,7 @@ TOKEN_RE = re.compile(
     r"\b(?:authorization\s*:\s*bearer\s+[^\s,;]+|gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-proj-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9_-]{20,}|glpat-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|[A-Za-z0-9_]*(?:password|token|secret|api[_-]?key)[A-Za-z0-9_]*\s*[:=]\s*[^\s,;]+)",
     re.IGNORECASE,
 )
-LOCAL_PATH_RE = re.compile(r"(?<![\w.-])(?:/home|/Users|/mnt/[a-z]|/tmp|/root|/workspace|/var/folders|C:\\Users)[^\s`'\")]+")
+LOCAL_PATH_RE = re.compile(r"(?<![\w.-])(?:/home|/Users|/mnt/[a-z]|/tmp|/root|/workspace|/private/var/folders|/var/folders|C:\\Users)[^\s`'\")]+")
 
 
 def sanitize_text(value: str) -> str:
