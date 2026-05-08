@@ -50,7 +50,7 @@ def comments_for_thread(thread: dict[str, Any]) -> list[dict[str, Any]]:
 def configured_review_authors(payload: dict[str, Any]) -> set[str]:
     """Return GitHub logins whose review threads belong to pr-codex."""
 
-    authors: set[str] = set(DEFAULT_REVIEW_AUTHORS)
+    authors: set[str] = set()
     raw_authors = payload.get("review_authors") or payload.get("pr_codex_review_authors") or []
     if isinstance(raw_authors, str):
         raw_authors = [raw_authors]
@@ -60,7 +60,7 @@ def configured_review_authors(payload: dict[str, Any]) -> set[str]:
     raw_author = payload.get("review_author") or payload.get("pr_codex_review_author")
     if raw_author:
         authors.add(str(raw_author))
-    return authors
+    return authors or set(DEFAULT_REVIEW_AUTHORS)
 
 
 def comment_author_login(comment: dict[str, Any]) -> str:

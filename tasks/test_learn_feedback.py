@@ -163,6 +163,26 @@ class LearnFeedbackTests(unittest.TestCase):
         self.assertEqual(artifact["feedback_comment_url"], "https://github.test/review/false-positive-reply")
         self.assertEqual(artifact["feedback_comment_excerpt"], "pr-codex/false-positive: この review thread は誤検知です。")
 
+    def test_build_feedback_learning_result_honors_custom_review_author_allowlist(self):
+        payload = self.fixture_payload()
+        payload["review_author"] = "custom-pr-codex-bot"
+        payload["review_threads"][0]["comments"]["nodes"][0]["author"]["login"] = "custom-pr-codex-bot"
+
+        result, artifacts = learn_feedback.build_feedback_learning_result(
+            payload, generated_at="2026-05-08T00:00:00Z"
+        )
+
+        self.assertEqual(result["summary"], {"addressed": 1, "superseded": 0, "false_positive": 0, "ignored": 3})
+        self.assertEqual([artifact["thread_id"] for artifact in artifacts], ["PRRT_resolved_1"])
+        self.assertIn(
+            {"thread_id": "PRRT_outdated_1", "reason": "not_pr_codex_review_thread"},
+            result["ignored_threads"],
+        )
+        self.assertIn(
+            {"thread_id": "PRRT_open_1", "reason": "not_pr_codex_review_thread"},
+            result["ignored_threads"],
+        )
+
     def test_build_feedback_learning_result_ignores_other_reviewers_threads(self):
         payload = self.fixture_payload()
         payload["review_threads"].append(
