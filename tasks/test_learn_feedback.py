@@ -307,6 +307,22 @@ class LearnFeedbackTests(unittest.TestCase):
         self.assertNotIn("eyJhbGci", artifact_text)
         self.assertIn("[REDACTED_TOKEN]", artifact_text)
 
+    def test_feedback_artifacts_redact_basic_authorization_headers(self):
+        payload = self.fixture_payload()
+        basic_token = "dXNlcjpwYXNz" + ("A" * 24)
+        payload["review_threads"][0]["comments"]["nodes"][0]["body"] = (
+            f"pasted curl output includes Authorization: Basic {basic_token}"
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            learn_feedback.write_feedback_artifacts(
+                payload, output_dir=Path(tmpdir), generated_at="2026-05-08T00:00:00Z"
+            )
+            artifact_text = "\n".join(path.read_text() for path in (Path(tmpdir) / "feedback-artifacts").glob("*.json"))
+
+        self.assertNotIn("Authorization: Basic", artifact_text)
+        self.assertNotIn(basic_token, artifact_text)
+        self.assertIn("[REDACTED_TOKEN]", artifact_text)
+
     def test_feedback_artifacts_redact_password_assignments_and_aws_access_key_ids(self):
         payload = self.fixture_payload()
         aws_access_key_id = "AK" + "IA" + "ABCDEFGHIJKLMNOP"
