@@ -9,6 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TASKS = ROOT / "tasks"
+README = ROOT / "README.md"
 
 
 def load_module(name: str):
@@ -24,6 +25,12 @@ learn_feedback = load_module("learn_feedback")
 
 
 class LearnFeedbackTests(unittest.TestCase):
+    def test_readme_manual_learn_example_uses_plugin_root_helper_path(self):
+        text = README.read_text(encoding="utf-8")
+
+        self.assertIn("python3 $CLAUDE_PLUGIN_ROOT/tasks/learn_feedback.py", text)
+        self.assertNotIn("python3 tasks/learn_feedback.py", text)
+
     def fixture_payload(self):
         return {
             "repository": "yuki777/pr-codex",
