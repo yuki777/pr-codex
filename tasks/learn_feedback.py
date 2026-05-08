@@ -33,7 +33,10 @@ TOKEN_RE = re.compile(
 )
 COOKIE_HEADER_RE = re.compile(r"\b(?:set-cookie|cookie)\s*:\s*[^\r\n]+", re.IGNORECASE)
 URL_USERINFO_RE = re.compile(r"\b([a-z][a-z0-9+.-]*://)[^\s/@:]+(?::[^\s/@]*)?@([^\s`'\")<>]+)", re.IGNORECASE)
-LOCAL_PATH_RE = re.compile(r"(?<![\w.-])(?:~|/home|/Users|/mnt/[a-z]|/tmp|/root|/workspace|/private/var/folders|/var/folders|C:\\Users)[/\\][^\s`'\")]+")
+LOCAL_PATH_COMPONENT_RE = r"(?:[^\s`'\")<>,;/\\~]+(?:\s+[^\s`'\")<>,;/\\~]+)*(?=[/\\])|[^\s`'\")<>,;/\\~]+)"
+LOCAL_PATH_RE = re.compile(
+    rf"(?<![\w.-])(?:~|/home|/Users|/mnt/[a-z]|/tmp|/root|/workspace|/private/var/folders|/var/folders|C:\\Users)[/\\]{LOCAL_PATH_COMPONENT_RE}(?:[/\\]{LOCAL_PATH_COMPONENT_RE})*"
+)
 
 
 def sanitize_text(value: str) -> str:

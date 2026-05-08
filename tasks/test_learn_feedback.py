@@ -728,6 +728,28 @@ class LearnFeedbackTests(unittest.TestCase):
         self.assertNotIn("~/.config/gh/hosts.yml", artifact_text)
         self.assertEqual(artifact_text.count("[REDACTED_LOCAL_PATH]"), 3)
 
+    def test_feedback_artifacts_redact_local_paths_with_spaces(self):
+        payload = self.fixture_payload()
+        user_config_path = "/Users/example/Library/Application Support/gh/hosts.yml"
+        home_secret_path = "/home/example/My Secrets/token.txt"
+        payload["review_threads"][0]["comments"]["nodes"][0]["body"] = (
+            f"logs mention {user_config_path} before retry"
+        )
+        payload["comments"][0]["body"] = (
+            f"pr-codex/false-positive: PRRT_open_1 pasted {home_secret_path}"
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            learn_feedback.write_feedback_artifacts(
+                payload, output_dir=Path(tmpdir), generated_at="2026-05-08T00:00:00Z"
+            )
+            artifact_text = "\n".join(path.read_text() for path in (Path(tmpdir) / "feedback-artifacts").glob("*.json"))
+
+        self.assertNotIn(user_config_path, artifact_text)
+        self.assertNotIn(home_secret_path, artifact_text)
+        self.assertNotIn("Support/gh/hosts.yml", artifact_text)
+        self.assertNotIn("Secrets/token.txt", artifact_text)
+        self.assertEqual(artifact_text.count("[REDACTED_LOCAL_PATH]"), 2)
+
     def test_feedback_artifacts_redact_pasted_private_key_blocks(self):
         payload = self.fixture_payload()
         payload["review_threads"][0]["comments"]["nodes"][0]["body"] = (
