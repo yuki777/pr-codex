@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 FALSE_POSITIVE_LABEL = "pr-codex/false-positive"
-FALSE_POSITIVE_MARKER_RE = re.compile(rf"(?m)^\s*{re.escape(FALSE_POSITIVE_LABEL)}\s*:")
+FALSE_POSITIVE_MARKER_RE = re.compile(rf"(?m)^\s*{re.escape(FALSE_POSITIVE_LABEL)}(?:\s*:|\s+(?=PRRT_))")
 DEFAULT_REVIEW_AUTHORS = frozenset({"chatgpt-codex-connector"})
 CREDENTIAL_BLOCK_RE = re.compile(
     r"-----BEGIN ([A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?)-----[\s\S]*?-----END \1-----",
