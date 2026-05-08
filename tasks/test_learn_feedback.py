@@ -206,6 +206,44 @@ class LearnFeedbackTests(unittest.TestCase):
         )
         self.assertNotIn("PRRT_other_pr", {artifact["thread_id"] for artifact in artifacts})
 
+    def test_build_feedback_learning_result_unwraps_watcher_pr_issue_comments_for_current_pr(self):
+        payload = self.fixture_payload()
+        payload["comments"] = []
+        payload["labels"] = []
+        payload["pulls"] = [
+            {"number": 53, "labels": [{"name": "unrelated"}]},
+            {"number": 54, "labels": [{"name": "pr-codex/false-positive"}]},
+        ]
+        payload["pr_issue_comments"] = {
+            "53": [
+                {
+                    "id": 9000,
+                    "body": "pr-codex/false-positive: PRRT_other_pr は誤検知です。",
+                    "html_url": "https://github.test/pr/53#issuecomment-9000",
+                    "user": {"login": "yuki777"},
+                }
+            ],
+            "54": [
+                {
+                    "id": 9001,
+                    "body": "pr-codex/false-positive: PRRT_open_1 は誤検知です。",
+                    "html_url": "https://github.test/pr/54#issuecomment-9001",
+                    "user": {"login": "yuki777"},
+                }
+            ],
+        }
+        payload["review_threads"] = {"54": payload["review_threads"]}
+
+        result, artifacts = learn_feedback.build_feedback_learning_result(
+            payload, generated_at="2026-05-08T00:00:00Z"
+        )
+
+        self.assertEqual(result["summary"], {"addressed": 1, "superseded": 1, "false_positive": 1, "ignored": 1})
+        artifact_by_thread = {artifact["thread_id"]: artifact for artifact in artifacts}
+        self.assertEqual(artifact_by_thread["PRRT_open_1"]["signal"], "false_positive")
+        self.assertEqual(artifact_by_thread["PRRT_open_1"]["feedback_comment_id"], 9001)
+        self.assertNotIn("PRRT_other_pr", artifact_by_thread)
+
     def test_build_feedback_learning_result_prefers_explicit_false_positive_over_resolved_thread(self):
         payload = self.fixture_payload()
         payload["review_threads"][0]["id"] = "PRRT_open_1"

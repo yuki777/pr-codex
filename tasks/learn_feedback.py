@@ -58,27 +58,56 @@ def comments_for_thread(thread: dict[str, Any]) -> list[dict[str, Any]]:
     return [comment for comment in comments if isinstance(comment, dict)]
 
 
+def current_pr_number(payload: dict[str, Any]) -> Any:
+    return payload.get("pr_number") or payload.get("number")
+
+
+def pr_keyed_list_for_payload(payload: dict[str, Any], field: str, *, allow_missing: bool = False) -> list[dict[str, Any]]:
+    """Return the current PR's list from a top-level list or PR-keyed watcher snapshot field."""
+
+    value = payload.get(field)
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, dict)]
+    if isinstance(value, dict):
+        pr_number = current_pr_number(payload)
+        candidate_keys = [pr_number, str(pr_number)]
+        for key in candidate_keys:
+            if key in value:
+                items = value[key] or []
+                if not isinstance(items, list):
+                    raise ValueError(f"{field}[{key!r}] must be a list")
+                return [item for item in items if isinstance(item, dict)]
+        if allow_missing:
+            return []
+        raise ValueError(f"{field} is keyed by PR number but has no entry for pr_number={pr_number!r}")
+    raise ValueError(f"{field} must be a list or a PR-number keyed dictionary")
+
+
 def review_threads_for_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
     """Return the current PR's review threads from list or PR-keyed snapshots."""
 
-    review_threads = payload.get("review_threads")
-    if review_threads is None:
-        return []
-    if isinstance(review_threads, list):
-        return [thread for thread in review_threads if isinstance(thread, dict)]
-    if isinstance(review_threads, dict):
-        pr_number = payload.get("pr_number") or payload.get("number")
-        candidate_keys = [pr_number, str(pr_number)]
-        for key in candidate_keys:
-            if key in review_threads:
-                threads = review_threads[key] or []
-                if not isinstance(threads, list):
-                    raise ValueError(f"review_threads[{key!r}] must be a list")
-                return [thread for thread in threads if isinstance(thread, dict)]
-        raise ValueError(
-            f"review_threads is keyed by PR number but has no entry for pr_number={pr_number!r}"
-        )
-    raise ValueError("review_threads must be a list or a PR-number keyed dictionary")
+    return pr_keyed_list_for_payload(payload, "review_threads")
+
+
+def issue_comments_for_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return the current PR's issue comments from direct or watcher snapshot fields."""
+
+    comments = pr_keyed_list_for_payload(payload, "comments", allow_missing=True)
+    if comments:
+        return comments
+    return pr_keyed_list_for_payload(payload, "pr_issue_comments", allow_missing=True)
+
+
+def current_pr_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    pr_number = current_pr_number(payload)
+    for pr in payload.get("pulls") or []:
+        if not isinstance(pr, dict):
+            continue
+        if pr.get("number") == pr_number or str(pr.get("number")) == str(pr_number):
+            return pr
+    return {}
 
 
 def configured_review_authors(payload: dict[str, Any]) -> set[str]:
@@ -114,7 +143,10 @@ def is_pr_codex_review_thread(thread: dict[str, Any], *, review_authors: set[str
 
 def label_names(payload: dict[str, Any]) -> set[str]:
     names: set[str] = set()
-    for label in payload.get("labels") or []:
+    label_sources = list(payload.get("labels") or [])
+    current_pr = current_pr_from_payload(payload)
+    label_sources.extend(current_pr.get("labels") or [])
+    for label in label_sources:
         if isinstance(label, str):
             names.add(label)
         elif isinstance(label, dict) and label.get("name"):
@@ -149,7 +181,7 @@ def false_positive_marker_thread_ids(body: str) -> set[str]:
 def explicit_false_positive_comment_map(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Map targeted thread ids to trusted false-positive issue comment metadata."""
     mapping: dict[str, dict[str, Any]] = {}
-    for comment in payload.get("comments") or []:
+    for comment in issue_comments_for_payload(payload):
         if not isinstance(comment, dict):
             continue
         body = str(comment.get("body") or "")
