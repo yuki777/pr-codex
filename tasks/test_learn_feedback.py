@@ -363,6 +363,24 @@ class LearnFeedbackTests(unittest.TestCase):
         self.assertNotIn(credential_url, artifact_text)
         self.assertIn("https://[REDACTED_TOKEN]@example.com/private/path?debug=true", artifact_text)
 
+    def test_feedback_artifacts_redact_session_cookie_headers(self):
+        payload = self.fixture_payload()
+        payload["review_threads"][0]["comments"]["nodes"][0]["body"] = (
+            "copied HTTP log includes Cookie: sessionid=session-cookie-value; theme=dark "
+            "and Set-Cookie: pr_codex_session=set-cookie-value; HttpOnly"
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            learn_feedback.write_feedback_artifacts(
+                payload, output_dir=Path(tmpdir), generated_at="2026-05-08T00:00:00Z"
+            )
+            artifact_text = "\n".join(path.read_text() for path in (Path(tmpdir) / "feedback-artifacts").glob("*.json"))
+
+        self.assertNotIn("Cookie: sessionid=session-cookie-value", artifact_text)
+        self.assertNotIn("Set-Cookie: pr_codex_session=set-cookie-value", artifact_text)
+        self.assertNotIn("session-cookie-value", artifact_text)
+        self.assertNotIn("set-cookie-value", artifact_text)
+        self.assertIn("[REDACTED_TOKEN]", artifact_text)
+
     def test_feedback_artifacts_redact_password_assignments_and_aws_access_key_ids(self):
         payload = self.fixture_payload()
         aws_access_key_id = "AK" + "IA" + "ABCDEFGHIJKLMNOP"
