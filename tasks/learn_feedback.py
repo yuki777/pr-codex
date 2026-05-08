@@ -105,13 +105,15 @@ def has_false_positive_marker(body: str) -> bool:
 
 
 def explicit_false_positive_comment_map(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    """Map mentioned thread ids to their false-positive comment metadata."""
+    """Map mentioned thread ids to trusted false-positive issue comment metadata."""
     mapping: dict[str, dict[str, Any]] = {}
     for comment in payload.get("comments") or []:
         if not isinstance(comment, dict):
             continue
         body = str(comment.get("body") or "")
         if not has_false_positive_marker(body):
+            continue
+        if not is_trusted_false_positive_comment(comment, payload):
             continue
         mentioned = set(re.findall(r"PRRT_[A-Za-z0-9_-]+", body))
         for thread_id in mentioned:
@@ -127,14 +129,20 @@ def repository_owner(payload: dict[str, Any]) -> str:
     return repository.split("/", 1)[0]
 
 
-def is_trusted_false_positive_reply(comment: dict[str, Any], payload: dict[str, Any]) -> bool:
-    """Return whether an in-thread false-positive reply is maintainer-controlled."""
+def is_trusted_false_positive_comment(comment: dict[str, Any], payload: dict[str, Any]) -> bool:
+    """Return whether a false-positive comment is maintainer-controlled."""
 
     association = str(comment.get("authorAssociation") or comment.get("author_association") or "").upper()
     if association in TRUSTED_FALSE_POSITIVE_REPLY_ASSOCIATIONS:
         return True
     author_login = comment_author_login(comment)
     return bool(author_login and author_login == repository_owner(payload))
+
+
+def is_trusted_false_positive_reply(comment: dict[str, Any], payload: dict[str, Any]) -> bool:
+    """Return whether an in-thread false-positive reply is maintainer-controlled."""
+
+    return is_trusted_false_positive_comment(comment, payload)
 
 
 def explicit_false_positive_review_reply_map(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
