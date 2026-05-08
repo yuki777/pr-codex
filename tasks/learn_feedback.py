@@ -12,6 +12,7 @@ import argparse
 import json
 import re
 from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -209,6 +210,9 @@ def build_feedback_learning_result(
     payload: dict[str, Any], *, generated_at: str | None = None
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Return ``learn-result`` and per-signal artifacts from a GitHub snapshot."""
+
+    if generated_at is None:
+        generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     labels = label_names(payload)
     review_authors = configured_review_authors(payload)

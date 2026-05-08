@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -139,6 +140,19 @@ class LearnFeedbackTests(unittest.TestCase):
                 }
             ],
         }
+
+    def test_build_feedback_learning_result_defaults_generated_at_to_current_utc_when_omitted(self):
+        before = datetime.now(timezone.utc)
+
+        result, _artifacts = learn_feedback.build_feedback_learning_result(self.fixture_payload())
+
+        generated_at = result["generated_at"]
+        self.assertIsInstance(generated_at, str)
+        self.assertRegex(generated_at, r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+        parsed = datetime.strptime(generated_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        after = datetime.now(timezone.utc)
+        self.assertGreaterEqual(parsed, before.replace(microsecond=0))
+        self.assertLessEqual(parsed, after)
 
     def test_build_feedback_learning_result_classifies_only_explicit_signals(self):
         result, artifacts = learn_feedback.build_feedback_learning_result(
