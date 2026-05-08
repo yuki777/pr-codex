@@ -212,7 +212,8 @@ def is_trusted_false_positive_comment(comment: dict[str, Any], payload: dict[str
     if association in TRUSTED_FALSE_POSITIVE_REPLY_ASSOCIATIONS:
         return True
     author_login = comment_author_login(comment)
-    return bool(author_login and author_login == repository_owner(payload))
+    owner_login = repository_owner(payload)
+    return bool(author_login and owner_login and author_login.casefold() == owner_login.casefold())
 
 
 def is_trusted_false_positive_reply(comment: dict[str, Any], payload: dict[str, Any]) -> bool:
