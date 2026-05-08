@@ -124,6 +124,12 @@ def explicit_false_positive_review_reply_map(payload: dict[str, Any]) -> dict[st
     return mapping
 
 
+def safe_excerpt(value: Any, *, limit: int = 1000) -> str:
+    """Scrub a comment body before truncating it for public artifacts."""
+
+    return sanitize_text(str(value or ""))[:limit]
+
+
 def artifact_base(payload: dict[str, Any], thread: dict[str, Any], *, signal: str, source: str) -> dict[str, Any]:
     comments = comments_for_thread(thread)
     return {
@@ -139,7 +145,7 @@ def artifact_base(payload: dict[str, Any], thread: dict[str, Any], *, signal: st
         "is_resolved": bool(thread.get("isResolved")),
         "is_outdated": bool(thread.get("isOutdated")),
         "comment_ids": [comment.get("id") for comment in comments if comment.get("id") is not None],
-        "comment_excerpts": [str(comment.get("body") or "")[:1000] for comment in comments[:5]],
+        "comment_excerpts": [safe_excerpt(comment.get("body")) for comment in comments[:5]],
         "urls": [comment.get("url") or comment.get("html_url") for comment in comments if comment.get("url") or comment.get("html_url")],
     }
 
@@ -168,14 +174,14 @@ def build_feedback_learning_result(
             fp_comment = false_positive_review_replies[thread_id]
             artifact["feedback_comment_id"] = fp_comment.get("id")
             artifact["feedback_comment_url"] = fp_comment.get("html_url") or fp_comment.get("url")
-            artifact["feedback_comment_excerpt"] = str(fp_comment.get("body") or "")[:1000]
+            artifact["feedback_comment_excerpt"] = safe_excerpt(fp_comment.get("body"))
             artifacts.append(artifact)
         elif FALSE_POSITIVE_LABEL in labels and thread_id in false_positive_comments:
             artifact = artifact_base(payload, thread, signal="false_positive", source="label_comment.false_positive")
             fp_comment = false_positive_comments[thread_id]
             artifact["feedback_comment_id"] = fp_comment.get("id")
             artifact["feedback_comment_url"] = fp_comment.get("html_url") or fp_comment.get("url")
-            artifact["feedback_comment_excerpt"] = str(fp_comment.get("body") or "")[:1000]
+            artifact["feedback_comment_excerpt"] = safe_excerpt(fp_comment.get("body"))
             artifacts.append(artifact)
         elif thread.get("isResolved") is True:
             artifacts.append(artifact_base(payload, thread, signal="addressed", source="review_thread.resolved"))

@@ -237,6 +237,22 @@ class LearnFeedbackTests(unittest.TestCase):
         self.assertIn("[REDACTED_TOKEN]", artifact_text)
         self.assertIn("[REDACTED_LOCAL_PATH]", artifact_text)
 
+    def test_feedback_artifacts_sanitize_comments_before_truncating_excerpts(self):
+        payload = self.fixture_payload()
+        token = "ghp_" + ("a" * 40)
+        payload["review_threads"][0]["comments"]["nodes"][0]["body"] = (
+            ("x" * 994) + " " + token
+        )
+
+        _result, artifacts = learn_feedback.build_feedback_learning_result(
+            payload, generated_at="2026-05-08T00:00:00Z"
+        )
+        artifact_by_thread = {artifact["thread_id"]: artifact for artifact in artifacts}
+        excerpt = artifact_by_thread["PRRT_resolved_1"]["comment_excerpts"][0]
+
+        self.assertNotIn("ghp_", excerpt)
+        self.assertLessEqual(len(excerpt), 1000)
+
     def test_feedback_artifacts_redact_common_raw_bearer_tokens_without_key_names(self):
         payload = self.fixture_payload()
         openai_token = "sk" + "-proj-" + "abc123DEF456ghi789JKL012mno345PQR678stu901"
