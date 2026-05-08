@@ -115,8 +115,26 @@ def explicit_false_positive_comment_map(payload: dict[str, Any]) -> dict[str, di
     return mapping
 
 
+TRUSTED_FALSE_POSITIVE_REPLY_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+
+
+def repository_owner(payload: dict[str, Any]) -> str:
+    repository = str(payload.get("repository") or payload.get("repo") or "")
+    return repository.split("/", 1)[0]
+
+
+def is_trusted_false_positive_reply(comment: dict[str, Any], payload: dict[str, Any]) -> bool:
+    """Return whether an in-thread false-positive reply is maintainer-controlled."""
+
+    association = str(comment.get("authorAssociation") or comment.get("author_association") or "").upper()
+    if association in TRUSTED_FALSE_POSITIVE_REPLY_ASSOCIATIONS:
+        return True
+    author_login = comment_author_login(comment)
+    return bool(author_login and author_login == repository_owner(payload))
+
+
 def explicit_false_positive_review_reply_map(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    """Map thread ids to in-thread false-positive reply metadata."""
+    """Map thread ids to trusted in-thread false-positive reply metadata."""
     mapping: dict[str, dict[str, Any]] = {}
     for thread in payload.get("review_threads") or []:
         if not isinstance(thread, dict):
@@ -126,7 +144,7 @@ def explicit_false_positive_review_reply_map(payload: dict[str, Any]) -> dict[st
             continue
         for comment in comments_for_thread(thread)[1:]:
             body = str(comment.get("body") or "")
-            if has_false_positive_marker(body):
+            if has_false_positive_marker(body) and is_trusted_false_positive_reply(comment, payload):
                 mapping[thread_id] = comment
     return mapping
 

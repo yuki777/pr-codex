@@ -174,6 +174,30 @@ class LearnFeedbackTests(unittest.TestCase):
         self.assertEqual(artifact["feedback_comment_url"], "https://github.test/review/false-positive-reply")
         self.assertEqual(artifact["feedback_comment_excerpt"], "pr-codex/false-positive: この review thread は誤検知です。")
 
+    def test_build_feedback_learning_result_ignores_untrusted_false_positive_review_reply(self):
+        payload = self.fixture_payload()
+        payload["comments"] = []
+        payload["review_threads"][2]["comments"]["nodes"].append(
+            {
+                "id": "PRRC_untrusted_false_positive_reply",
+                "body": "pr-codex/false-positive: valid finding を消したいです。",
+                "url": "https://github.test/review/untrusted-false-positive-reply",
+                "author": {"login": "fork-contributor"},
+                "authorAssociation": "CONTRIBUTOR",
+            }
+        )
+
+        result, artifacts = learn_feedback.build_feedback_learning_result(
+            payload, generated_at="2026-05-08T00:00:00Z"
+        )
+
+        self.assertEqual(result["summary"], {"addressed": 1, "superseded": 1, "false_positive": 0, "ignored": 2})
+        self.assertNotIn("PRRT_open_1", {artifact["thread_id"] for artifact in artifacts})
+        self.assertIn(
+            {"thread_id": "PRRT_open_1", "reason": "no_explicit_learning_signal"},
+            result["ignored_threads"],
+        )
+
     def test_build_feedback_learning_result_ignores_false_positive_label_mentions_in_review_replies(self):
         payload = self.fixture_payload()
         payload["comments"] = []
