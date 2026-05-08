@@ -113,6 +113,28 @@ Stage ごとの責務、input/output artifact、halting 条件は [`skills/revie
 /pr-codex:send
 ```
 
+## 投稿後フィードバックの学習
+
+`/pr-codex:learn` は投稿後に GitHub から返ってきた明示 signal だけを、次回レビュー改善用のローカル artifact として保存する。生成物は `learn-result.json` と `feedback-artifacts/*.json` で、secret/token/ローカルパスは scrub される。
+
+学習対象:
+
+- GraphQL review thread の `isResolved: true` → `addressed`
+- GraphQL review thread の `isOutdated: true` → `superseded`
+- 明示ラベル/コメント `pr-codex/false-positive` → `false_positive`
+
+学習しないもの:
+
+- author 無反応の未解決 thread
+- PR が merge された事実だけ
+- bot/generated marker だけ
+
+実体は同梱 helper `tasks/learn_feedback.py` で、snapshot JSON から冪等に artifact を生成する。
+
+```bash
+python3 tasks/learn_feedback.py --input feedback-snapshot.json --output-dir ~/claude-loop-pr-codex/learn/<org>-<repo>-<pr>-<head_sha_short>
+```
+
 `/pr-codex:send` の挙動:
 
 1. `~/claude-loop-pr-codex/` 配下から `status.json` が `state:completed` でかつ `findings.verified.json` / `review.md` が存在するディレクトリを1件選定する（名前昇順の先頭1件）
