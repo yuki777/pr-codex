@@ -274,6 +274,23 @@ class LearnFeedbackTests(unittest.TestCase):
         self.assertNotIn("eyJhbGci", artifact_text)
         self.assertIn("[REDACTED_TOKEN]", artifact_text)
 
+    def test_feedback_artifacts_redact_password_assignments_and_aws_access_key_ids(self):
+        payload = self.fixture_payload()
+        aws_access_key_id = "AK" + "IA" + "ABCDEFGHIJKLMNOP"
+        payload["review_threads"][0]["comments"]["nodes"][0]["body"] = (
+            f"logs include password=hunter2 and AWS access key {aws_access_key_id}"
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            learn_feedback.write_feedback_artifacts(
+                payload, output_dir=Path(tmpdir), generated_at="2026-05-08T00:00:00Z"
+            )
+            artifact_text = "\n".join(path.read_text() for path in (Path(tmpdir) / "feedback-artifacts").glob("*.json"))
+
+        self.assertNotIn("password=hunter2", artifact_text)
+        self.assertNotIn("hunter2", artifact_text)
+        self.assertNotIn("AKIA", artifact_text)
+        self.assertIn("[REDACTED_TOKEN]", artifact_text)
+
     def test_feedback_artifacts_redact_host_local_paths_beyond_home_prefixes(self):
         payload = self.fixture_payload()
         payload["review_threads"][0]["comments"]["nodes"][0]["body"] = (
