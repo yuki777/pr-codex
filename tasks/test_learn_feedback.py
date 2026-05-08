@@ -284,6 +284,18 @@ class LearnFeedbackTests(unittest.TestCase):
         ):
             self.assertIn(snippet, skill)
 
+    def test_learn_skill_resolves_helper_from_plugin_root(self):
+        skill = (ROOT / "skills" / "learn" / "SKILL.md").read_text(encoding="utf-8")
+
+        for snippet in (
+            "CLAUDE_PLUGIN_ROOT=",
+            "${CLAUDE_PLUGIN_ROOT:?CLAUDE_PLUGIN_ROOT を指定してください}",
+            "HELPER=\"$CLAUDE_PLUGIN_ROOT/tasks/learn_feedback.py\"",
+            "python3 \"$HELPER\"",
+        ):
+            self.assertIn(snippet, skill)
+        self.assertNotIn("python3 tasks/learn_feedback.py", skill)
+
     def test_write_feedback_artifacts_removes_stale_signal_files_on_rerun(self):
         payload = self.fixture_payload()
         with tempfile.TemporaryDirectory() as tmpdir:

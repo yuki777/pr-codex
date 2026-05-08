@@ -37,14 +37,16 @@ artifact は token らしき値とローカルパスを redaction し、コメ�
 
 ## 使い方
 
-`/pr-codex:learn [snapshot.json] [output-dir]` として呼び出されたら、Claude は `$ARGUMENTS` を次のように解釈して `tasks/learn_feedback.py` に渡す。
+`/pr-codex:learn [snapshot.json] [output-dir]` として呼び出されたら、Claude は `$ARGUMENTS` を次のように解釈して、現在の作業ディレクトリではなく plugin root 配下の `tasks/learn_feedback.py` に渡す。
 
 ```bash
 set -- $ARGUMENTS
 SNAPSHOT_JSON="${1:?snapshot.json を指定してください}"
 OUTPUT_DIR="${2:?output-dir を指定してください}"
+CLAUDE_PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:?CLAUDE_PLUGIN_ROOT を指定してください}"
+HELPER="$CLAUDE_PLUGIN_ROOT/tasks/learn_feedback.py"
 
-python3 tasks/learn_feedback.py \
+python3 "$HELPER" \
   --input "$SNAPSHOT_JSON" \
   --output-dir "$OUTPUT_DIR"
 ```
@@ -55,7 +57,7 @@ python3 tasks/learn_feedback.py \
 /pr-codex:learn feedback.json out
 ```
 
-上記は `python3 tasks/learn_feedback.py --input "feedback.json" --output-dir "out"` として実行する。
+上記は `$CLAUDE_PLUGIN_ROOT/tasks/learn_feedback.py` を絶対パスとして解決してから、`--input "feedback.json" --output-dir "out"` として実行する。
 
 `snapshot` には少なくとも次のキーを含める。
 
