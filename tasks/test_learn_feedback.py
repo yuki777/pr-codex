@@ -368,6 +368,25 @@ class LearnFeedbackTests(unittest.TestCase):
         self.assertNotIn("/private/var/folders", artifact_text)
         self.assertEqual(artifact_text.count("[REDACTED_LOCAL_PATH]"), 5)
 
+    def test_feedback_artifacts_redact_home_relative_credential_paths(self):
+        payload = self.fixture_payload()
+        payload["review_threads"][0]["comments"]["nodes"][0]["body"] = (
+            "logs mention ~/.ssh/id_rsa and ~/.aws/credentials in the fix context"
+        )
+        payload["comments"][0]["body"] = (
+            "pr-codex/false-positive: PRRT_open_1 pasted ~/.config/gh/hosts.yml"
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            learn_feedback.write_feedback_artifacts(
+                payload, output_dir=Path(tmpdir), generated_at="2026-05-08T00:00:00Z"
+            )
+            artifact_text = "\n".join(path.read_text() for path in (Path(tmpdir) / "feedback-artifacts").glob("*.json"))
+
+        self.assertNotIn("~/.ssh/id_rsa", artifact_text)
+        self.assertNotIn("~/.aws/credentials", artifact_text)
+        self.assertNotIn("~/.config/gh/hosts.yml", artifact_text)
+        self.assertEqual(artifact_text.count("[REDACTED_LOCAL_PATH]"), 3)
+
     def test_feedback_artifacts_redact_pasted_private_key_blocks(self):
         payload = self.fixture_payload()
         payload["review_threads"][0]["comments"]["nodes"][0]["body"] = (
