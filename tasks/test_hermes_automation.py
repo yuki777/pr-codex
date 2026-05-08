@@ -319,6 +319,57 @@ class HermesWatcherTests(unittest.TestCase):
         self.assertTrue(queries)
         self.assertIn("authorAssociation", queries[0])
 
+    def test_fetch_review_threads_paginates_thread_comments(self):
+        original = watch.gh_json
+        calls: list[list[str]] = []
+
+        def fake_gh_json(args):
+            calls.append(args)
+            if any(arg == "id=thread-1" for arg in args):
+                return {
+                    "data": {
+                        "node": {
+                            "comments": {
+                                "nodes": [
+                                    {"id": "c2", "body": "pr-codex/false-positive", "createdAt": "2026-05-08T00:01:00Z"}
+                                ],
+                                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                            }
+                        }
+                    }
+                }
+            return {
+                "data": {
+                    "repository": {
+                        "pullRequest": {
+                            "reviewThreads": {
+                                "nodes": [
+                                    {
+                                        "id": "thread-1",
+                                        "comments": {
+                                            "nodes": [{"id": "c1", "body": "finding", "createdAt": "2026-05-08T00:00:00Z"}],
+                                            "pageInfo": {"hasNextPage": True, "endCursor": "comment-cursor-1"},
+                                        },
+                                    }
+                                ],
+                                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                            }
+                        }
+                    }
+                }
+            }
+
+        try:
+            watch.gh_json = fake_gh_json
+            actual = watch.fetch_review_threads("yuki777", "pr-codex", 29)
+        finally:
+            watch.gh_json = original
+
+        comments = actual[0]["comments"]["nodes"]
+        self.assertEqual([comment["id"] for comment in comments], ["c1", "c2"])
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(any(arg == "cursor=comment-cursor-1" for arg in calls[1]))
+
 
 class DeveloperBridgeReviewFeedbackTests(unittest.TestCase):
     def codex_thread(self, *, extra_comments=None, is_resolved=False):
@@ -391,6 +442,74 @@ class DeveloperBridgeReviewFeedbackTests(unittest.TestCase):
         self.assertTrue(commands)
         query = next(arg.removeprefix("query=") for arg in commands[0] if arg.startswith("query="))
         self.assertIn("authorAssociation", query)
+
+    def test_list_pr_review_threads_paginates_thread_comments(self):
+        commands: list[list[str]] = []
+
+        def fake_run(cmd, **kwargs):
+            commands.append(cmd)
+            if any(arg == "id=thread-1" for arg in cmd):
+                return bridge.Completed(
+                    returncode=0,
+                    stdout=json.dumps(
+                        {
+                            "data": {
+                                "node": {
+                                    "comments": {
+                                        "nodes": [
+                                            {
+                                                "id": "c2",
+                                                "body": "pr-codex/false-positive",
+                                                "createdAt": "2026-05-08T00:01:00Z",
+                                            }
+                                        ],
+                                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                                    }
+                                }
+                            }
+                        }
+                    ),
+                    stderr="",
+                )
+            return bridge.Completed(
+                returncode=0,
+                stdout=json.dumps(
+                    {
+                        "data": {
+                            "repository": {
+                                "pullRequest": {
+                                    "reviewThreads": {
+                                        "nodes": [
+                                            {
+                                                "id": "thread-1",
+                                                "comments": {
+                                                    "nodes": [
+                                                        {
+                                                            "id": "c1",
+                                                            "body": "finding",
+                                                            "createdAt": "2026-05-08T00:00:00Z",
+                                                        }
+                                                    ],
+                                                    "pageInfo": {"hasNextPage": True, "endCursor": "comment-cursor-1"},
+                                                },
+                                            }
+                                        ],
+                                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                                    }
+                                }
+                            }
+                        }
+                    }
+                ),
+                stderr="",
+            )
+
+        actual = bridge.list_pr_review_threads(60, "yuki777/pr-codex", run_cmd=fake_run)
+
+        comments = actual[0]["comments"]["nodes"]
+        self.assertEqual([comment["id"] for comment in comments], ["c1", "c2"])
+        self.assertEqual(len(commands), 2)
+        self.assertTrue(any(arg == "cursor=comment-cursor-1" for arg in commands[1]))
 
     def test_premerge_gate_blocks_unreplied_codex_thread(self):
         pr = {"number": 52, "title": "fix counts", "url": "https://github.test/pr/52", "head_sha": "abc123", "head_ref": "fix/counts"}
