@@ -291,6 +291,34 @@ class HermesWatcherTests(unittest.TestCase):
 
         self.assertEqual(actual, [{"id": "thread-1", "isResolved": False}])
 
+    def test_fetch_review_threads_requests_comment_author_associations(self):
+        original = watch.gh_json
+        queries: list[str] = []
+
+        def fake_gh_json(args):
+            queries.append(next(arg.removeprefix("query=") for arg in args if arg.startswith("query=")))
+            return {
+                "data": {
+                    "repository": {
+                        "pullRequest": {
+                            "reviewThreads": {
+                                "nodes": [],
+                                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                            }
+                        }
+                    }
+                }
+            }
+
+        try:
+            watch.gh_json = fake_gh_json
+            watch.fetch_review_threads("yuki777", "pr-codex", 29)
+        finally:
+            watch.gh_json = original
+
+        self.assertTrue(queries)
+        self.assertIn("authorAssociation", queries[0])
+
 
 class DeveloperBridgeReviewFeedbackTests(unittest.TestCase):
     def codex_thread(self, *, extra_comments=None, is_resolved=False):
@@ -333,6 +361,36 @@ class DeveloperBridgeReviewFeedbackTests(unittest.TestCase):
         }
         pr = {"number": 52, "head_sha": "abc123"}
         self.assertIsNone(bridge.find_unreplied_codex_review_thread(pr, [self.codex_thread(extra_comments=[reply])]))
+
+    def test_list_pr_review_threads_requests_comment_author_associations(self):
+        commands: list[list[str]] = []
+
+        def fake_run(cmd, **kwargs):
+            commands.append(cmd)
+            return bridge.Completed(
+                returncode=0,
+                stdout=json.dumps(
+                    {
+                        "data": {
+                            "repository": {
+                                "pullRequest": {
+                                    "reviewThreads": {
+                                        "nodes": [],
+                                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                                    }
+                                }
+                            }
+                        }
+                    }
+                ),
+                stderr="",
+            )
+
+        bridge.list_pr_review_threads(60, "yuki777/pr-codex", run_cmd=fake_run)
+
+        self.assertTrue(commands)
+        query = next(arg.removeprefix("query=") for arg in commands[0] if arg.startswith("query="))
+        self.assertIn("authorAssociation", query)
 
     def test_premerge_gate_blocks_unreplied_codex_thread(self):
         pr = {"number": 52, "title": "fix counts", "url": "https://github.test/pr/52", "head_sha": "abc123", "head_ref": "fix/counts"}

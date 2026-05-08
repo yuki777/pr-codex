@@ -529,6 +529,7 @@ query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
               createdAt
               url
               author { login }
+              authorAssociation
             }
           }
         }
