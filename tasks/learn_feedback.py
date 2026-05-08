@@ -168,15 +168,23 @@ def false_positive_marker_thread_ids(body: str) -> set[str]:
     """Return thread ids directly targeted by false-positive marker lines."""
 
     thread_ids: set[str] = set()
-    for line in body.splitlines():
+    lines = body.splitlines()
+    for index, line in enumerate(lines):
         marker = FALSE_POSITIVE_MARKER_RE.search(line)
         if not marker:
             continue
-        target_text = line[marker.end() :]
-        first_sentence = re.split(r"[。.!?]", target_text, maxsplit=1)[0]
-        positive_targets = FALSE_POSITIVE_EXCLUSION_RE.sub("", first_sentence)
-        for match in re.finditer(r"PRRT_[A-Za-z0-9_-]+", positive_targets):
-            thread_ids.add(match.group(0))
+        target_lines = [line[marker.end() :]]
+        for following_line in lines[index + 1 :]:
+            if not following_line.strip() or FALSE_POSITIVE_MARKER_RE.search(following_line):
+                break
+            if not re.match(r"\s*(?:[-*+]\s+|\d+[.)]\s+)", following_line):
+                break
+            target_lines.append(following_line)
+        for target_text in target_lines:
+            first_sentence = re.split(r"[。.!?]", target_text, maxsplit=1)[0]
+            positive_targets = FALSE_POSITIVE_EXCLUSION_RE.sub("", first_sentence)
+            for match in re.finditer(r"PRRT_[A-Za-z0-9_-]+", positive_targets):
+                thread_ids.add(match.group(0))
     return thread_ids
 
 

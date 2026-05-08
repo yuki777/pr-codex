@@ -323,6 +323,19 @@ class LearnFeedbackTests(unittest.TestCase):
         self.assertEqual(artifact_by_thread["PRRT_open_1"]["signal"], "false_positive")
         self.assertEqual(artifact_by_thread["PRRT_open_1"]["source"], "label_comment.false_positive")
 
+    def test_build_feedback_learning_result_accepts_false_positive_targets_on_following_bullet_lines(self):
+        payload = self.fixture_payload()
+        payload["comments"][0]["body"] = "pr-codex/false-positive:\n- PRRT_open_1\n- not for PRRT_silent_1"
+
+        result, artifacts = learn_feedback.build_feedback_learning_result(
+            payload, generated_at="2026-05-08T00:00:00Z"
+        )
+
+        self.assertEqual(result["summary"], {"addressed": 1, "superseded": 1, "false_positive": 1, "ignored": 1})
+        artifact_by_thread = {artifact["thread_id"]: artifact for artifact in artifacts}
+        self.assertEqual(artifact_by_thread["PRRT_open_1"]["signal"], "false_positive")
+        self.assertNotIn("PRRT_silent_1", artifact_by_thread)
+
     def test_build_feedback_learning_result_accepts_explicit_false_positive_issue_comment_without_label(self):
         payload = self.fixture_payload()
         payload["labels"] = []
