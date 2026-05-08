@@ -138,6 +138,31 @@ class LearnFeedbackTests(unittest.TestCase):
         self.assertEqual(artifact_by_thread["PRRT_open_1"]["signal"], "false_positive")
         self.assertEqual(artifact_by_thread["PRRT_open_1"]["source"], "label_comment.false_positive")
 
+    def test_build_feedback_learning_result_accepts_false_positive_reply_in_review_thread(self):
+        payload = self.fixture_payload()
+        payload["comments"] = []
+        payload["review_threads"][2]["comments"]["nodes"].append(
+            {
+                "id": "PRRC_false_positive_reply",
+                "body": "pr-codex/false-positive: この review thread は誤検知です。",
+                "url": "https://github.test/review/false-positive-reply",
+                "author": {"login": "yuki777"},
+            }
+        )
+
+        result, artifacts = learn_feedback.build_feedback_learning_result(
+            payload, generated_at="2026-05-08T00:00:00Z"
+        )
+
+        self.assertEqual(result["summary"], {"addressed": 1, "superseded": 1, "false_positive": 1, "ignored": 1})
+        artifact_by_thread = {artifact["thread_id"]: artifact for artifact in artifacts}
+        artifact = artifact_by_thread["PRRT_open_1"]
+        self.assertEqual(artifact["signal"], "false_positive")
+        self.assertEqual(artifact["source"], "review_thread_comment.false_positive")
+        self.assertEqual(artifact["feedback_comment_id"], "PRRC_false_positive_reply")
+        self.assertEqual(artifact["feedback_comment_url"], "https://github.test/review/false-positive-reply")
+        self.assertEqual(artifact["feedback_comment_excerpt"], "pr-codex/false-positive: この review thread は誤検知です。")
+
     def test_build_feedback_learning_result_ignores_other_reviewers_threads(self):
         payload = self.fixture_payload()
         payload["review_threads"].append(

@@ -90,7 +90,6 @@ def label_names(payload: dict[str, Any]) -> set[str]:
 
 def explicit_false_positive_comment_map(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Map mentioned thread ids to their false-positive comment metadata."""
-
     mapping: dict[str, dict[str, Any]] = {}
     for comment in payload.get("comments") or []:
         if not isinstance(comment, dict):
@@ -101,6 +100,22 @@ def explicit_false_positive_comment_map(payload: dict[str, Any]) -> dict[str, di
         mentioned = set(re.findall(r"PRRT_[A-Za-z0-9_-]+", body))
         for thread_id in mentioned:
             mapping[thread_id] = comment
+    return mapping
+
+
+def explicit_false_positive_review_reply_map(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Map thread ids to in-thread false-positive reply metadata."""
+    mapping: dict[str, dict[str, Any]] = {}
+    for thread in payload.get("review_threads") or []:
+        if not isinstance(thread, dict):
+            continue
+        thread_id = str(thread.get("id") or "")
+        if not thread_id:
+            continue
+        for comment in comments_for_thread(thread)[1:]:
+            body = str(comment.get("body") or "")
+            if FALSE_POSITIVE_LABEL in body:
+                mapping[thread_id] = comment
     return mapping
 
 
@@ -132,6 +147,7 @@ def build_feedback_learning_result(
     labels = label_names(payload)
     review_authors = configured_review_authors(payload)
     false_positive_comments = explicit_false_positive_comment_map(payload)
+    false_positive_review_replies = explicit_false_positive_review_reply_map(payload)
     artifacts: list[dict[str, Any]] = []
     ignored: list[dict[str, str]] = []
 
@@ -142,7 +158,14 @@ def build_feedback_learning_result(
         if not is_pr_codex_review_thread(thread, review_authors=review_authors):
             ignored.append({"thread_id": thread_id, "reason": "not_pr_codex_review_thread"})
             continue
-        if FALSE_POSITIVE_LABEL in labels and thread_id in false_positive_comments:
+        if thread_id in false_positive_review_replies:
+            artifact = artifact_base(payload, thread, signal="false_positive", source="review_thread_comment.false_positive")
+            fp_comment = false_positive_review_replies[thread_id]
+            artifact["feedback_comment_id"] = fp_comment.get("id")
+            artifact["feedback_comment_url"] = fp_comment.get("html_url") or fp_comment.get("url")
+            artifact["feedback_comment_excerpt"] = str(fp_comment.get("body") or "")[:1000]
+            artifacts.append(artifact)
+        elif FALSE_POSITIVE_LABEL in labels and thread_id in false_positive_comments:
             artifact = artifact_base(payload, thread, signal="false_positive", source="label_comment.false_positive")
             fp_comment = false_positive_comments[thread_id]
             artifact["feedback_comment_id"] = fp_comment.get("id")
