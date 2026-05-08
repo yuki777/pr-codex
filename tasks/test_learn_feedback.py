@@ -119,6 +119,23 @@ class LearnFeedbackTests(unittest.TestCase):
         self.assertIn("[REDACTED_TOKEN]", artifact_text)
         self.assertIn("[REDACTED_LOCAL_PATH]", artifact_text)
 
+    def test_feedback_artifacts_redact_common_raw_bearer_tokens_without_key_names(self):
+        payload = self.fixture_payload()
+        openai_token = "sk" + "-proj-" + "abc123DEF456ghi789JKL012mno345PQR678stu901"
+        gitlab_token = "gl" + "pat-" + "abcDEF1234567890abcd"
+        payload["review_threads"][0]["comments"]["nodes"][0]["body"] = (
+            f"resolved with OpenAI key {openai_token} and GitLab token {gitlab_token}"
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            learn_feedback.write_feedback_artifacts(
+                payload, output_dir=Path(tmpdir), generated_at="2026-05-08T00:00:00Z"
+            )
+            artifact_text = "\n".join(path.read_text() for path in (Path(tmpdir) / "feedback-artifacts").glob("*.json"))
+
+        self.assertNotIn("sk-proj-", artifact_text)
+        self.assertNotIn("glpat-", artifact_text)
+        self.assertIn("[REDACTED_TOKEN]", artifact_text)
+
     def test_write_feedback_artifacts_removes_stale_signal_files_on_rerun(self):
         payload = self.fixture_payload()
         with tempfile.TemporaryDirectory() as tmpdir:
