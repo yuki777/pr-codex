@@ -614,6 +614,28 @@ class LearnFeedbackTests(unittest.TestCase):
         self.assertNotIn("rk_live_", artifact_text)
         self.assertIn("[REDACTED_TOKEN]", artifact_text)
 
+    def test_feedback_artifacts_redact_npm_and_google_api_keys_without_key_names(self):
+        payload = self.fixture_payload()
+        npm_token = "npm_" + "a" * 36
+        google_api_key = "AIza" + "A" * 35
+        payload["review_threads"][0]["comments"]["nodes"][0]["body"] = (
+            f"package publish log includes npm token {npm_token} and Google API key {google_api_key}"
+        )
+        payload["comments"][0]["body"] = (
+            f"pr-codex/false-positive: PRRT_open_1 copied {npm_token} and {google_api_key}"
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            learn_feedback.write_feedback_artifacts(
+                payload, output_dir=Path(tmpdir), generated_at="2026-05-08T00:00:00Z"
+            )
+            artifact_text = "\n".join(path.read_text() for path in (Path(tmpdir) / "feedback-artifacts").glob("*.json"))
+
+        self.assertNotIn(npm_token, artifact_text)
+        self.assertNotIn(google_api_key, artifact_text)
+        self.assertNotIn("npm_", artifact_text)
+        self.assertNotIn("AIza", artifact_text)
+        self.assertIn("[REDACTED_TOKEN]", artifact_text)
+
     def test_feedback_artifacts_redact_url_userinfo_credentials(self):
         payload = self.fixture_payload()
         credential_url = "https://user:pw@example.com/private/path?debug=true"
