@@ -209,6 +209,23 @@ class LearnFeedbackTests(unittest.TestCase):
         self.assertNotIn("glpat-", artifact_text)
         self.assertIn("[REDACTED_TOKEN]", artifact_text)
 
+    def test_feedback_artifacts_redact_host_local_paths_beyond_home_prefixes(self):
+        payload = self.fixture_payload()
+        payload["review_threads"][0]["comments"]["nodes"][0]["body"] = (
+            "logs mention /root/.ssh/id_rsa, /workspace/pr-codex/tasks/learn_feedback.py, "
+            "and /var/folders/xy/secret.txt"
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            learn_feedback.write_feedback_artifacts(
+                payload, output_dir=Path(tmpdir), generated_at="2026-05-08T00:00:00Z"
+            )
+            artifact_text = "\n".join(path.read_text() for path in (Path(tmpdir) / "feedback-artifacts").glob("*.json"))
+
+        self.assertNotIn("/root/.ssh/id_rsa", artifact_text)
+        self.assertNotIn("/workspace/pr-codex", artifact_text)
+        self.assertNotIn("/var/folders", artifact_text)
+        self.assertEqual(artifact_text.count("[REDACTED_LOCAL_PATH]"), 4)
+
     def test_learn_skill_wires_user_invocation_arguments_to_helper(self):
         skill = (ROOT / "skills" / "learn" / "SKILL.md").read_text(encoding="utf-8")
 
