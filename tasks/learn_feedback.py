@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 FALSE_POSITIVE_LABEL = "pr-codex/false-positive"
+FALSE_POSITIVE_MARKER_RE = re.compile(rf"(?m)^\s*{re.escape(FALSE_POSITIVE_LABEL)}\s*:")
 DEFAULT_REVIEW_AUTHORS = frozenset({"chatgpt-codex-connector"})
 CREDENTIAL_BLOCK_RE = re.compile(
     r"-----BEGIN ([A-Z0-9 ]*PRIVATE KEY)-----[\s\S]*?-----END \1-----",
@@ -93,6 +94,12 @@ def label_names(payload: dict[str, Any]) -> set[str]:
     return names
 
 
+def has_false_positive_marker(body: str) -> bool:
+    """Return whether a comment intentionally marks feedback as false-positive."""
+
+    return bool(FALSE_POSITIVE_MARKER_RE.search(body))
+
+
 def explicit_false_positive_comment_map(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Map mentioned thread ids to their false-positive comment metadata."""
     mapping: dict[str, dict[str, Any]] = {}
@@ -100,7 +107,7 @@ def explicit_false_positive_comment_map(payload: dict[str, Any]) -> dict[str, di
         if not isinstance(comment, dict):
             continue
         body = str(comment.get("body") or "")
-        if FALSE_POSITIVE_LABEL not in body:
+        if not has_false_positive_marker(body):
             continue
         mentioned = set(re.findall(r"PRRT_[A-Za-z0-9_-]+", body))
         for thread_id in mentioned:
@@ -119,7 +126,7 @@ def explicit_false_positive_review_reply_map(payload: dict[str, Any]) -> dict[st
             continue
         for comment in comments_for_thread(thread)[1:]:
             body = str(comment.get("body") or "")
-            if FALSE_POSITIVE_LABEL in body:
+            if has_false_positive_marker(body):
                 mapping[thread_id] = comment
     return mapping
 

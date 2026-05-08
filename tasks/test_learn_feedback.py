@@ -174,6 +174,28 @@ class LearnFeedbackTests(unittest.TestCase):
         self.assertEqual(artifact["feedback_comment_url"], "https://github.test/review/false-positive-reply")
         self.assertEqual(artifact["feedback_comment_excerpt"], "pr-codex/false-positive: この review thread は誤検知です。")
 
+    def test_build_feedback_learning_result_ignores_false_positive_label_mentions_in_review_replies(self):
+        payload = self.fixture_payload()
+        payload["comments"] = []
+        payload["review_threads"][2]["isResolved"] = True
+        payload["review_threads"][2]["comments"]["nodes"].append(
+            {
+                "id": "PRRC_explanatory_reply",
+                "body": "pr-codex/false-positive のラベル処理を修正しました。",
+                "url": "https://github.test/review/explanatory-reply",
+                "author": {"login": "yuki777"},
+            }
+        )
+
+        result, artifacts = learn_feedback.build_feedback_learning_result(
+            payload, generated_at="2026-05-08T00:00:00Z"
+        )
+
+        self.assertEqual(result["summary"], {"addressed": 2, "superseded": 1, "false_positive": 0, "ignored": 1})
+        artifact_by_thread = {artifact["thread_id"]: artifact for artifact in artifacts}
+        self.assertEqual(artifact_by_thread["PRRT_open_1"]["signal"], "addressed")
+        self.assertEqual(artifact_by_thread["PRRT_open_1"]["source"], "review_thread.resolved")
+
     def test_build_feedback_learning_result_honors_custom_review_author_allowlist(self):
         payload = self.fixture_payload()
         payload["review_author"] = "custom-pr-codex-bot"
