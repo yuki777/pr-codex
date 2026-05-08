@@ -18,6 +18,10 @@ from typing import Any
 
 FALSE_POSITIVE_LABEL = "pr-codex/false-positive"
 FALSE_POSITIVE_MARKER_RE = re.compile(rf"(?m)^\s*{re.escape(FALSE_POSITIVE_LABEL)}(?:\s*:|\s+(?=PRRT_))")
+FALSE_POSITIVE_EXCLUSION_RE = re.compile(
+    r"(?:^|[,;]\s*|\s+)(?:not(?:\s+for)?|except|excluding|除外|対象外)(?:\b|\s).*$",
+    re.IGNORECASE,
+)
 DEFAULT_REVIEW_AUTHORS = frozenset({"chatgpt-codex-connector"})
 CREDENTIAL_BLOCK_RE = re.compile(
     r"-----BEGIN ([A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?)-----[\s\S]*?-----END \1-----",
@@ -170,10 +174,8 @@ def false_positive_marker_thread_ids(body: str) -> set[str]:
             continue
         target_text = line[marker.end() :]
         first_sentence = re.split(r"[。.!?]", target_text, maxsplit=1)[0]
-        for match in re.finditer(r"PRRT_[A-Za-z0-9_-]+", first_sentence):
-            prefix = first_sentence[: match.start()]
-            if re.search(r"(?:^|\W)not\s*$", prefix, re.IGNORECASE):
-                continue
+        positive_targets = FALSE_POSITIVE_EXCLUSION_RE.sub("", first_sentence)
+        for match in re.finditer(r"PRRT_[A-Za-z0-9_-]+", positive_targets):
             thread_ids.add(match.group(0))
     return thread_ids
 
