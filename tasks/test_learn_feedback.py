@@ -298,6 +298,32 @@ class LearnFeedbackTests(unittest.TestCase):
         self.assertNotIn("AKIA", artifact_text)
         self.assertIn("[REDACTED_TOKEN]", artifact_text)
 
+    def test_feedback_artifacts_redact_quoted_secret_assignments(self):
+        payload = self.fixture_payload()
+        payload["review_threads"][0]["comments"]["nodes"][0]["body"] = (
+            'config copied from logs: {"password": "hunter2", "api_key": "value123"} '
+            'and yaml_secret: "correct horse battery staple"'
+        )
+        payload["comments"][0]["body"] = (
+            'pr-codex/false-positive: PRRT_open_1 includes password="open sesame" '
+            'and "secret_token": "quoted token value"'
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            learn_feedback.write_feedback_artifacts(
+                payload, output_dir=Path(tmpdir), generated_at="2026-05-08T00:00:00Z"
+            )
+            artifact_text = "\n".join(path.read_text() for path in (Path(tmpdir) / "feedback-artifacts").glob("*.json"))
+
+        for raw_secret in (
+            "hunter2",
+            "value123",
+            "correct horse battery staple",
+            "open sesame",
+            "quoted token value",
+        ):
+            self.assertNotIn(raw_secret, artifact_text)
+        self.assertIn("[REDACTED_TOKEN]", artifact_text)
+
     def test_feedback_artifacts_redact_host_local_paths_beyond_home_prefixes(self):
         payload = self.fixture_payload()
         payload["review_threads"][0]["comments"]["nodes"][0]["body"] = (
