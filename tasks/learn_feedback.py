@@ -104,18 +104,36 @@ def has_false_positive_marker(body: str) -> bool:
     return bool(FALSE_POSITIVE_MARKER_RE.search(body))
 
 
+def false_positive_marker_thread_ids(body: str) -> set[str]:
+    """Return thread ids directly targeted by false-positive marker lines."""
+
+    thread_ids: set[str] = set()
+    for line in body.splitlines():
+        marker = FALSE_POSITIVE_MARKER_RE.search(line)
+        if not marker:
+            continue
+        target_text = line[marker.end() :]
+        first_sentence = re.split(r"[。.!?]", target_text, maxsplit=1)[0]
+        for match in re.finditer(r"PRRT_[A-Za-z0-9_-]+", first_sentence):
+            prefix = first_sentence[: match.start()]
+            if re.search(r"(?:^|\W)not\s*$", prefix, re.IGNORECASE):
+                continue
+            thread_ids.add(match.group(0))
+    return thread_ids
+
+
 def explicit_false_positive_comment_map(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    """Map mentioned thread ids to trusted false-positive issue comment metadata."""
+    """Map targeted thread ids to trusted false-positive issue comment metadata."""
     mapping: dict[str, dict[str, Any]] = {}
     for comment in payload.get("comments") or []:
         if not isinstance(comment, dict):
             continue
         body = str(comment.get("body") or "")
-        if not has_false_positive_marker(body):
+        mentioned = false_positive_marker_thread_ids(body)
+        if not mentioned:
             continue
         if not is_trusted_false_positive_comment(comment, payload):
             continue
-        mentioned = set(re.findall(r"PRRT_[A-Za-z0-9_-]+", body))
         for thread_id in mentioned:
             mapping[thread_id] = comment
     return mapping
