@@ -257,8 +257,10 @@ class LearnFeedbackTests(unittest.TestCase):
         payload = self.fixture_payload()
         openai_token = "sk" + "-proj-" + "abc123DEF456ghi789JKL012mno345PQR678stu901"
         gitlab_token = "gl" + "pat-" + "abcDEF1234567890abcd"
+        bearer_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ" + ("a" * 24)
         payload["review_threads"][0]["comments"]["nodes"][0]["body"] = (
-            f"resolved with OpenAI key {openai_token} and GitLab token {gitlab_token}"
+            f"resolved with OpenAI key {openai_token}, GitLab token {gitlab_token}, "
+            f"and header Authorization: Bearer {bearer_token}"
         )
         with tempfile.TemporaryDirectory() as tmpdir:
             learn_feedback.write_feedback_artifacts(
@@ -268,6 +270,8 @@ class LearnFeedbackTests(unittest.TestCase):
 
         self.assertNotIn("sk-proj-", artifact_text)
         self.assertNotIn("glpat-", artifact_text)
+        self.assertNotIn("Authorization: Bearer", artifact_text)
+        self.assertNotIn("eyJhbGci", artifact_text)
         self.assertIn("[REDACTED_TOKEN]", artifact_text)
 
     def test_feedback_artifacts_redact_host_local_paths_beyond_home_prefixes(self):
