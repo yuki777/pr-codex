@@ -119,6 +119,33 @@ class LearnFeedbackTests(unittest.TestCase):
         self.assertIn("[REDACTED_TOKEN]", artifact_text)
         self.assertIn("[REDACTED_LOCAL_PATH]", artifact_text)
 
+    def test_write_feedback_artifacts_removes_stale_signal_files_on_rerun(self):
+        payload = self.fixture_payload()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            learn_feedback.write_feedback_artifacts(
+                payload, output_dir=output_dir, generated_at="2026-05-08T00:00:00Z"
+            )
+
+            payload_without_false_positive = {**payload, "comments": []}
+            result = learn_feedback.write_feedback_artifacts(
+                payload_without_false_positive,
+                output_dir=output_dir,
+                generated_at="2026-05-08T00:01:00Z",
+            )
+            artifact_paths = sorted((output_dir / "feedback-artifacts").glob("*.json"))
+
+        self.assertEqual(result["summary"], {"addressed": 1, "superseded": 1, "false_positive": 0, "ignored": 2})
+        self.assertEqual(result["artifact_count"], 2)
+        self.assertEqual(result["artifacts"], [
+            "feedback-artifacts/addressed-PRRT_resolved_1.json",
+            "feedback-artifacts/superseded-PRRT_outdated_1.json",
+        ])
+        self.assertEqual([path.name for path in artifact_paths], [
+            "addressed-PRRT_resolved_1.json",
+            "superseded-PRRT_outdated_1.json",
+        ])
+
 
 if __name__ == "__main__":
     unittest.main()

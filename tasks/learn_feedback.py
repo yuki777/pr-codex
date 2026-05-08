@@ -158,6 +158,8 @@ def write_feedback_artifacts(
     result, artifacts = build_feedback_learning_result(payload, generated_at=generated_at)
     artifact_dir = output_dir / "feedback-artifacts"
     artifact_dir.mkdir(parents=True, exist_ok=True)
+    for stale_artifact in artifact_dir.glob("*.json"):
+        stale_artifact.unlink()
 
     written: list[str] = []
     for artifact in artifacts:
