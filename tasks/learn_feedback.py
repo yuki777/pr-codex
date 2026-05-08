@@ -26,6 +26,7 @@ TOKEN_RE = re.compile(
     r"\b(?:authorization\s*:\s*(?:bearer|basic)\s+[^\s,;]+|gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-proj-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9_-]{20,}|glpat-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|[\"']?[A-Za-z0-9_]*(?:password|token|secret|api[_-]?key)[A-Za-z0-9_]*[\"']?\s*[:=]\s*(?:\"[^\"]*\"|'[^']*'|[^\s,;]+))",
     re.IGNORECASE,
 )
+URL_USERINFO_RE = re.compile(r"\b([a-z][a-z0-9+.-]*://)[^\s/@:]+(?::[^\s/@]*)?@([^\s`'\")<>]+)", re.IGNORECASE)
 LOCAL_PATH_RE = re.compile(r"(?<![\w.-])(?:~|/home|/Users|/mnt/[a-z]|/tmp|/root|/workspace|/private/var/folders|/var/folders|C:\\Users)[/\\][^\s`'\")]+")
 
 
@@ -33,6 +34,7 @@ def sanitize_text(value: str) -> str:
     """Scrub tokens and local paths from public-safe learning artifacts."""
 
     value = CREDENTIAL_BLOCK_RE.sub("[REDACTED_CREDENTIAL_BLOCK]", value)
+    value = URL_USERINFO_RE.sub(r"\1[REDACTED_TOKEN]@\2", value)
     value = TOKEN_RE.sub("[REDACTED_TOKEN]", value)
     value = LOCAL_PATH_RE.sub("[REDACTED_LOCAL_PATH]", value)
     return value

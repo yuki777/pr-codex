@@ -347,6 +347,22 @@ class LearnFeedbackTests(unittest.TestCase):
         self.assertNotIn(basic_token, artifact_text)
         self.assertIn("[REDACTED_TOKEN]", artifact_text)
 
+    def test_feedback_artifacts_redact_url_userinfo_credentials(self):
+        payload = self.fixture_payload()
+        credential_url = "https://user:pw@example.com/private/path?debug=true"
+        payload["review_threads"][0]["comments"]["nodes"][0]["body"] = (
+            f"proxy log includes {credential_url} after retry"
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            learn_feedback.write_feedback_artifacts(
+                payload, output_dir=Path(tmpdir), generated_at="2026-05-08T00:00:00Z"
+            )
+            artifact_text = "\n".join(path.read_text() for path in (Path(tmpdir) / "feedback-artifacts").glob("*.json"))
+
+        self.assertNotIn("user:pw", artifact_text)
+        self.assertNotIn(credential_url, artifact_text)
+        self.assertIn("https://[REDACTED_TOKEN]@example.com/private/path?debug=true", artifact_text)
+
     def test_feedback_artifacts_redact_password_assignments_and_aws_access_key_ids(self):
         payload = self.fixture_payload()
         aws_access_key_id = "AK" + "IA" + "ABCDEFGHIJKLMNOP"
