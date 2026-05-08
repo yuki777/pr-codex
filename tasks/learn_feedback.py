@@ -142,17 +142,17 @@ def build_feedback_learning_result(
         if not is_pr_codex_review_thread(thread, review_authors=review_authors):
             ignored.append({"thread_id": thread_id, "reason": "not_pr_codex_review_thread"})
             continue
-        if thread.get("isResolved") is True:
-            artifacts.append(artifact_base(payload, thread, signal="addressed", source="review_thread.resolved"))
-        elif thread.get("isOutdated") is True:
-            artifacts.append(artifact_base(payload, thread, signal="superseded", source="review_thread.outdated"))
-        elif FALSE_POSITIVE_LABEL in labels and thread_id in false_positive_comments:
+        if FALSE_POSITIVE_LABEL in labels and thread_id in false_positive_comments:
             artifact = artifact_base(payload, thread, signal="false_positive", source="label_comment.false_positive")
             fp_comment = false_positive_comments[thread_id]
             artifact["feedback_comment_id"] = fp_comment.get("id")
             artifact["feedback_comment_url"] = fp_comment.get("html_url") or fp_comment.get("url")
             artifact["feedback_comment_excerpt"] = str(fp_comment.get("body") or "")[:1000]
             artifacts.append(artifact)
+        elif thread.get("isResolved") is True:
+            artifacts.append(artifact_base(payload, thread, signal="addressed", source="review_thread.resolved"))
+        elif thread.get("isOutdated") is True:
+            artifacts.append(artifact_base(payload, thread, signal="superseded", source="review_thread.outdated"))
         else:
             ignored.append({"thread_id": thread_id, "reason": "no_explicit_learning_signal"})
 

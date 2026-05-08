@@ -122,6 +122,22 @@ class LearnFeedbackTests(unittest.TestCase):
         ignored = result["ignored_threads"]
         self.assertEqual(ignored, [{"thread_id": "PRRT_silent_1", "reason": "no_explicit_learning_signal"}])
 
+    def test_build_feedback_learning_result_prefers_explicit_false_positive_over_resolved_thread(self):
+        payload = self.fixture_payload()
+        payload["review_threads"][0]["id"] = "PRRT_open_1"
+        payload["review_threads"][0]["isResolved"] = True
+        payload["review_threads"][0]["isOutdated"] = False
+        payload["review_threads"][2]["id"] = "PRRT_open_without_signal"
+
+        result, artifacts = learn_feedback.build_feedback_learning_result(
+            payload, generated_at="2026-05-08T00:00:00Z"
+        )
+
+        self.assertEqual(result["summary"], {"addressed": 0, "superseded": 1, "false_positive": 1, "ignored": 2})
+        artifact_by_thread = {artifact["thread_id"]: artifact for artifact in artifacts}
+        self.assertEqual(artifact_by_thread["PRRT_open_1"]["signal"], "false_positive")
+        self.assertEqual(artifact_by_thread["PRRT_open_1"]["source"], "label_comment.false_positive")
+
     def test_build_feedback_learning_result_ignores_other_reviewers_threads(self):
         payload = self.fixture_payload()
         payload["review_threads"].append(
