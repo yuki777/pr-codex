@@ -380,6 +380,33 @@ class LearnFeedbackTests(unittest.TestCase):
         self.assertNotIn(basic_token, artifact_text)
         self.assertIn("[REDACTED_TOKEN]", artifact_text)
 
+    def test_feedback_artifacts_redact_common_raw_service_tokens_without_key_names(self):
+        payload = self.fixture_payload()
+        slack_bot_token = "xoxb-" + "123456789012-1234567890123-abcdefghijklmnopqrstuvwxyz"
+        slack_user_token = "xoxp-" + "123456789012-123456789012-123456789012-abcdef1234567890"
+        stripe_live_key = "sk_live_" + "A" * 24
+        stripe_restricted_key = "rk_live_" + "B" * 24
+        payload["review_threads"][0]["comments"]["nodes"][0]["body"] = (
+            f"service logs include Slack bot {slack_bot_token}, user {slack_user_token}, "
+            f"Stripe secret {stripe_live_key}, and restricted {stripe_restricted_key}"
+        )
+        payload["comments"][0]["body"] = (
+            f"pr-codex/false-positive: PRRT_open_1 included {stripe_live_key} and {slack_bot_token}"
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            learn_feedback.write_feedback_artifacts(
+                payload, output_dir=Path(tmpdir), generated_at="2026-05-08T00:00:00Z"
+            )
+            artifact_text = "\n".join(path.read_text() for path in (Path(tmpdir) / "feedback-artifacts").glob("*.json"))
+
+        for raw_token in (slack_bot_token, slack_user_token, stripe_live_key, stripe_restricted_key):
+            self.assertNotIn(raw_token, artifact_text)
+        self.assertNotIn("xoxb-", artifact_text)
+        self.assertNotIn("xoxp-", artifact_text)
+        self.assertNotIn("sk_live_", artifact_text)
+        self.assertNotIn("rk_live_", artifact_text)
+        self.assertIn("[REDACTED_TOKEN]", artifact_text)
+
     def test_feedback_artifacts_redact_url_userinfo_credentials(self):
         payload = self.fixture_payload()
         credential_url = "https://user:pw@example.com/private/path?debug=true"
