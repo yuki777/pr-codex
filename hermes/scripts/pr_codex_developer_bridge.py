@@ -281,6 +281,72 @@ def split_repo(repo: str) -> tuple[str, str]:
     return owner, name
 
 
+def list_pr_review_thread_comment_page(
+    thread_id: str,
+    cursor: str,
+    *,
+    run_cmd: Callable[..., Completed] = run,
+) -> Dict[str, Any]:
+    query = """
+query($id: ID!, $cursor: String!) {
+  node(id: $id) {
+    ... on PullRequestReviewThread {
+      comments(first: 100, after: $cursor) {
+        nodes {
+          id
+          body
+          createdAt
+          url
+          author { login }
+          authorAssociation
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}
+"""
+    cmd = [
+        "gh",
+        "api",
+        "graphql",
+        "-f",
+        f"query={query}",
+        "-f",
+        f"id={thread_id}",
+        "-f",
+        f"cursor={cursor}",
+    ]
+    p = run_cmd(cmd)
+    if p.returncode != 0:
+        raise RuntimeError(f"gh graphql review thread comments failed for thread {thread_id}: {p.stderr.strip()[:500]}")
+    payload = parse_json(p.stdout) or {}
+    data = payload.get("data", payload) if isinstance(payload, dict) else {}
+    node = data.get("node") if isinstance(data, dict) else {}
+    return (node or {}).get("comments") or {}
+
+
+def paginate_review_thread_comments(
+    thread: Dict[str, Any],
+    *,
+    run_cmd: Callable[..., Completed] = run,
+) -> None:
+    comments = thread.get("comments") if isinstance(thread, dict) else None
+    if not isinstance(comments, dict):
+        return
+    page_info = comments.get("pageInfo") or {}
+    thread_id = str(thread.get("id") or "")
+    while thread_id and page_info.get("hasNextPage"):
+        cursor = page_info.get("endCursor")
+        if not cursor:
+            break
+        next_comments = list_pr_review_thread_comment_page(thread_id, str(cursor), run_cmd=run_cmd)
+        comments.setdefault("nodes", [])
+        comments["nodes"].extend(next_comments.get("nodes") or [])
+        page_info = next_comments.get("pageInfo") or {}
+        comments["pageInfo"] = page_info
+
+
 def list_pr_review_threads(
     pr_number: int,
     repo: str = REPO,
@@ -299,14 +365,16 @@ query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
           isOutdated
           path
           line
-          comments(first: 20) {
+          comments(first: 100) {
             nodes {
               id
               body
               createdAt
               url
               author { login }
+              authorAssociation
             }
+            pageInfo { hasNextPage endCursor }
           }
         }
         pageInfo { hasNextPage endCursor }
@@ -339,7 +407,10 @@ query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
         payload = parse_json(p.stdout) or {}
         data = payload.get("data", payload) if isinstance(payload, dict) else {}
         review_threads = (((data.get("repository") or {}).get("pullRequest") or {}).get("reviewThreads")) or {}
-        threads.extend(review_threads.get("nodes") or [])
+        nodes = review_threads.get("nodes") or []
+        for thread in nodes:
+            paginate_review_thread_comments(thread, run_cmd=run_cmd)
+        threads.extend(nodes)
         page_info = review_threads.get("pageInfo") or {}
         if not page_info.get("hasNextPage"):
             return threads
