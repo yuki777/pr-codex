@@ -81,6 +81,8 @@ def normalize_rollup_items(raw: Any) -> list[dict[str, Any]]:
             raw = raw["contexts"]
         elif "check_runs" in raw:
             raw = raw["check_runs"]
+        elif "statuses" in raw:
+            raw = raw["statuses"]
         else:
             raw = raw.get("checks", [])
     if not isinstance(raw, list):

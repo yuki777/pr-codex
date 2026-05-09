@@ -104,6 +104,26 @@ class CiStatusTest(unittest.TestCase):
         self.assertEqual(status["state"], "success")
         self.assertEqual(status["checks"][0]["name"], "unit")
 
+    def test_old_gh_fallback_preserves_combined_status_contexts(self) -> None:
+        status = build_ci_status(
+            pr={"repository": "octo/example", "number": 1, "head_sha": "f" * 40},
+            status_check_rollup={
+                "state": "failure",
+                "statuses": [
+                    {"context": "unit", "state": "success", "target_url": "https://example.invalid/unit"},
+                    {"context": "lint", "state": "failure", "target_url": "https://example.invalid/lint"},
+                    {"context": "deploy", "state": "pending"},
+                ],
+            },
+            workflow_runs=[],
+            failed_job_logs={},
+        )
+
+        self.assertEqual(status["state"], "failure")
+        self.assertEqual(status["counts"], {"success": 1, "failure": 1, "pending": 1, "skipped": 0})
+        self.assertEqual([check["name"] for check in status["checks"]], ["unit", "lint", "deploy"])
+        self.assertEqual(status["checks"][1]["url"], "https://example.invalid/lint")
+
     def test_cli_writes_ci_status_json_and_summary_markdown(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
