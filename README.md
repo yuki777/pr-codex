@@ -165,19 +165,6 @@ python3 $CLAUDE_PLUGIN_ROOT/tasks/learn_feedback.py --input feedback-snapshot.js
 - `findings.sarif` は M2 では **local-only artifact**。GitHub Code Scanning への upload、CI からの公開、PR への添付は自動化しない（M3 の別 Issue で扱う）
 - `posting.post_policy=suppress` の finding は SARIF にも出さず、canonical 内部記録だけに残す。`local_only` と `nit` は SARIF `suppressions[]` を付けてノイズ公開の経路を閉じる
 
-## Hermes Agent 自動化 (Phase 0)
-
-Issue #28 の Phase 0 実装として、`hermes/` 配下に pr-codex 専用の Hermes Kanban + cron + 複数 profile 用テンプレートと監視スクリプトを追加しています。
-
-- `hermes/profiles/` — `issue-triager` / `pr-reviewer` / `review-triager` / `developer` / `sheriff` の profile 方針
-- `hermes/scripts/pr_codex_watch.py` — GitHub の Issue / PR / review 差分を polling し、冪等に Kanban task 化
-- `hermes/scripts/issue_triager_publish.py` — Phase 1B の issue-triager コメント投稿ポリシーを dry-run/default-off で評価
-- `hermes/scripts/pr_codex_kanban_health.py` — blocked / stale / retry / ready 放置 task の検出
-- `hermes/scripts/pr_codex_daily_digest.py` — daily digest 生成
-- `hermes/install_phase0.sh` — ローカルの `~/.hermes/` へ profile/script/board/state を導入する補助スクリプト
-- `hermes/pr-codex.phase0.json` — board/profile/cron/safety の Phase 0 設定
-
-Phase 0 は read-only observer です。Phase 1B では issue-triager の GitHub Issue コメント投稿ポリシーを文書化し、sentinel/idempotency/scrub/dry-run report を追加していますが、既定では投稿しません。label/milestone/assignee 変更、close/reopen、push、approve、merge は行いません。詳細は [`hermes/README.md`](hermes/README.md) を参照してください。
 
 ## Regression eval / fixture scoring (F11)
 
