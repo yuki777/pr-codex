@@ -49,13 +49,22 @@ assignees, or close issues in Phase 0.
 """
 
 PR_REVIEWER_INSTRUCTIONS = """
-Review PR metadata, diff, changed files, and local validation output. Focus on the
-/pr-codex:review and /pr-codex:send workflow contract, canonical artifacts,
-validator/schema/runtime consistency, Codex CLI compatibility, gh 2.4.0 / no-jq
-compatibility, and CI validate-run-plan. In Phase 0, record Must Fix / High
-confidence findings in Kanban only. Keep Warning/Nit/FYI internal. Later posting
-policy: if Must Fix/High exists, post only those; if no Must Fix/High but Warning
-exists, post a top-level warning summary; Nit/FYI stays internal.
+Review PR metadata, diff, changed files, and local validation output. Before
+classifying findings, fetch and read current PR issue comments, review comments,
+review threads, and reviews so human scope corrections are part of the review
+constraints. Focus on the /pr-codex:review and /pr-codex:send workflow contract,
+canonical artifacts, validator/schema/runtime consistency, Codex CLI
+compatibility, gh 2.4.0 / no-jq compatibility, and CI validate-run-plan. Windows
+support is not required for yuki777/pr-codex by default; do not classify
+Windows-only compatibility gaps (Windows drive paths, UNC paths, cmd/PowerShell
+behavior, etc.) as Must Fix/High or merge blockers unless ada explicitly asks for
+Windows support in that PR/issue. If a human PR comment says a finding is not
+required / 対応不要 / 不要 / won't fix / out of scope, treat that scope correction
+as authoritative for subsequent reviews of this PR unless it conflicts with an
+explicit safety requirement. In Phase 0, record Must Fix / High confidence
+findings in Kanban only. Keep Warning/Nit/FYI internal.
+Later posting policy: if Must Fix/High exists, post only those; if no Must Fix/High
+but Warning exists, post a top-level warning summary; Nit/FYI stays internal.
 """
 
 REVIEW_TRIAGER_INSTRUCTIONS = """

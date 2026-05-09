@@ -58,6 +58,8 @@ AUTONOMOUS_REVIEW_FIX_POLICY = """AUTONOMOUS REVIEW-FIX POLICY:
 - Use Japanese for GitHub issue/PR/comment-facing prose: PR title/body updates, PR comments, review replies, progress comments, and any issue comments.
 - Push only to the PR branch. Do not push to main. Do not merge the PR yourself.
 - If the PR head changed or the Must Fix no longer applies, complete with a public-safe superseded note instead of guessing.
+- Windows support is not required for yuki777/pr-codex by default. Do not fix, request, or block on Windows-only compatibility findings unless ada explicitly asks for Windows support in that PR/issue.
+- If a human PR comment says a finding is not required / 対応不要, treat that scope correction as authoritative and complete without changing code.
 """.strip()
 
 STRICT_TDD = """STRICT TDD REQUIRED:
@@ -437,6 +439,13 @@ def _has_actionable_must_fix(body: str) -> bool:
     ]
     if any(re.search(pattern, text) for pattern in negative_patterns):
         return False
+    windows_only_path_finding = (
+        re.search(r"(?i)Windows|UNC|drive-root|drive\s+path|ドライブ|別ドライブ", text)
+        and re.search(r"LOCAL_PATH_RE|ローカルパス|local\s+path|[A-Z]:\\\\|\\\\\\\\server", text)
+        and not re.search(r"(?i)Windows\s+(?:support|required|対応).*(?:required|必須|必要)", text)
+    )
+    if windows_only_path_finding:
+        return False
     positive_patterns = [
         r"(?im)^\s*#{2,4}\s*Must\s+Fix\b",
         r"(?im)^\s*Verdict:\s*.*\bMust\s+Fix\b",
@@ -445,6 +454,38 @@ def _has_actionable_must_fix(body: str) -> bool:
         r"要修正(?:\s*\(Must\s+Fix\))?.*(?:\d+\s*件|あり|必要)",
     ]
     return any(re.search(pattern, text) for pattern in positive_patterns)
+
+
+def _is_human_scope_correction(item: Dict[str, Any]) -> bool:
+    body = item.get("body") or ""
+    if not body:
+        return False
+    if PR_REVIEW_SENTINEL_RE.search(body) or "<!-- hermes-auto:" in body:
+        return False
+    correction_patterns = [
+        r"対応不要",
+        r"不要です",
+        r"不要$",
+        r"(?i)not\s+required",
+        r"(?i)not\s+needed",
+        r"(?i)won'?t\s+fix",
+        r"(?i)out\s+of\s+scope",
+    ]
+    return any(re.search(pattern, body.strip()) for pattern in correction_patterns)
+
+
+def _created_at(item: Dict[str, Any]) -> str:
+    return str(item.get("created_at") or item.get("submitted_at") or "")
+
+
+def _has_later_human_scope_correction(combined: Sequence[Dict[str, Any]], index: int) -> bool:
+    current_time = _created_at(combined[index])
+    for later in combined[index + 1 :]:
+        if current_time and _created_at(later) and _created_at(later) < current_time:
+            continue
+        if _is_human_scope_correction(later):
+            return True
+    return False
 
 
 def find_must_fix_review_for_pr(
@@ -462,7 +503,10 @@ def find_must_fix_review_for_pr(
     for item in reviews:
         combined.append({"kind": "review", "body": item.get("body") or "", "url": _item_url(item), "created_at": item.get("submitted_at") or item.get("created_at") or ""})
 
-    for item in reversed(combined):
+    combined.sort(key=_created_at)
+
+    for index in range(len(combined) - 1, -1, -1):
+        item = combined[index]
         body = item.get("body") or ""
         match = PR_REVIEW_SENTINEL_RE.search(body)
         if not match:
@@ -472,6 +516,8 @@ def find_must_fix_review_for_pr(
         if match.group(2).lower() != head_sha.lower():
             continue
         if not _has_actionable_must_fix(body):
+            continue
+        if _has_later_human_scope_correction(combined, index):
             continue
         return item
     return None
