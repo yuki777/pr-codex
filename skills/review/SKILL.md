@@ -233,6 +233,43 @@ set -o pipefail && gh api repos/$org/$repository/pulls/$pr_number/files --pagina
 install -d ~/claude-loop-pr-codex/$org-$repository-$pr_number
 ```
 
+### Step 3a: CI read-only gate artifact の生成
+
+対象 PR の GitHub Actions / status checks を read-only で取得し、`ci-status.json` と `ci-summary.md` を生成する。ここでは GitHub への write、workflow rerun、cancel は行わない。`statusCheckRollup` が使えない古い `gh` 環境では、同じ `ci_status.py` に REST の `pulls/{number}` と checks/status endpoint の JSON を渡す fallback を使う。
+
+- いつ使うか: 作業ディレクトリ作成後、review hunter を起動する前に必ず実行する
+- 判定条件: `ci-status.json` と `ci-summary.md` が生成され、`ci-status.json.policy.github_writes == false` / `rerun == false` / `cancel == false` である
+- 次アクション: `ci-status.json.state` を review/send/developer bridge の判断材料として保持する。`failure` / `pending` は reviewer へコンテキストとして渡すが、この step 自体で投稿や rerun はしない
+
+```bash
+gh api repos/$org/$repository/pulls/$pr_number > ~/claude-loop-pr-codex/$org-$repository-$pr_number/ci-pull.json && \
+gh pr view $pr_number --repo $org/$repository --json statusCheckRollup --jq '.statusCheckRollup' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/ci-status-rollup.json && \
+gh api "repos/$org/$repository/actions/runs?branch=$branch&head_sha=$head_sha&per_page=10" > ~/claude-loop-pr-codex/$org-$repository-$pr_number/ci-workflow-runs.json && \
+python3 $CLAUDE_PLUGIN_ROOT/tasks/ci_status.py \
+  --pull-json ~/claude-loop-pr-codex/$org-$repository-$pr_number/ci-pull.json \
+  --status-check-rollup-json ~/claude-loop-pr-codex/$org-$repository-$pr_number/ci-status-rollup.json \
+  --workflow-runs-json ~/claude-loop-pr-codex/$org-$repository-$pr_number/ci-workflow-runs.json \
+  --out-json ~/claude-loop-pr-codex/$org-$repository-$pr_number/ci-status.json \
+  --out-md ~/claude-loop-pr-codex/$org-$repository-$pr_number/ci-summary.md && \
+jq -e '.read_only == true and .policy.github_writes == false and .policy.rerun == false and .policy.cancel == false' ~/claude-loop-pr-codex/$org-$repository-$pr_number/ci-status.json >/dev/null
+```
+
+failed job log を読む必要がある場合も read-only download に限定し、raw log は永続化せず一時ファイルから `--failed-log job=/tmp/...` で `tasks/ci_status.py` に渡す。`ci-summary.md` には secret-like text / local path が scrub された短い要約だけを残す。
+
+- 旧 `gh` fallback: `gh pr view --json statusCheckRollup` が使えない場合は、`gh api repos/$org/$repository/commits/$head_sha/check-runs`（または combined status の `contexts`）を `--status-check-rollup-json` に渡して同じ helper で正規化する
+
+```bash
+gh api repos/$org/$repository/pulls/$pr_number > ~/claude-loop-pr-codex/$org-$repository-$pr_number/ci-pull.json && \
+gh api repos/$org/$repository/commits/$head_sha/check-runs > ~/claude-loop-pr-codex/$org-$repository-$pr_number/ci-status-rollup.json && \
+gh api "repos/$org/$repository/actions/runs?branch=$branch&head_sha=$head_sha&per_page=10" > ~/claude-loop-pr-codex/$org-$repository-$pr_number/ci-workflow-runs.json && \
+python3 $CLAUDE_PLUGIN_ROOT/tasks/ci_status.py \
+  --pull-json ~/claude-loop-pr-codex/$org-$repository-$pr_number/ci-pull.json \
+  --status-check-rollup-json ~/claude-loop-pr-codex/$org-$repository-$pr_number/ci-status-rollup.json \
+  --workflow-runs-json ~/claude-loop-pr-codex/$org-$repository-$pr_number/ci-workflow-runs.json \
+  --out-json ~/claude-loop-pr-codex/$org-$repository-$pr_number/ci-status.json \
+  --out-md ~/claude-loop-pr-codex/$org-$repository-$pr_number/ci-summary.md
+```
+
 - いつ使うか: 作業ディレクトリ作成後に実行する
 - 判定条件: Desktop シンボリックリンクが存在する
 - 次アクション: clone の初回作成または更新へ進む

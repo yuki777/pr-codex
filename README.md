@@ -236,6 +236,8 @@ python3 tasks/m1_m2_gate.py \
   ├── $org-$repo-$pr/             # 進行中 / 未投稿のレビュー
   │     ├── status.json           # 実行状態（running / completed / failed）
   │     ├── metadata.json         # PR情報（org, repo, pr_number, head_sha 等）
+  │     ├── ci-status.json        # GitHub Actions / status checks の read-only 正規化 artifact
+  │     ├── ci-summary.md         # raw log を保存しない public-safe CI 要約
   │     ├── run-plan.json         # preflight 指標、recommended_mode、選択 depth、M2 routing_decision（ローカル専用）
   │     ├── pr.diff               # PR 差分 (unified diff)
   │     ├── pr.diff.ranges.txt    # GitHub inline comment 可能範囲
@@ -294,6 +296,7 @@ mv ~/claude-loop-pr-codex/sent/yuki777-pr-codex-24 \
 - F5 の round artifact は `schemas/review-rounds.v1.json` で定義し、`review-rounds.json` に `max_rounds` / `time_budget_ms` / `no_new_evidence_rounds` / `repeated_contradiction_limit` と round metrics を保存する
 - fixture oracle は `schemas/expected-findings.v1.json` で定義する。runtime artifact とは分離し、`expected_outcome` / `acceptable_overrides` / `strictness_profile` / `minimum_evidence_level` など採点用メタデータを保持する
 - fixture scoring の出力は `schemas/score-report.v1.json`、M1→M2 gate report は `schemas/m1-m2-gate.v1.json` で定義する
+- CI read-only gate の出力は `schemas/ci-status.v1.json` で定義し、`read_only: true` と `policy.github_writes/rerun/cancel/raw_logs_persisted: false` を固定する
 - `findings.verified.json` は top-level `generated_at` を持ち、per-finding `created_at` は持たない
 - `findings.verified.json` は任意で top-level `root_cause_clusters[]` を持てる。各 cluster は `id` / `summary` / `representative_finding_id` / `finding_ids` を持ち、`finding.root_cause_id` から参照する。validator は cluster id の重複、未知 finding id、representative が member でない状態、representative severity が cluster 内最高 severity より低い状態を拒否する
 - `findings.verified.json.pr.repository` は **投稿先の base repo** (`owner/repo`) に固定する。fork PR でも head repo ではなく、`metadata.json.repository_full_name` および `/pr-codex:send` の投稿先 `$org/$repository` と一致させる
@@ -303,6 +306,8 @@ mv ~/claude-loop-pr-codex/sent/yuki777-pr-codex-24 \
 - JSON Schema Draft 2020-12 単体では sibling equality (`id == fingerprint`) を標準機能だけで強制しにくいため、この等値は **review/send workflow の必須 runtime gate** として扱う
 - review 側は `findings.candidates.json` を completed 前に `tasks/validate_candidates.py` で、`findings.verified.json` を completed 前に同梱 validator `tasks/validate_findings.py` で検証し、send 側も `findings.verified.json` の validator に失敗したら Markdown fallback せず中断する
 - `status.json` は `stage` / `failed_stage` を optional に持ち、F4 以降の新規実行では failed 時に ranker / hunter / verifier / explainer のどこで停止したかを残す。review 側は status 更新直後に `status.json` を `tasks/validate_status.py` で検証する
+- `ci-status.json` は `tasks/ci_status.py` が生成する `ci-status.v1` artifact で、GitHub Actions / status checks を `success` / `failure` / `pending` / `skipped` に正規化する。生成時は read-only endpoint だけを使い、rerun / cancel / write は行わない
+- `ci-summary.md` は `ci-status.json` から派生する public-safe 要約で、failed log は secret-like text とローカルパスを scrub した短い要約だけを残し、raw log は保存しない
 - schema 自体は `location.side` に `LEFT` も残すが、M1 の send workflow は `RIGHT` のみ受け付ける
 - `tasks/validate_findings.py` は JSON shape / enum / conditional rule / RFC3339 date-time / URI / `end_line >= start_line` / `id == fingerprint` / fingerprint 再計算 / `metadata.json` との PR context 一致を stdlib-only で検証する
 - `tasks/validate_expected_findings.py` / `tasks/validate_score_report.py` / `tasks/validate_m1_m2_gate.py` は eval artifact を stdlib-only で検証する
