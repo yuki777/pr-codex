@@ -59,10 +59,16 @@ FINDING_KEYS = {
     "verifier_required",
     "evidence",
     "php",
+    "security",
     "root_cause_id",
 }
 EVIDENCE_KEYS = {"type", "tool", "command", "diagnostic_code", "path", "line", "url", "note"}
 PHP_KEYS = {"symbol", "composer_package", "language_version"}
+SECURITY_KEYS = {"severity", "confidence", "exploitability", "public_safe_summary", "disclosure_policy"}
+DISCLOSURE_UNSAFE_RE = re.compile(
+    r"(```|\b(?:curl|nc|ncat|netcat)\s+|bash\s+-i|token\s*=|password\s*=|secret\s*=|BEGIN [A-Z ]*PRIVATE KEY|\bAKIA[0-9A-Z]{16}\b)",
+    re.IGNORECASE,
+)
 
 
 def load_json(path: Path) -> Any:
@@ -237,12 +243,24 @@ def validate_m1_posting_contract(
         return
 
     if severity_value == "must_fix":
-        if not isinstance(location, dict) or location.get("side") != "RIGHT":
-            errors.append(f"{fpath}.location.side: must_fix findings must target location.side=RIGHT")
-        if post_policy_value != "inline":
-            errors.append(f"{fpath}.posting.post_policy: must_fix findings must use post_policy=inline")
-        if posting.get("explanation_postable") is not True:
-            errors.append(f"{fpath}.posting.explanation_postable: must_fix findings must set explanation_postable=true")
+        security = finding.get("security")
+        security_severity = security.get("severity") if isinstance(security, dict) else None
+        disclosure_policy = security.get("disclosure_policy") if isinstance(security, dict) else None
+        security_requires_non_inline = finding.get("category") == "security" and (
+            security_severity in {"critical", "high"} or disclosure_policy in {"body_summary_safe", "local_only"}
+        )
+        if security_requires_non_inline:
+            if post_policy_value == "inline":
+                errors.append(f"{fpath}.posting.post_policy: high-risk security findings must not use post_policy=inline")
+            if disclosure_policy == "local_only" and post_policy_value not in {"local_only", "suppress"}:
+                errors.append(f"{fpath}.posting.post_policy: local-only security findings must use post_policy=local_only or suppress")
+        else:
+            if not isinstance(location, dict) or location.get("side") != "RIGHT":
+                errors.append(f"{fpath}.location.side: must_fix findings must target location.side=RIGHT")
+            if post_policy_value != "inline":
+                errors.append(f"{fpath}.posting.post_policy: must_fix findings must use post_policy=inline")
+            if posting.get("explanation_postable") is not True:
+                errors.append(f"{fpath}.posting.explanation_postable: must_fix findings must set explanation_postable=true")
     elif post_policy_value == "inline":
         errors.append(f"{fpath}.posting.post_policy: only must_fix findings may use post_policy=inline")
 
@@ -280,6 +298,51 @@ def validate_must_fix_four_axes_gate(
             f"{fpath}.severity: must_fix requires axes={{real,triggerable,impactful}}=yes and (general=yes or evidence_level in {{impact_explained, verified}})"
         )
 
+
+def validate_security_extension(
+    errors: list[str],
+    fpath: str,
+    finding: dict[str, Any],
+    posting: Any,
+    valid_security_severity: set[str],
+    valid_security_confidence: set[str],
+    valid_security_exploitability: set[str],
+    valid_security_disclosure_policy: set[str],
+) -> None:
+    security = finding.get("security")
+    if finding.get("category") == "security":
+        if not isinstance(security, dict):
+            errors.append(f"{fpath}.security: required for category=security")
+            return
+    elif "security" in finding:
+        errors.append(f"{fpath}.security: only allowed when category=security")
+        if not isinstance(security, dict):
+            return
+    else:
+        return
+
+    add_unexpected(errors, f"{fpath}.security", security, SECURITY_KEYS)
+    require_keys(errors, f"{fpath}.security", security, SECURITY_KEYS)
+    validate_enum_value(errors, f"{fpath}.security.severity", security.get("severity"), valid_security_severity)
+    validate_enum_value(errors, f"{fpath}.security.confidence", security.get("confidence"), valid_security_confidence)
+    validate_enum_value(errors, f"{fpath}.security.exploitability", security.get("exploitability"), valid_security_exploitability)
+    validate_enum_value(errors, f"{fpath}.security.disclosure_policy", security.get("disclosure_policy"), valid_security_disclosure_policy)
+    validate_string_field(errors, f"{fpath}.security", security, "public_safe_summary")
+
+    public_safe_summary = security.get("public_safe_summary")
+    if isinstance(public_safe_summary, str) and DISCLOSURE_UNSAFE_RE.search(public_safe_summary):
+        errors.append(f"{fpath}.security.public_safe_summary: must not contain raw exploit detail or secret material")
+
+    security_severity = security.get("severity")
+    disclosure_policy = security.get("disclosure_policy")
+    if isinstance(posting, dict):
+        post_policy = posting.get("post_policy")
+        if security_severity in {"critical", "high"} and post_policy == "inline":
+            errors.append(f"{fpath}.security.severity: security severity critical/high must not use post_policy=inline")
+        if disclosure_policy in {"body_summary_safe", "local_only"} and post_policy == "inline":
+            errors.append(f"{fpath}.security.disclosure_policy: {disclosure_policy} findings must not use post_policy=inline")
+        if disclosure_policy == "local_only" and post_policy not in {"local_only", "suppress"}:
+            errors.append(f"{fpath}.security.disclosure_policy: local_only security findings must use post_policy=local_only or suppress")
 
 def validate_root_cause_clusters(errors: list[str], data: dict[str, Any], findings: list[Any]) -> None:
     raw_clusters = data.get("root_cause_clusters")
@@ -430,6 +493,14 @@ def validate_artifact(schema: dict[str, Any], data: Any, metadata: Any | None = 
     audience = enum_from_schema(schema, "audience", {"human_reviewer", "eval_harness", "future_memory"})
     merger_rule = enum_from_schema(schema, "merger_rule_applied", {"none", "conservative_min_until_verifier_available", "verifier_decided"})
     evidence_type = enum_from_schema(schema, "evidence_type", {"manual_review", "static_analysis", "test", "ci_log", "reference"})
+    security_severity = enum_from_schema(schema, "security_severity", {"critical", "high", "medium", "low", "info"})
+    security_confidence = enum_from_schema(schema, "security_confidence", {"high", "medium", "low"})
+    security_exploitability = enum_from_schema(
+        schema,
+        "security_exploitability",
+        {"proven_in_changed_code", "triggerable_from_changed_code", "theoretical", "unknown"},
+    )
+    security_disclosure_policy = enum_from_schema(schema, "security_disclosure_policy", {"inline_safe", "body_summary_safe", "local_only"})
     category = enum_from_schema(
         schema,
         "category",
@@ -653,6 +724,17 @@ def validate_artifact(schema: dict[str, Any], data: Any, metadata: Any | None = 
                 add_unexpected(errors, f"{fpath}.php", php, PHP_KEYS)
                 for key in PHP_KEYS:
                     validate_string_field(errors, f"{fpath}.php", php, key)
+
+        validate_security_extension(
+            errors,
+            fpath,
+            finding,
+            posting,
+            security_severity,
+            security_confidence,
+            security_exploitability,
+            security_disclosure_policy,
+        )
 
     validate_root_cause_clusters(errors, data, findings)
     return errors

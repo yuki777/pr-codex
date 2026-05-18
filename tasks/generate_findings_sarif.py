@@ -260,8 +260,16 @@ def build_result(finding: dict[str, Any], index: int, ranges: dict[str, list[tup
         return None
     if severity != "must_fix" and posting.get("post_policy") == "inline":
         raise SarifGenerationError(f"{path}.posting.post_policy: only must_fix may use inline")
-    if severity == "must_fix" and (posting.get("post_policy") != "inline" or posting.get("explanation_postable") is not True):
+    security = finding.get("security") if isinstance(finding.get("security"), dict) else None
+    security_severity = security.get("severity") if security else None
+    disclosure_policy = security.get("disclosure_policy") if security else None
+    security_non_inline_must_fix = category == "security" and (
+        security_severity in {"critical", "high"} or disclosure_policy in {"body_summary_safe", "local_only"}
+    )
+    if severity == "must_fix" and not security_non_inline_must_fix and (posting.get("post_policy") != "inline" or posting.get("explanation_postable") is not True):
         raise SarifGenerationError(f"{path}.posting: must_fix SARIF emission expects the same inline-postable contract as send")
+    if severity == "must_fix" and security_non_inline_must_fix and posting.get("post_policy") == "inline":
+        raise SarifGenerationError(f"{path}.posting.post_policy: high-risk security must_fix findings must not use inline")
 
     identifier = source_finding_id(finding, path)
     location = finding_location(finding, path, ranges)
@@ -275,8 +283,10 @@ def build_result(finding: dict[str, Any], index: int, ranges: dict[str, list[tup
         "post_policy": posting.get("post_policy"),
         "explanation_postable": posting.get("explanation_postable"),
     }
-    if category == "security" and severity == "must_fix":
-        properties["security_severity_label"] = "high"
+    if category == "security":
+        if security_severity is None:
+            raise SarifGenerationError(f"{path}.security.severity: required for category=security")
+        properties["security_severity_label"] = security_severity
     if posting.get("audience") is not None:
         properties["audience"] = posting.get("audience")
     if posting.get("not_postable_reason") is not None:
