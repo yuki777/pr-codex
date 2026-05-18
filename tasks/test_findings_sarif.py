@@ -50,6 +50,14 @@ def make_finding(
         "axes": {"real": "yes", "triggerable": "yes", "impactful": "yes", "general": "yes"},
         "posting": {"post_policy": post_policy, "explanation_postable": explanation_postable},
     }
+    if category == "security":
+        finding["security"] = {
+            "severity": "medium",
+            "confidence": "high",
+            "exploitability": "triggerable_from_changed_code",
+            "public_safe_summary": "A token can be exposed in logs; omit concrete token values and exploitation steps from public output.",
+            "disclosure_policy": "inline_safe",
+        }
     if post_policy == "local_only":
         finding["posting"]["audience"] = "human_reviewer"
     if not explanation_postable:
@@ -153,7 +161,7 @@ class FindingsSarifTest(unittest.TestCase):
         self.assertEqual(validate_findings_sarif(self.schema, sarif, findings=artifact), [])
         results = sarif["runs"][0]["results"]
         self.assertEqual([result["level"] for result in results], ["error", "warning", "note"])
-        self.assertEqual(results[0]["properties"]["security_severity_label"], "high")
+        self.assertEqual(results[0]["properties"]["security_severity_label"], "medium")
         self.assertNotIn("suppressions", results[1])
         self.assertEqual(results[2]["suppressions"][0]["kind"], "external")
         self.assertEqual(sarif["runs"][0]["tool"]["driver"]["rules"][0]["id"], "pr-codex/bug")
@@ -161,6 +169,26 @@ class FindingsSarifTest(unittest.TestCase):
         self.assertNotIn("/Users/adachi", results[0]["message"]["text"])
         self.assertNotIn("fixes", results[0])
         self.assertEqual(must_fix_count(sarif), 1)
+
+    def test_high_security_must_fix_can_emit_body_summary_sarif(self) -> None:
+        finding = make_finding(
+            severity="must_fix",
+            category="security",
+            title="`authz` bypass must not expose protected data",
+            path="src/App.php",
+            line=10,
+            post_policy="inline",
+        )
+        finding["security"].update(severity="high", disclosure_policy="body_summary_safe")
+        finding["posting"] = {"post_policy": "body_summary", "explanation_postable": True}
+        refresh_fingerprint(finding)
+        artifact = canonical_artifact([finding])
+        sarif = build_sarif(artifact, metadata=metadata(), ranges={"src/App.php": [(1, 20)]})
+        self.assertEqual(validate_findings_sarif(self.schema, sarif, findings=artifact), [])
+        result = sarif["runs"][0]["results"][0]
+        self.assertEqual(result["level"], "error")
+        self.assertEqual(result["properties"]["security_severity_label"], "high")
+        self.assertEqual(result["properties"]["post_policy"], "body_summary")
 
     def test_windows_absolute_paths_are_scrubbed_from_messages_and_rejected_as_locations(self) -> None:
         finding = make_finding(

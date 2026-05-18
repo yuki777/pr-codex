@@ -47,6 +47,16 @@ MCPが使える場合は、以下も取得してレビューに活用するこ�
 - 機密情報のハードコード・ログ出力
 - 入力バリデーションの不足
 
+- security-sensitive finding は `category: "security"` とし、通常の `severity`（Must/Should/Nit/Note）に加えて `security` extension を必ず付ける:
+  - `security.severity`: `critical` / `high` / `medium` / `low` / `info`
+  - `security.confidence`: `high` / `medium` / `low`
+  - `security.exploitability`: `proven_in_changed_code` / `triggerable_from_changed_code` / `theoretical` / `unknown`
+  - `security.public_safe_summary`: public repo に載せても安全な要約。exploit command、payload、secret、攻撃手順の詳細を書かない
+  - `security.disclosure_policy`: `inline_safe` / `body_summary_safe` / `local_only`
+
+- 禁止: exploit 実行、secret の露出、攻撃手順や PoC の詳細公開、Kali/network pentest 的な実行。レビューは diff と checkout 済みソースの静的確認に限定する。
+- `critical` / `high` は公開 inline comment にしない。`body_summary_safe` または `local_only` として、公開 body には `public_safe_summary` レベルの安全な説明だけを使う。
+
 ### 5. パフォーマンス
 - N+1問題
 - 不要なメモリ確保・コピー
@@ -180,7 +190,7 @@ trigger path が再現できなくても `corroborated` かつ `impact_explained
 | `local_only` | `suppressions: [{kind: "external", status: "accepted", justification: "local_only per pr-codex post_policy"}]` |
 | `suppress` | SARIF に出力しない。canonical 内部記録だけに残す |
 
-`severity` は `must_fix → error` / `should_fix → warning` / `nit → note` / `note → none` に写像する。`security` category の `must_fix` は `properties.security_severity_label = "high"` を付けるが、F7 では security high/critical の inline 抑制ロジック自体は変更しない。
+`severity` は `must_fix → error` / `should_fix → warning` / `nit → note` / `note → none` に写像する。`category == "security"` の finding は `security` extension を必須とし、SARIF には `properties.security_severity_label = security.severity` を付ける。`security.severity == critical/high` または `security.disclosure_policy != inline_safe` の finding は public inline ではなく body summary/local-only 側に分岐する。
 
 ### 良い点
 評価できるコードや設計判断があれば簡潔に述べる。厳しいレビューでも、良い点は認める。

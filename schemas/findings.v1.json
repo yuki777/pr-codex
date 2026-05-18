@@ -449,6 +449,9 @@
         "root_cause_id": {
           "$ref": "#/$defs/root_cause_id",
           "description": "Optional reference to root_cause_clusters[].id for findings caused by the same root cause."
+        },
+        "security": {
+          "$ref": "#/$defs/security"
         }
       },
       "allOf": [
@@ -557,6 +560,40 @@
               "verifier_required"
             ]
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "category": {
+                "const": "security"
+              }
+            },
+            "required": [
+              "category"
+            ]
+          },
+          "then": {
+            "required": [
+              "security"
+            ]
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "security"
+            ]
+          },
+          "then": {
+            "properties": {
+              "category": {
+                "const": "security"
+              }
+            },
+            "required": [
+              "category"
+            ]
+          }
         }
       ]
     },
@@ -613,6 +650,69 @@
         }
       },
       "description": "Full local cluster detail. Validators enforce that ids reference findings, the representative is a member, and the representative severity is not lower than the highest cluster severity."
+    },
+    "security_severity": {
+      "enum": [
+        "critical",
+        "high",
+        "medium",
+        "low",
+        "info"
+      ]
+    },
+    "security_confidence": {
+      "enum": [
+        "high",
+        "medium",
+        "low"
+      ]
+    },
+    "security_exploitability": {
+      "enum": [
+        "proven_in_changed_code",
+        "triggerable_from_changed_code",
+        "theoretical",
+        "unknown"
+      ]
+    },
+    "security_disclosure_policy": {
+      "enum": [
+        "inline_safe",
+        "body_summary_safe",
+        "local_only"
+      ]
+    },
+    "security": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "severity",
+        "confidence",
+        "exploitability",
+        "public_safe_summary",
+        "disclosure_policy"
+      ],
+      "properties": {
+        "severity": {
+          "$ref": "#/$defs/security_severity",
+          "description": "Security-specific severity, separate from review blocking severity."
+        },
+        "confidence": {
+          "$ref": "#/$defs/security_confidence"
+        },
+        "exploitability": {
+          "$ref": "#/$defs/security_exploitability"
+        },
+        "public_safe_summary": {
+          "$ref": "#/$defs/non_empty_string",
+          "description": "Disclosure-safe public summary; no exploit commands, secrets, payloads, or step-by-step attack instructions."
+        },
+        "disclosure_policy": {
+          "$ref": "#/$defs/security_disclosure_policy",
+          "description": "inline_safe may be posted inline for low/medium only; body_summary_safe must avoid inline details; local_only is not public-postable."
+        }
+      },
+      "description": "Security extension required when category=security. Details must be disclosure-safe for public repos."
     }
   }
 }

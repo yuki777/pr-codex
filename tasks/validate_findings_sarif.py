@@ -276,8 +276,8 @@ def validate_sarif_shape(data: Any) -> list[str]:
             errors.append(f"{rpath}.suppressions: nit findings must be suppressed to avoid SARIF noise")
         if properties.get("post_policy") == "local_only" and not result.get("suppressions"):
             errors.append(f"{rpath}.suppressions: local_only findings must use SARIF suppression")
-        if properties.get("category") == "security" and severity == "must_fix" and properties.get("security_severity_label") != "high":
-            errors.append(f"{rpath}.properties.security_severity_label: security must_fix must be labelled high")
+        if properties.get("category") == "security" and properties.get("security_severity_label") not in {"critical", "high", "medium", "low", "info"}:
+            errors.append(f"{rpath}.properties.security_severity_label: security findings must expose canonical security severity")
         if not isinstance(properties.get("axes"), dict):
             errors.append(f"{rpath}.properties.axes: must expose canonical axes")
         if not is_non_empty_string(properties.get("evidence_level")):
@@ -382,8 +382,10 @@ def validate_against_findings(sarif: dict[str, Any], findings_artifact: Any) -> 
             errors.append(f"{rpath}.properties.evidence_level: must match canonical evidence_level")
         if properties.get("axes") != finding.get("axes"):
             errors.append(f"{rpath}.properties.axes: must match canonical axes")
-        if expected_category == "security" and expected_severity == "must_fix" and properties.get("security_severity_label") != "high":
-            errors.append(f"{rpath}.properties.security_severity_label: canonical security must_fix must be labelled high")
+        expected_security = finding.get("security") if isinstance(finding.get("security"), dict) else None
+        expected_security_label = expected_security.get("severity") if expected_security else None
+        if expected_category == "security" and properties.get("security_severity_label") != expected_security_label:
+            errors.append(f"{rpath}.properties.security_severity_label: must match canonical security.severity")
         if expected_post_policy == "local_only" and not result.get("suppressions"):
             errors.append(f"{rpath}.suppressions: canonical local_only findings must use SARIF suppression")
         if expected_severity == "nit" and not result.get("suppressions"):

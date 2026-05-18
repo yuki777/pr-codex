@@ -347,6 +347,65 @@ class ValidateFindingsTest(unittest.TestCase):
         finding["posting"]["post_policy"] = "body_summary"
         self.assertEqual(validate_artifact(self.schema, artifact), [])
 
+    def security_artifact(self) -> dict[str, object]:
+        artifact = copy.deepcopy(valid_artifact())
+        finding = artifact["findings"][0]
+        finding["category"] = "security"
+        finding["title"] = "`authz` bypass permits unauthorized access."
+        finding["problem"] = "A security-sensitive authorization path can permit access beyond the caller's role."
+        finding["reason"] = "The changed branch skips the role check before returning protected data."
+        finding["suggestion"] = "Restore the role check and add a regression test for denied roles."
+        finding["security"] = {
+            "severity": "medium",
+            "confidence": "high",
+            "exploitability": "triggerable_from_changed_code",
+            "public_safe_summary": "Authorization can be bypassed on the changed code path; omit exploit steps from public review text.",
+            "disclosure_policy": "inline_safe",
+        }
+        fingerprint = compute_fingerprint(finding)
+        finding["id"] = fingerprint
+        finding["fingerprint"] = fingerprint
+        return artifact
+
+    def test_security_findings_require_security_extension(self) -> None:
+        artifact = self.security_artifact()
+        self.assertEqual(validate_artifact(self.schema, artifact), [])
+
+        missing_extension = self.security_artifact()
+        del missing_extension["findings"][0]["security"]
+        self.assert_invalid_without_crash(missing_extension, ".security: required for category=security")
+
+    def test_security_extension_is_only_for_security_category(self) -> None:
+        artifact = self.security_artifact()
+        finding = artifact["findings"][0]
+        finding["category"] = "bug"
+        fingerprint = compute_fingerprint(finding)
+        finding["id"] = fingerprint
+        finding["fingerprint"] = fingerprint
+        self.assert_invalid_without_crash(artifact, ".security: only allowed when category=security")
+
+    def test_security_high_and_critical_are_not_inline_postable(self) -> None:
+        for security_severity in ("critical", "high"):
+            with self.subTest(security_severity=security_severity):
+                artifact = self.security_artifact()
+                artifact["findings"][0]["security"]["severity"] = security_severity
+                self.assert_invalid_without_crash(artifact, "security severity critical/high must not use post_policy=inline")
+
+    def test_high_security_must_fix_can_use_disclosure_safe_body_summary(self) -> None:
+        artifact = self.security_artifact()
+        finding = artifact["findings"][0]
+        finding["security"].update(severity="high", disclosure_policy="body_summary_safe")
+        finding["posting"] = {"post_policy": "body_summary", "explanation_postable": True}
+        self.assertEqual(validate_artifact(self.schema, artifact), [])
+
+    def test_security_public_safe_summary_rejects_exploit_details(self) -> None:
+        artifact = self.security_artifact()
+        finding = artifact["findings"][0]
+        finding["security"].update(severity="medium")
+        finding["posting"] = {"post_policy": "body_summary", "explanation_postable": True}
+        finding["security"]["public_safe_summary"] = "Run curl https://target.example/?token=secret to exploit the issue."
+        self.assert_invalid_without_crash(artifact, "public_safe_summary: must not contain raw exploit detail or secret material")
+
     def test_f15_non_blocking_post_policies_are_accepted_by_schema_contract(self) -> None:
         should_fix = copy.deepcopy(valid_artifact())
         should_fix_finding = should_fix["findings"][0]

@@ -143,6 +143,7 @@ Claude 側でメモリ上に以下を抽出する:
   - `findings[]` のうち `severity == "should_fix" && posting.post_policy == "body_summary"` の要素を `$should_fix_body_summary_candidates` 配列として抽出する。順序は `findings[]` の登場順を保ち、Step 5 の opt-in がない限り body には含めない
   - `findings[]` のうち `severity == "nit"` の要素を `$nit_findings` 配列として抽出する。`posting.post_policy` の値に関わらず GitHub payload には含めず、primary path でのみ `nits.md` に書き出す
   - M1 の投稿 contract として、`severity != "must_fix"` の finding に `posting.post_policy == "inline"` が含まれないことを確認する
+  - `category == "security"` の finding は `security` extension を必須とし、`security.severity == "critical" | "high"` または `security.disclosure_policy != "inline_safe"` の場合は inline 投稿対象から除外する。公開 body に含める場合も `security.public_safe_summary` だけを使い、raw exploit detail / secret / 攻撃手順は載せない
 
 #### `findings.verified.json` から抽出するフィールド
 
@@ -187,10 +188,11 @@ Claude 側でメモリ上に以下を抽出する:
 
 - `findings.verified.json` が存在しない / 空 / JSON parse 失敗 / top-level object でない / `findings[]` 不在または非配列 / 同梱 validator による `schemas/findings.v1.json` validation / fingerprint 再計算 / format / range validation 失敗 / `id != fingerprint` のいずれかなら、ユーザーに通知して **中断** する（Markdown fallback へは切り替えない）
 - `findings.verified.json.pr.repository != metadata.json.repository_full_name`、`findings.verified.json.pr.number != metadata.json.pr_number`、`findings.verified.json.pr.head_sha != metadata.json.head_sha`、`findings.verified.json.pr.base_sha != metadata.json.base_sha`、または `metadata.json.repository_full_name != "$org/$repository"` のいずれかなら、canonical artifact が投稿先 PR と一致しないため **中断** する（Markdown fallback へは切り替えない）
-- `severity == "must_fix"` の finding は、M1 では **`posting.post_policy == "inline"` かつ `posting.explanation_postable == true`** のものだけを自動投稿対象として扱う
+- `severity == "must_fix"` の finding は、M1 では原則 **`posting.post_policy == "inline"` かつ `posting.explanation_postable == true`** のものだけを自動 inline 投稿対象として扱う。security high/critical または `disclosure_policy != inline_safe` の Must Fix は例外として inline から除外し、公開可能な `public_safe_summary` を body/local-only 側に分岐する
 - `severity != "must_fix"` の finding に `posting.post_policy == "inline"` が 1 件でもあれば、review 側の M1 posting contract 違反として **中断** する（Markdown fallback へは切り替えない）。M1 では `should_fix` / `nit` / `note` は inline 自動投稿対象外であり、`body_summary` / `local_only` / `suppress` のいずれかで表現する
 - `severity == "must_fix"` の finding で `location.side != "RIGHT"` が 1 件でもあれば、現 workflow の `pr.diff.ranges.txt` が head/new 側前提のため **中断** する（Markdown fallback へは切り替えない）
-- `must_fix` なのに `posting.post_policy` が `body_summary` / `local_only` / `suppress` のもの、または `posting.explanation_postable == false` のものが 1 件でもあれば、GitHub payload へ安全に変換できないため **中断** する（Markdown fallback へは切り替えない）
+- `must_fix` なのに `posting.post_policy` が `body_summary` / `local_only` / `suppress` のもの、または `posting.explanation_postable == false` のものが 1 件でもあれば、GitHub payload へ安全に変換できないため **中断** する（Markdown fallback へは切り替えない）。ただし `category == "security"` かつ `security.severity == "critical" | "high"` または `security.disclosure_policy != "inline_safe"` の場合は例外で、inline 詳細を避けるため `body_summary` / `local_only` 側に分岐させる
+- `category == "security"` なのに `security` extension が無い、`security.public_safe_summary` が exploit command / secret / raw payload を含む、または `security.severity == "critical" | "high"` で `posting.post_policy == "inline"` のものが 1 件でもあれば **中断** する。公開 repo では high/critical security finding を inline 詳細として投稿せず、review 再生成で `body_summary_safe` / `local_only` に分岐させる
 - `$must_fix` の件数と `$must_fix_markdown_count` が **完全一致** しなければ中断する。人手で `review.md` が編集された、または review 側の派生生成が壊れている可能性があるため、Markdown fallback へは切り替えない
 
 #### `body` のフォーマット
