@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/yuki777/pr-codex/main/schemas/ci-status.v1.json",
+  "title": "pr-codex CI status artifact v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "generated_at",
+    "read_only",
+    "policy",
+    "pr",
+    "head_sha",
+    "state",
+    "counts",
+    "checks",
+    "workflow_runs",
+    "failed_job_summaries"
+  ],
+  "properties": {
+    "schema_version": {"const": "ci-status.v1"},
+    "generated_at": {"type": "string"},
+    "read_only": {"const": true},
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["github_writes", "rerun", "cancel", "raw_logs_persisted"],
+      "properties": {
+        "github_writes": {"const": false},
+        "rerun": {"const": false},
+        "cancel": {"const": false},
+        "raw_logs_persisted": {"const": false}
+      }
+    },
+    "pr": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["repository", "number", "head_sha"],
+      "properties": {
+        "repository": {"type": "string", "pattern": "^[^/]+/[^/]+$"},
+        "number": {"type": "integer", "minimum": 1},
+        "url": {"type": ["string", "null"]},
+        "head_sha": {"type": "string"},
+        "base_sha": {"type": ["string", "null"]},
+        "head_branch": {"type": ["string", "null"]},
+        "base_branch": {"type": ["string", "null"]}
+      }
+    },
+    "head_sha": {"type": ["string", "null"]},
+    "state": {"enum": ["success", "failure", "pending", "skipped"]},
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["success", "failure", "pending", "skipped"],
+      "properties": {
+        "success": {"type": "integer", "minimum": 0},
+        "failure": {"type": "integer", "minimum": 0},
+        "pending": {"type": "integer", "minimum": 0},
+        "skipped": {"type": "integer", "minimum": 0}
+      }
+    },
+    "checks": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/check"}
+    },
+    "workflow_runs": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/workflow_run"}
+    },
+    "failed_job_summaries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["job", "summary"],
+        "properties": {
+          "job": {"type": "string"},
+          "summary": {"type": "string"}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "check": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["name", "status", "state"],
+      "properties": {
+        "name": {"type": "string"},
+        "status": {"type": "string"},
+        "conclusion": {"type": ["string", "null"]},
+        "state": {"enum": ["success", "failure", "pending", "skipped"]},
+        "url": {"type": ["string", "null"]}
+      }
+    },
+    "workflow_run": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["name", "state"],
+      "properties": {
+        "id": {"type": ["integer", "string", "null"]},
+        "name": {"type": "string"},
+        "status": {"type": ["string", "null"]},
+        "conclusion": {"type": ["string", "null"]},
+        "state": {"enum": ["success", "failure", "pending", "skipped"]},
+        "url": {"type": ["string", "null"]}
+      }
+    }
+  }
+}
