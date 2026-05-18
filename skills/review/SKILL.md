@@ -256,11 +256,11 @@ jq -e '.read_only == true and .policy.github_writes == false and .policy.rerun =
 
 failed job log を読む必要がある場合も read-only download に限定し、raw log は永続化せず一時ファイルから `--failed-log job=/tmp/...` で `tasks/ci_status.py` に渡す。`ci-summary.md` には secret-like text / local path が scrub された短い要約だけを残す。
 
-- 旧 `gh` fallback: `gh pr view --json statusCheckRollup` が使えない場合は、`gh api repos/$org/$repository/commits/$head_sha/check-runs`（または combined status の `contexts`）を `--status-check-rollup-json` に渡して同じ helper で正規化する
+- 旧 `gh` fallback: `gh pr view --json statusCheckRollup` が使えない場合は、`gh api --paginate repos/$org/$repository/commits/$head_sha/check-runs?per_page=100`（または combined status の `statuses`）を `--status-check-rollup-json` に渡して同じ helper で正規化する。check-runs API はページング対象なので、pagination なしで最初のページだけを gate 入力にしてはならない。
 
 ```bash
 gh api repos/$org/$repository/pulls/$pr_number > ~/claude-loop-pr-codex/$org-$repository-$pr_number/ci-pull.json && \
-gh api repos/$org/$repository/commits/$head_sha/check-runs > ~/claude-loop-pr-codex/$org-$repository-$pr_number/ci-status-rollup.json && \
+set -o pipefail && gh api --paginate "repos/$org/$repository/commits/$head_sha/check-runs?per_page=100" | jq -sc '{check_runs: [.[].check_runs[]?]}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/ci-status-rollup.json && \
 gh api "repos/$org/$repository/actions/runs?branch=$branch&head_sha=$head_sha&per_page=10" > ~/claude-loop-pr-codex/$org-$repository-$pr_number/ci-workflow-runs.json && \
 python3 $CLAUDE_PLUGIN_ROOT/tasks/ci_status.py \
   --pull-json ~/claude-loop-pr-codex/$org-$repository-$pr_number/ci-pull.json \

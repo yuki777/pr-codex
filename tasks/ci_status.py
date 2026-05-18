@@ -151,11 +151,15 @@ def pull_context_from_rest_payload(payload: Mapping[str, Any]) -> dict[str, Any]
 
 def _overall_state(states: Iterable[str]) -> str:
     seen = list(states)
+    if not seen:
+        # Fail safe: absence of CI data is not evidence of a green PR.
+        # GitHub combined status treats commits with no statuses as pending.
+        return "pending"
     if any(state == "failure" for state in seen):
         return "failure"
     if any(state == "pending" for state in seen):
         return "pending"
-    if seen and all(state == "skipped" for state in seen):
+    if all(state == "skipped" for state in seen):
         return "skipped"
     return "success"
 

@@ -60,6 +60,26 @@ class CiStatusTest(unittest.TestCase):
         )
         self.assertEqual(status["state"], "pending")
 
+    def test_empty_ci_inputs_are_pending_not_success(self) -> None:
+        status = build_ci_status(
+            pr={"repository": "octo/example", "number": 1, "head_sha": "0" * 40},
+            status_check_rollup=[],
+            workflow_runs=[],
+            failed_job_logs={},
+        )
+        self.assertEqual(status["state"], "pending")
+        self.assertEqual(status["checks"], [])
+        self.assertEqual(status["workflow_runs"], [])
+
+    def test_empty_endpoint_objects_are_pending_not_success(self) -> None:
+        status = build_ci_status(
+            pr={"repository": "octo/example", "number": 1, "head_sha": "1" * 40},
+            status_check_rollup={"check_runs": []},
+            workflow_runs={"workflow_runs": []},
+            failed_job_logs={},
+        )
+        self.assertEqual(status["state"], "pending")
+
     def test_failed_logs_are_summarized_with_secret_like_text_scrubbed(self) -> None:
         raw_log = """
         build failed
