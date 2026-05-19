@@ -467,6 +467,38 @@ jq -n --arg depth_requested "$depth_requested" --slurpfile metadata ~/claude-loo
       if any(files[]; (test("(^|/)(tests?|spec)(/|$)|(^|/)[^/]*[._-](test|spec)[.][^/]+$"; "i") or test("(^|/)[^/]*(Test|Spec)[.][^/]+$"))) then "test_touch" else empty end,
       if any(files[]; test("(^|/)(openapi|swagger)(/|$|[.])|(^|/)schema[.]graphql$|[.]proto$"; "i")) then "api_contract" else empty end
     ];
+  def is_docs_file: test("(^|/)(docs?/|README([.]|$)|CHANGELOG([.]|$)|CONTRIBUTING([.]|$))|[.](md|mdx|rst|adoc|txt)$"; "i");
+  def is_test_file: (test("(^|/)(tests?|spec)(/|$)|(^|/)[^/]*[._-](test|spec)[.][^/]+$"; "i") or test("(^|/)[^/]*(Test|Spec)[.][^/]+$"));
+  def is_workflow_file: test("(^|/)([.]github/workflows/|Dockerfile$|docker-compose|helm/|k8s/|terraform/|deploy/|ops/)"; "i");
+  def is_review_skill_file: test("(^|/)skills/(review|send)/|(^|/)schemas/(findings|run-plan|pr-classification)"; "i");
+  def is_python_runtime_file: test("(^|/)tasks/.*[.]py$|(^|/)schemas/.*[.]json$"; "i");
+  def pr_all_types:
+    [
+      if any(files[]; is_docs_file) then "docs-only" else empty end,
+      if any(files[]; is_test_file) then "test-only" else empty end,
+      if any(files[]; is_workflow_file) then "workflow-ci" else empty end,
+      if any(files[]; is_review_skill_file) then "review-skill-contract" else empty end,
+      if any(files[]; is_python_runtime_file) then "python-validator-runtime" else empty end,
+      if (risk_tags | index("security")) then "security-sensitive" else empty end
+    ];
+  def pr_primary_type:
+    if (pr_all_types | index("security-sensitive")) then "security-sensitive"
+    elif (pr_all_types | length) == 1 then pr_all_types[0]
+    else "mixed"
+    end;
+  def selected_specialists:
+    [pr_all_types[] | if . == "docs-only" then "docs" elif . == "test-only" then "tests" elif . == "workflow-ci" then "workflow" elif . == "review-skill-contract" then "review-skill" elif . == "python-validator-runtime" then "python" elif . == "security-sensitive" then "security" else empty end]
+    | if length == 0 then ["generic"] else . end;
+  def classification_types:
+    pr_all_types;
+  def pr_classification:
+    {
+      primary_type: pr_primary_type,
+      all_types: classification_types,
+      selected_specialists: selected_specialists,
+      rationale: "types=[\((classification_types | join(",")))], specialists=[\((selected_specialists | join(",")))], read_only=true",
+      read_only: true
+    };
   def files_changed: (files | length);
   def total_lines: (lines_added + lines_removed);
   def sensitive_risk_count: (risk_tags | map(select(. == "security" or . == "data_migration")) | length);
@@ -547,6 +579,7 @@ jq -n --arg depth_requested "$depth_requested" --slurpfile metadata ~/claude-loo
       model_profile: model_profile,
       rationale: rationale
     },
+    pr_classification: pr_classification,
     estimated_stages: estimated_stages,
     estimated_timeout_ms: estimated_timeout_ms,
     actual_duration_ms: null,
@@ -578,7 +611,7 @@ jq -n --arg depth_requested "$depth_requested" --slurpfile metadata ~/claude-loo
       }
     }
   }
-' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/run-plan.json && test -s ~/claude-loop-pr-codex/$org-$repository-$pr_number/run-plan.json
+' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/run-plan.json && test -s ~/claude-loop-pr-codex/$org-$repository-$pr_number/run-plan.json && jq ".pr_classification" ~/claude-loop-pr-codex/$org-$repository-$pr_number/run-plan.json > ~/claude-loop-pr-codex/$org-$repository-$pr_number/pr-classification.json && test -s ~/claude-loop-pr-codex/$org-$repository-$pr_number/pr-classification.json
 ```
 
 ### Step 4 前処理: レビュー観点の読み込み
@@ -589,12 +622,19 @@ Step 4a / 4b 共通のレビュー観点本文（MCP追加情報収集 / 7観点
 - 判定条件: `REVIEW_CRITERIA.md` の全文と `run-plan.json` の内容を Read ツールで取得できる
 - 次アクション:
   - 4a / 4b の Bash コマンド文字列中の `{REVIEW_CRITERIA}` を、下記の `{REVIEW_CRITERIA}` / `{RUN_PLAN_GUIDANCE}` / `{DEPTH_GUIDANCE}` 共通のエスケープ規則（`\` → `\\`、`"` → `\"`、`$` → `\$`、`` ` `` → `\``）に従って整形した本文で置換してから Bash ツールに渡す
-  - `run-plan.json` から `.files_changed` / `.hunks` / `.lines_added` / `.lines_removed` / `.risk_tags` / `.selected_hunters` / `.depth_actual` / `.depth_source` / `.depth_reason` / `.depth_requested` / `.depth_downgraded` / `.depth_downgrade_reason` / `.recommended_mode` / `.skip_reason` / `.routing_decision.budget_class` / `.routing_decision.model_profile` / `.routing_decision.route` / `.routing_decision.rationale` / `.estimated_stages` / `.estimated_timeout_ms` / `.review_loop` を保持する。Step 5 の `jq --argjson` に再利用するため、`.risk_tags` と `.selected_hunters` はそれぞれ `$risk_tags_json` / `$selected_hunters_json` として **JSON 配列文字列のまま**、`.review_loop` は `$review_loop_json` として **JSON object 文字列のまま**保持し、数値項目も `$files_changed` / `$hunks` / `$lines_added` / `$lines_removed` / `$estimated_stages` / `$estimated_timeout_ms` として保持する。`routing_decision.route` は Step 5 で artifact を再構築するため `$route` として保持するが hunter 個別プロンプトには渡さない。以下の方針で `{RUN_PLAN_GUIDANCE}` と `{DEPTH_GUIDANCE}` を組み立てて置換する
+  - `run-plan.json` から `.files_changed` / `.hunks` / `.lines_added` / `.lines_removed` / `.risk_tags` / `.selected_hunters` / `.depth_actual` / `.depth_source` / `.depth_reason` / `.depth_requested` / `.depth_downgraded` / `.depth_downgrade_reason` / `.recommended_mode` / `.skip_reason` / `.routing_decision.budget_class` / `.routing_decision.model_profile` / `.routing_decision.route` / `.routing_decision.rationale` / `.pr_classification` / `.estimated_stages` / `.estimated_timeout_ms` / `.review_loop` を保持する。Step 5 の `jq --argjson` に再利用するため、`.risk_tags` と `.selected_hunters` はそれぞれ `$risk_tags_json` / `$selected_hunters_json` として **JSON 配列文字列のまま**、`.pr_classification` は `$pr_classification_json` として **JSON object 文字列のまま**、`.review_loop` は `$review_loop_json` として **JSON object 文字列のまま**保持し、数値項目も `$files_changed` / `$hunks` / `$lines_added` / `$lines_removed` / `$estimated_stages` / `$estimated_timeout_ms` として保持する。`routing_decision.route` は Step 5 で artifact を再構築するため `$route` として保持するが hunter 個別プロンプトには渡さない。以下の方針で `{RUN_PLAN_GUIDANCE}` と `{DEPTH_GUIDANCE}` を組み立てて置換する
 
 `{RUN_PLAN_GUIDANCE}` の組み立て規則:
 
 - 先頭に `budget_class` / `model_profile` / `rationale` / `depth_actual` / `recommended_mode` / `risk_tags` / `estimated_timeout_ms` を箇条書きで明記する
 - `risk_tags` / `selected_hunters` は **生の JSON を埋め込まず**、`, ` 区切りの平文（空なら `none`）へ整形してから使う
+- `pr_classification.primary_type` / `all_types` / `selected_specialists` を明記し、対応する specialist checklist を重点観点として合成する。`selected_specialists` も生 JSON ではなく `, ` 区切りの平文へ整形する
+- `selected_specialists` に `docs` が含まれる場合: ドキュメント PR では runtime 実装推測を増やさず、記述の正確性・手順の再現性・古いコマンドだけを重点確認する
+- `selected_specialists` に `tests` が含まれる場合: テストが本当に対象挙動を捕捉するか、fixture/期待値が実装と同時に緩くなっていないかを重点確認する
+- `selected_specialists` に `workflow` が含まれる場合: permissions / secrets / checkout ref / token scope / cache key / matrix failure path を重点確認する
+- `selected_specialists` に `review-skill` が含まれる場合: `run-plan.json` / `findings.verified.json` / payload / docs の contract mismatch と template shell safety を重点確認する
+- `selected_specialists` に `python` が含まれる場合: validator/schema/runtime の同値性、fail-safe default、stdlib-only 互換性を重点確認する
+- `selected_specialists` に `security` が含まれる場合: read-only で入力境界・権限境界・secret exposure・投稿抑制 policy を重点確認する。自動 exploit / network pentest はしない
 - `recommended_mode == "standard"` の場合: 既存どおり 7観点をフルに使う
 - `recommended_mode == "focused"` の場合: **security / bug / test** を最優先とし、スタイル / リネーム / 軽微な改善は correctness に直結するものだけ残す
 - `recommended_mode == "skip"` の場合: `/loop` では skip 推奨水準だが、**M1 の既定は skip せず focused fallback** と明記する。実レビューでも `focused` と同じ重点に絞り、確証の弱い指摘を増やさない
@@ -952,7 +992,7 @@ cost_json=$(python3 $CLAUDE_PLUGIN_ROOT/tasks/extract_actual_cost.py --component
 
 ```bash
 tmp_run_plan=~/claude-loop-pr-codex/$org-$repository-$pr_number/run-plan.json.tmp
-jq -n --argjson files_changed "$files_changed" --argjson hunks "$hunks" --argjson lines_added "$lines_added" --argjson lines_removed "$lines_removed" --argjson risk_tags "$risk_tags_json" --argjson selected_hunters "$selected_hunters_json" --arg depth_actual "$depth_actual" --arg depth_source "$depth_source" --arg depth_reason "$depth_reason" --arg depth_requested "$depth_requested" --argjson depth_downgraded "$depth_downgraded" --arg depth_downgrade_reason "$depth_downgrade_reason" --arg recommended_mode "$recommended_mode" --arg skip_reason "$skip_reason" --arg budget_class "$budget_class" --arg model_profile "$model_profile" --arg route "$route" --arg rationale "$rationale" --argjson estimated_stages "$estimated_stages" --argjson estimated_timeout_ms "$estimated_timeout_ms" --argjson review_loop "$review_loop_json" --argjson cost "$cost_json" --argjson rounds_completed "$rounds_completed" --arg halt_reason "$halt_reason" --argjson verifier_fail_candidates "$verifier_fail_candidates" --argjson suppressed_candidate_count "$suppressed_candidate_count" --argjson no_new_evidence_rounds "$no_new_evidence_rounds" --argjson repeated_contradiction_events "$repeated_contradiction_events" --argjson insufficient_evidence_events "$insufficient_evidence_events" --argjson oscillation_detected "$oscillation_detected" --arg started_at "$started_at" --arg finished_at "$finished_at" '{
+jq -n --argjson files_changed "$files_changed" --argjson hunks "$hunks" --argjson lines_added "$lines_added" --argjson lines_removed "$lines_removed" --argjson risk_tags "$risk_tags_json" --argjson selected_hunters "$selected_hunters_json" --argjson pr_classification "$pr_classification_json" --arg depth_actual "$depth_actual" --arg depth_source "$depth_source" --arg depth_reason "$depth_reason" --arg depth_requested "$depth_requested" --argjson depth_downgraded "$depth_downgraded" --arg depth_downgrade_reason "$depth_downgrade_reason" --arg recommended_mode "$recommended_mode" --arg skip_reason "$skip_reason" --arg budget_class "$budget_class" --arg model_profile "$model_profile" --arg route "$route" --arg rationale "$rationale" --argjson estimated_stages "$estimated_stages" --argjson estimated_timeout_ms "$estimated_timeout_ms" --argjson review_loop "$review_loop_json" --argjson cost "$cost_json" --argjson rounds_completed "$rounds_completed" --arg halt_reason "$halt_reason" --argjson verifier_fail_candidates "$verifier_fail_candidates" --argjson suppressed_candidate_count "$suppressed_candidate_count" --argjson no_new_evidence_rounds "$no_new_evidence_rounds" --argjson repeated_contradiction_events "$repeated_contradiction_events" --argjson insufficient_evidence_events "$insufficient_evidence_events" --argjson oscillation_detected "$oscillation_detected" --arg started_at "$started_at" --arg finished_at "$finished_at" '{
   files_changed: $files_changed,
   hunks: $hunks,
   lines_added: $lines_added,
@@ -973,6 +1013,7 @@ jq -n --argjson files_changed "$files_changed" --argjson hunks "$hunks" --argjso
     model_profile: $model_profile,
     rationale: $rationale
   },
+  pr_classification: $pr_classification,
   estimated_stages: $estimated_stages,
   estimated_timeout_ms: $estimated_timeout_ms,
   actual_duration_ms: (((($finished_at | strptime("%Y-%m-%dT%H:%M:%S+00:00") | mktime) - ($started_at | strptime("%Y-%m-%dT%H:%M:%S+00:00") | mktime)) * 1000)),

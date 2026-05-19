@@ -11,6 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_ROOT = ROOT / "fixtures"
 SCHEMA_PATH = ROOT / "schemas" / "run-plan.schema.json"
+CLASSIFICATION_SCHEMA_PATH = ROOT / "schemas" / "pr-classification.schema.json"
 SKILL_PATH = ROOT / "skills" / "review" / "SKILL.md"
 
 RISK_TAG_ENUM = [
@@ -20,6 +21,26 @@ RISK_TAG_ENUM = [
     "infra",
     "test_touch",
     "api_contract",
+]
+
+PR_TYPE_ENUM = [
+    "docs-only",
+    "test-only",
+    "workflow-ci",
+    "review-skill-contract",
+    "python-validator-runtime",
+    "security-sensitive",
+    "mixed",
+]
+
+SPECIALIST_ENUM = [
+    "generic",
+    "docs",
+    "tests",
+    "workflow",
+    "review-skill",
+    "python",
+    "security",
 ]
 
 SENSITIVE_RISK_TAGS = {"security", "data_migration"}
@@ -183,6 +204,9 @@ def run_duration_template(plan: dict[str, object], started_at: str, finished_at:
             "--argjson",
             "selected_hunters",
             json.dumps(plan["selected_hunters"]),
+            "--argjson",
+            "pr_classification",
+            json.dumps(plan["pr_classification"]),
             "--arg",
             "depth_actual",
             str(plan["depth_actual"]),
@@ -287,6 +311,13 @@ def json_type_matches(expected: str, value: object) -> bool:
 
 
 def validate_schema(schema: dict[str, object], value: object, path: str = "$") -> None:
+    if "$ref" in schema:
+        ref = schema["$ref"]
+        if ref == "pr-classification.schema.json":
+            validate_schema(load_json(CLASSIFICATION_SCHEMA_PATH), value, path)
+            return
+        raise AssertionError(f"{path}: unsupported schema $ref {ref!r}")
+
     expected_type = schema.get("type")
     if expected_type is not None:
         if isinstance(expected_type, list):
@@ -404,6 +435,99 @@ def expected_rationale(plan: dict[str, object]) -> str:
     )
 
 
+def _files(plan: dict[str, object]) -> list[str]:
+    raw_files = plan.get("_files") or plan.get("files")
+    if raw_files is None:
+        # synthetic/preflight plans do not expose file names publicly; they store
+        # the deterministic classification artifact instead.
+        classification = plan.get("pr_classification")
+        if isinstance(classification, dict):
+            return []
+        raise AssertionError("plan files unavailable for classification validation")
+    if not isinstance(raw_files, list) or not all(isinstance(item, str) for item in raw_files):
+        raise AssertionError("plan files must be a string array")
+    return raw_files
+
+
+def _is_docs_file(path: str) -> bool:
+    return bool(re.search(r"(^|/)(docs?/|README([.]|$)|CHANGELOG([.]|$)|CONTRIBUTING([.]|$))|[.](md|mdx|rst|adoc|txt)$", path, re.I))
+
+
+def _is_test_file(path: str) -> bool:
+    return bool(re.search(r"(^|/)(tests?|spec)(/|$)|(^|/)[^/]*[._-](test|spec)[.][^/]+$", path, re.I) or re.search(r"(^|/)[^/]*(Test|Spec)[.][^/]+$", path))
+
+
+def _is_workflow_file(path: str) -> bool:
+    return bool(re.search(r"(^|/)([.]github/workflows/|Dockerfile$|docker-compose|helm/|k8s/|terraform/|deploy/|ops/)", path, re.I))
+
+
+def _is_review_skill_file(path: str) -> bool:
+    return bool(re.search(r"(^|/)skills/(review|send)/|(^|/)schemas/(findings|run-plan|pr-classification)", path, re.I))
+
+
+def _is_python_runtime_file(path: str) -> bool:
+    return bool(re.search(r"(^|/)tasks/.*[.]py$|(^|/)schemas/.*[.]json$", path, re.I))
+
+
+def expected_pr_classification(plan: dict[str, object]) -> dict[str, object]:
+    files = _files(plan)
+    risk_tags = plan.get("risk_tags", [])
+    if not isinstance(risk_tags, list) or not all(isinstance(tag, str) for tag in risk_tags):
+        raise AssertionError("$.risk_tags: expected string array before classification validation")
+
+    flags = {
+        "docs-only": any(_is_docs_file(path) for path in files),
+        "test-only": any(_is_test_file(path) for path in files),
+        "workflow-ci": any(_is_workflow_file(path) for path in files),
+        "review-skill-contract": any(_is_review_skill_file(path) for path in files),
+        "python-validator-runtime": any(_is_python_runtime_file(path) for path in files),
+        "security-sensitive": "security" in risk_tags,
+    }
+    all_types = [type_name for type_name in PR_TYPE_ENUM if type_name != "mixed" and flags[type_name]]
+    if not all_types:
+        all_types = ["docs-only"] if files and all(_is_docs_file(path) for path in files) else ["test-only"] if files and all(_is_test_file(path) for path in files) else []
+    if not all_types:
+        all_types = []
+
+    if "security-sensitive" in all_types:
+        primary_type = "security-sensitive"
+    elif len(all_types) == 1:
+        primary_type = all_types[0]
+    else:
+        primary_type = "mixed"
+
+    specialist_map = {
+        "docs-only": "docs",
+        "test-only": "tests",
+        "workflow-ci": "workflow",
+        "review-skill-contract": "review-skill",
+        "python-validator-runtime": "python",
+        "security-sensitive": "security",
+    }
+    selected_specialists = [specialist_map[type_name] for type_name in all_types]
+    if not selected_specialists:
+        selected_specialists = ["generic"]
+    rationale = f"types=[{','.join(all_types)}], specialists=[{','.join(selected_specialists)}], read_only=true"
+    return {
+        "primary_type": primary_type,
+        "all_types": all_types,
+        "selected_specialists": selected_specialists,
+        "rationale": rationale,
+        "read_only": True,
+    }
+
+
+def validate_pr_classification_semantics(
+    schema: dict[str, object], classification: dict[str, object], plan: dict[str, object]
+) -> None:
+    validate_schema(schema, classification)
+    expected = expected_pr_classification(plan)
+    for key, expected_value in expected.items():
+        actual = classification.get(key)
+        if actual != expected_value:
+            raise AssertionError(f"$.pr_classification.{key}: expected {expected_value!r}, got {actual!r}")
+
+
 def validate_routing_decision(plan: dict[str, object]) -> None:
     routing_decision = plan.get("routing_decision")
     if not isinstance(routing_decision, dict):
@@ -458,6 +582,11 @@ def validate_cost(plan: dict[str, object]) -> None:
 
 def validate_run_plan_semantics(schema: dict[str, object], plan: dict[str, object]) -> None:
     validate_schema(schema, plan)
+    classification_schema = load_json(CLASSIFICATION_SCHEMA_PATH)
+    classification = plan.get("pr_classification")
+    if not isinstance(classification, dict):
+        raise AssertionError("$.pr_classification: expected object")
+    validate_schema(classification_schema, classification)
     validate_routing_decision(plan)
     validate_cost(plan)
 

@@ -22,6 +22,15 @@
     "model_profile": "standard",
     "rationale": "files_changed=4, total_lines=39, risk_tags=[], depth=standard, mode=standard"
   },
+  "pr_classification": {
+    "primary_type": "mixed",
+    "all_types": [],
+    "selected_specialists": [
+      "generic"
+    ],
+    "rationale": "types=[], specialists=[generic], read_only=true",
+    "read_only": true
+  },
   "estimated_stages": 4,
   "estimated_timeout_ms": 513900,
   "actual_duration_ms": null,
