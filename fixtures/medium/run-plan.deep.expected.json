@@ -26,6 +26,12 @@
   "estimated_timeout_ms": 513900,
   "actual_duration_ms": null,
   "actual_tokens": null,
+  "cost": {
+    "actual_usd": null,
+    "currency": "USD",
+    "source": "unavailable",
+    "components": []
+  },
   "review_loop": {
     "halting_policy": {
       "max_rounds": 3,

@@ -229,6 +229,9 @@ def run_duration_template(plan: dict[str, object], started_at: str, finished_at:
             "review_loop",
             json.dumps(plan["review_loop"]),
             "--argjson",
+            "cost",
+            json.dumps(plan.get("cost", {"actual_usd": None, "currency": "USD", "source": "unavailable", "components": []})),
+            "--argjson",
             "rounds_completed",
             "2",
             "--arg",
@@ -270,6 +273,8 @@ def json_type_matches(expected: str, value: object) -> bool:
         return isinstance(value, list)
     if expected == "integer":
         return isinstance(value, int) and not isinstance(value, bool)
+    if expected == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
     if expected == "string":
         return isinstance(value, str)
     if expected == "boolean":
@@ -320,6 +325,8 @@ def validate_schema(schema: dict[str, object], value: object, path: str = "$") -
     if isinstance(value, list):
         if "minItems" in schema and len(value) < schema["minItems"]:
             raise AssertionError(f"{path}: expected at least {schema['minItems']} items, got {len(value)}")
+        if "maxItems" in schema and len(value) > schema["maxItems"]:
+            raise AssertionError(f"{path}: expected at most {schema['maxItems']} items, got {len(value)}")
         if schema.get("uniqueItems") and len(value) != len({json.dumps(item, sort_keys=True) for item in value}):
             raise AssertionError(f"{path}: expected unique items")
         item_schema = schema.get("items")
@@ -420,9 +427,39 @@ def validate_routing_decision(plan: dict[str, object]) -> None:
         raise AssertionError("$.routing_decision.rationale: expected string length <= 240")
 
 
+def validate_cost(plan: dict[str, object]) -> None:
+    cost = plan.get("cost")
+    if not isinstance(cost, dict):
+        raise AssertionError("$.cost: expected object")
+    source = cost.get("source")
+    actual_usd = cost.get("actual_usd")
+    components = cost.get("components")
+    if source == "unavailable":
+        if actual_usd is not None or components != []:
+            raise AssertionError("$.cost: unavailable source must have null actual_usd and empty components")
+        return
+    if source != "provider_reported":
+        raise AssertionError(f"$.cost.source: unsupported value {source!r}")
+    if not isinstance(actual_usd, (int, float)) or isinstance(actual_usd, bool):
+        raise AssertionError("$.cost.actual_usd: provider_reported cost must be numeric")
+    if not isinstance(components, list) or not components:
+        raise AssertionError("$.cost.components: provider_reported cost must include at least one component")
+    component_total = 0.0
+    for component in components:
+        if not isinstance(component, dict):
+            raise AssertionError("$.cost.components[]: expected object")
+        amount = component.get("actual_usd")
+        if not isinstance(amount, (int, float)) or isinstance(amount, bool):
+            raise AssertionError("$.cost.components[].actual_usd: expected number")
+        component_total += float(amount)
+    if round(component_total, 4) != round(float(actual_usd), 4):
+        raise AssertionError("$.cost.actual_usd: expected sum of component actual_usd values")
+
+
 def validate_run_plan_semantics(schema: dict[str, object], plan: dict[str, object]) -> None:
     validate_schema(schema, plan)
     validate_routing_decision(plan)
+    validate_cost(plan)
 
 
 def validate_fixture(name: str, schema: dict[str, object]) -> None:
@@ -732,11 +769,17 @@ def validate_step5_write_order() -> None:
         'tmp_run_plan=~/claude-loop-pr-codex/$org-$repository-$pr_number/run-plan.json.tmp',
         '> "$tmp_run_plan" && test -s "$tmp_run_plan" && mv "$tmp_run_plan" ~/claude-loop-pr-codex/$org-$repository-$pr_number/run-plan.json',
         '--argjson review_loop "$review_loop_json"',
+        '--argjson cost "$cost_json"',
+        'cost: $cost,',
         'review_loop: ($review_loop | .round_metrics = {',
     ]
     for snippet in required_snippets:
         if snippet not in block:
             raise AssertionError(f"duration block missing required snippet: {snippet}")
+
+    text = SKILL_PATH.read_text()
+    if "tasks/extract_actual_cost.py" not in text or "pricing table による推定は行わず" not in text:
+        raise AssertionError("Step 5 must extract provider-reported actual cost without pricing-table estimates")
 
 
 def validate_completed_head_check_before_files() -> None:
@@ -911,6 +954,12 @@ def validate_schema_contract(schema: dict[str, object]) -> None:
     assert schema["properties"]["depth_actual"]["enum"] == ["deep", "standard"]
     assert schema["properties"]["depth_source"]["enum"] == ["argument", "auto", "default"]
     assert schema["properties"]["depth_requested"]["enum"] == ["deep", "standard", None]
+
+    cost_schema = schema["properties"].get("cost")
+    assert isinstance(cost_schema, dict), "run-plan schema must include cost"
+    assert cost_schema["additionalProperties"] is False
+    assert cost_schema["properties"]["source"]["enum"] == ["provider_reported", "unavailable"]
+    assert cost_schema["properties"]["currency"]["const"] == "USD"
 
     skip_plan = synthetic_plan([f"src/file_{index}.ts" for index in range(101)], 1, 1, 0)
     validate_run_plan_semantics(schema, skip_plan)

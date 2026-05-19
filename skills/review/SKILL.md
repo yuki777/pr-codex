@@ -417,10 +417,10 @@ jq -n --arg org "$org" --arg repository "$repository" --arg repository_full_name
 - 次アクション: Step 4 前処理へ進む
 
 `run-plan.json` は Step 2b の `files[]` と Step 3 の `pr.diff` を使う preflight artifact。`review_loop.halting_policy` には F5 の `max_rounds=3` / `time_budget_ms=estimated_timeout_ms` / `no_new_evidence_rounds=1` / `repeated_contradiction_limit=2` / `verifier_fail_policy=local_artifact_only` / `insufficient_evidence_policy=suppress_to_local_artifact` を固定で埋め、Step 4c が `review-rounds.json` と Step 5 の round metrics に引き継ぐ。M1 では `selected_hunters` は常に `["claude","codex"]` を出力し、将来 F4 の選定ロジックに差し替える前提で固定値とする。`recommended_mode == "skip"` は「/loop では skip 推奨、手動では警告のみ」の**提案値**であり、M1 の既定では実際のレビューを止めず `focused fallback` で継続する。
-- 判定条件: `run-plan.json` が作成され、`files_changed` / `hunks` / `lines_added` / `lines_removed` / `risk_tags` / `selected_hunters` / `depth_actual` / `depth_source` / `depth_reason` / `depth_requested` / `depth_downgraded` / `depth_downgrade_reason` / `recommended_mode` / `skip_reason` / `routing_decision` / `estimated_stages` / `estimated_timeout_ms` / `actual_duration_ms` / `actual_tokens` が埋まる
+- 判定条件: `run-plan.json` が作成され、`files_changed` / `hunks` / `lines_added` / `lines_removed` / `risk_tags` / `selected_hunters` / `depth_actual` / `depth_source` / `depth_reason` / `depth_requested` / `depth_downgraded` / `depth_downgrade_reason` / `recommended_mode` / `skip_reason` / `routing_decision` / `estimated_stages` / `estimated_timeout_ms` / `actual_duration_ms` / `actual_tokens` / `cost` が埋まる
 - 次アクション: Step 4 前処理へ進む
 
-`run-plan.json` は Step 2b の `files[]` と Step 3 の `pr.diff`、および起動時に解析した `$depth_requested` を使う preflight artifactで、**logical stage: ranker** の正式な出力である。M2 では `routing_decision` に token/duration/file-count/risk proxy 由来の `budget_class` と logical `model_profile` を残すが、USD 推定・価格表・実プロバイダ名・実モデル名・private config は絶対に書かない。`selected_hunters` は ranker 出力の interface として配列のまま維持するが、F4 では常に `["claude","codex"]` を出力し、`routing_decision.route` も M2 では常に `"claude+codex"` とする。route enum は将来 F4 の specialist routing で拡張できるよう、ここでは固定値の hook のみ残す。`recommended_mode == "skip"` は「/loop では skip 推奨、手動では警告のみ」の**提案値**であり、M1/F4/M2 の既定では実際のレビューを止めず `focused fallback` で継続する。
+`run-plan.json` は Step 2b の `files[]` と Step 3 の `pr.diff`、および起動時に解析した `$depth_requested` を使う preflight artifactで、**logical stage: ranker** の正式な出力である。M2 では `routing_decision` に token/duration/file-count/risk proxy 由来の `budget_class` と logical `model_profile` を残す。M3 では `cost` に provider/CLI が実際に報告した actual USD cost だけを記録し、pricing table や token からの USD 推定は持たない。`cost.source="unavailable"` の場合は推測せず null のまま残す。実プロバイダ名・実モデル名・private config は絶対に書かない。`selected_hunters` は ranker 出力の interface として配列のまま維持するが、F4 では常に `["claude","codex"]` を出力し、`routing_decision.route` も M2 では常に `"claude+codex"` とする。route enum は将来 F4 の specialist routing で拡張できるよう、ここでは固定値の hook のみ残す。`recommended_mode == "skip"` は「/loop では skip 推奨、手動では警告のみ」の**提案値**であり、M1/F4/M2 の既定では実際のレビューを止めず `focused fallback` で継続する。
 
 `depth_actual`（`standard` / `deep`）と `recommended_mode`（`standard` / `focused` / `skip`）は直交した軸として扱う。depth は「1観点あたりの掘り下げ深さ」、recommended_mode は「対象観点の絞り込み」を表すため、`depth_actual="deep"` かつ `recommended_mode="focused"` のような組み合わせも有効である。
 
@@ -551,6 +551,12 @@ jq -n --arg depth_requested "$depth_requested" --slurpfile metadata ~/claude-loo
     estimated_timeout_ms: estimated_timeout_ms,
     actual_duration_ms: null,
     actual_tokens: null,
+    cost: {
+      actual_usd: null,
+      currency: "USD",
+      source: "unavailable",
+      components: []
+    },
     review_loop: {
       halting_policy: {
         max_rounds: 3,
@@ -928,10 +934,16 @@ mv ~/claude-loop-pr-codex/$org-$repository-$pr_number/validation-report.json.tmp
 
 レビュー完了後、Bash で `jq -n --arg` を使って `run-plan.json` と `status.json` を更新する。`run-plan.json` は同一ディレクトリ内の一時ファイルへ先に書き出し、`mv` で原子的に差し替えてから `status.json` を `completed` にする。
 
-まず現在時刻を取得する（出力を `$finished_at` として保持する）。続けて `review-rounds.json` を Read し、Step 4c で保持した round metrics を `$rounds_completed` / `$halt_reason` / `$verifier_fail_candidates` / `$suppressed_candidate_count` / `$no_new_evidence_rounds` / `$repeated_contradiction_events` / `$insufficient_evidence_events` / `$oscillation_detected` として `jq --argjson` に渡せる形で保持する。
+まず現在時刻を取得する（出力を `$finished_at` として保持する）。続けて `review-rounds.json` を Read し、Step 4c で保持した round metrics を `$rounds_completed` / `$halt_reason` / `$verifier_fail_candidates` / `$suppressed_candidate_count` / `$no_new_evidence_rounds` / `$repeated_contradiction_events` / `$insufficient_evidence_events` / `$oscillation_detected` として `jq --argjson` に渡せる形で保持する。さらに provider/CLI がログに出力した actual USD cost だけを `tasks/extract_actual_cost.py` で抽出し、`$cost_json` として保持する。pricing table による推定は行わず、取得できない場合は `source="unavailable"` とする。
 
 ```bash
 date -u +%Y-%m-%dT%H:%M:%S+00:00
+```
+
+続けて `$cost_json` を作成する。
+
+```bash
+cost_json=$(python3 $CLAUDE_PLUGIN_ROOT/tasks/extract_actual_cost.py --component claude=~/claude-loop-pr-codex/$org-$repository-$pr_number/claude.log --component codex=~/claude-loop-pr-codex/$org-$repository-$pr_number/codex.log)
 ```
 
 - いつ使うか: Step 4c まで成功した場合に最初に実行する
@@ -940,7 +952,7 @@ date -u +%Y-%m-%dT%H:%M:%S+00:00
 
 ```bash
 tmp_run_plan=~/claude-loop-pr-codex/$org-$repository-$pr_number/run-plan.json.tmp
-jq -n --argjson files_changed "$files_changed" --argjson hunks "$hunks" --argjson lines_added "$lines_added" --argjson lines_removed "$lines_removed" --argjson risk_tags "$risk_tags_json" --argjson selected_hunters "$selected_hunters_json" --arg depth_actual "$depth_actual" --arg depth_source "$depth_source" --arg depth_reason "$depth_reason" --arg depth_requested "$depth_requested" --argjson depth_downgraded "$depth_downgraded" --arg depth_downgrade_reason "$depth_downgrade_reason" --arg recommended_mode "$recommended_mode" --arg skip_reason "$skip_reason" --arg budget_class "$budget_class" --arg model_profile "$model_profile" --arg route "$route" --arg rationale "$rationale" --argjson estimated_stages "$estimated_stages" --argjson estimated_timeout_ms "$estimated_timeout_ms" --argjson review_loop "$review_loop_json" --argjson rounds_completed "$rounds_completed" --arg halt_reason "$halt_reason" --argjson verifier_fail_candidates "$verifier_fail_candidates" --argjson suppressed_candidate_count "$suppressed_candidate_count" --argjson no_new_evidence_rounds "$no_new_evidence_rounds" --argjson repeated_contradiction_events "$repeated_contradiction_events" --argjson insufficient_evidence_events "$insufficient_evidence_events" --argjson oscillation_detected "$oscillation_detected" --arg started_at "$started_at" --arg finished_at "$finished_at" '{
+jq -n --argjson files_changed "$files_changed" --argjson hunks "$hunks" --argjson lines_added "$lines_added" --argjson lines_removed "$lines_removed" --argjson risk_tags "$risk_tags_json" --argjson selected_hunters "$selected_hunters_json" --arg depth_actual "$depth_actual" --arg depth_source "$depth_source" --arg depth_reason "$depth_reason" --arg depth_requested "$depth_requested" --argjson depth_downgraded "$depth_downgraded" --arg depth_downgrade_reason "$depth_downgrade_reason" --arg recommended_mode "$recommended_mode" --arg skip_reason "$skip_reason" --arg budget_class "$budget_class" --arg model_profile "$model_profile" --arg route "$route" --arg rationale "$rationale" --argjson estimated_stages "$estimated_stages" --argjson estimated_timeout_ms "$estimated_timeout_ms" --argjson review_loop "$review_loop_json" --argjson cost "$cost_json" --argjson rounds_completed "$rounds_completed" --arg halt_reason "$halt_reason" --argjson verifier_fail_candidates "$verifier_fail_candidates" --argjson suppressed_candidate_count "$suppressed_candidate_count" --argjson no_new_evidence_rounds "$no_new_evidence_rounds" --argjson repeated_contradiction_events "$repeated_contradiction_events" --argjson insufficient_evidence_events "$insufficient_evidence_events" --argjson oscillation_detected "$oscillation_detected" --arg started_at "$started_at" --arg finished_at "$finished_at" '{
   files_changed: $files_changed,
   hunks: $hunks,
   lines_added: $lines_added,
@@ -965,6 +977,7 @@ jq -n --argjson files_changed "$files_changed" --argjson hunks "$hunks" --argjso
   estimated_timeout_ms: $estimated_timeout_ms,
   actual_duration_ms: (((($finished_at | strptime("%Y-%m-%dT%H:%M:%S+00:00") | mktime) - ($started_at | strptime("%Y-%m-%dT%H:%M:%S+00:00") | mktime)) * 1000)),
   actual_tokens: null,
+  cost: $cost,
   review_loop: ($review_loop | .round_metrics = {
     rounds_completed: $rounds_completed,
     halt_reason: (if $halt_reason == "" or $halt_reason == "null" then null else $halt_reason end),
