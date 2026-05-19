@@ -14,12 +14,15 @@ TASKS = ROOT / "tasks"
 sys.path.insert(0, str(TASKS))
 
 from validate_run_plan import (  # noqa: E402
+    CLASSIFICATION_SCHEMA_PATH,
     ROUTE_M2,
     SCHEMA_PATH,
+    expected_pr_classification,
     expected_rationale,
     load_json,
     schema_matches,
     synthetic_plan,
+    validate_pr_classification_semantics,
     validate_run_plan_semantics,
 )
 
@@ -28,6 +31,7 @@ class ValidateRunPlanRoutingTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.schema = load_json(SCHEMA_PATH)
+        cls.classification_schema = load_json(CLASSIFICATION_SCHEMA_PATH)
 
     def valid_plan(self) -> dict[str, object]:
         plan = synthetic_plan([f"src/file_{index}.ts" for index in range(5)], 8, 120, 80)
@@ -86,6 +90,66 @@ class ValidateRunPlanRoutingTest(unittest.TestCase):
         bad_profile = copy.deepcopy(plan)
         bad_profile["routing_decision"]["model_profile"] = "gpt-5.5"
         self.assertFalse(schema_matches(self.schema, bad_profile))
+
+    def test_pr_classification_selects_specialists_by_changed_files(self) -> None:
+        cases = [
+            (
+                "docs-only",
+                ["README.md", "docs/usage.md"],
+                {
+                    "primary_type": "docs-only",
+                    "all_types": ["docs-only"],
+                    "selected_specialists": ["docs"],
+                },
+            ),
+            (
+                "workflow-ci",
+                [".github/workflows/ci.yml", "Dockerfile"],
+                {
+                    "primary_type": "workflow-ci",
+                    "all_types": ["workflow-ci"],
+                    "selected_specialists": ["workflow"],
+                },
+            ),
+            (
+                "python-validator-runtime",
+                ["tasks/validate_run_plan.py", "tasks/extract_actual_cost.py"],
+                {
+                    "primary_type": "python-validator-runtime",
+                    "all_types": ["python-validator-runtime"],
+                    "selected_specialists": ["python"],
+                },
+            ),
+            (
+                "security-sensitive",
+                ["src/auth/login.py", "tests/test_login.py"],
+                {
+                    "primary_type": "security-sensitive",
+                    "all_types": ["test-only", "security-sensitive"],
+                    "selected_specialists": ["tests", "security"],
+                },
+            ),
+            (
+                "mixed",
+                ["skills/review/SKILL.md", "tests/test_review.py", "README.md"],
+                {
+                    "primary_type": "mixed",
+                    "all_types": ["docs-only", "test-only", "review-skill-contract"],
+                    "selected_specialists": ["docs", "tests", "review-skill"],
+                },
+            ),
+        ]
+
+        for name, files, expected_subset in cases:
+            with self.subTest(name=name):
+                plan = synthetic_plan(files, 2, 30, 5)
+                classification = plan["pr_classification"]
+                for key, value in expected_subset.items():
+                    self.assertEqual(classification[key], value)
+                self.assertTrue(classification["read_only"])
+                self.assertEqual(classification, expected_pr_classification(dict(plan, _files=files)))
+                validate_pr_classification_semantics(self.classification_schema, classification, dict(plan, _files=files))
+                validate_run_plan_semantics(self.schema, plan)
 
     def test_actual_cost_contract_uses_provider_reported_values_only(self) -> None:
         plan = self.valid_plan()

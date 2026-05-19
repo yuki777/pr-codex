@@ -238,7 +238,8 @@ python3 tasks/m1_m2_gate.py \
   │     ├── metadata.json         # PR情報（org, repo, pr_number, head_sha 等）
   │     ├── ci-status.json        # GitHub Actions / status checks の read-only 正規化 artifact
   │     ├── ci-summary.md         # raw log を保存しない public-safe CI 要約
-  │     ├── run-plan.json         # preflight 指標、recommended_mode、選択 depth、M2 routing_decision（ローカル専用）
+  │     ├── run-plan.json         # preflight 指標、recommended_mode、選択 depth、M2 routing_decision、PR classification（ローカル専用）
+  │     ├── pr-classification.json # PR 種別と read-only specialist checklist（run-plan から派生）
   │     ├── pr.diff               # PR 差分 (unified diff)
   │     ├── pr.diff.ranges.txt    # GitHub inline comment 可能範囲
   │     ├── clone-claude/         # Claude Code 用 shallow clone
@@ -288,6 +289,7 @@ mv ~/claude-loop-pr-codex/sent/yuki777-pr-codex-24 \
 ## Schema
 
 - `run-plan.json` は `schemas/run-plan.schema.json` で定義し、review の depth policy と `recommended_mode` を記録する
+- `pr-classification.json` は `schemas/pr-classification.schema.json` で定義し、`docs-only` / `test-only` / `workflow-ci` / `review-skill-contract` / `python-validator-runtime` / `security-sensitive` / `mixed` の PR 種別と `selected_specialists` を記録する。hunter は read-only で、自動 exploit / network pentest は行わない
 - `depth_actual` は `standard` / `deep` の 2 値。`depth_source` は `argument` / `auto` / `default`、`depth_requested` は明示指定がない場合 `null`
 - `depth_downgraded == true` の場合は `depth_requested=deep` / `depth_actual=standard` / `depth_downgrade_reason` 非空でなければならない
 - `recommended_mode == "skip"` の場合だけ `skip_reason` を非空にし、それ以外は `skip_reason=null` にする。`recommended_mode` は depth と直交し、GitHub への自動投稿範囲は depth では拡大しない
@@ -320,6 +322,7 @@ mv ~/claude-loop-pr-codex/sent/yuki777-pr-codex-24 \
 - `routing_decision.route` は M2 では `"claude+codex"` 固定。`selected_hunters` は互換性のため残し、F4 (#40) の specialist routing で route enum を拡張する hook として扱う
 - `routing_decision.model_profile` は `"standard"` / `"deep"` / `"focused-fallback"` の logical profile のみ。provider/model 名や private config path は書かない
 - `routing_decision.rationale` は 240 文字以内の決定論的な事実列（例: `files_changed=N, total_lines=M, risk_tags=[...], depth=deep, mode=standard`）に限定し、LLM 自由生成文を入れない
+- `pr_classification` は run-plan 内にも同じ内容を持ち、Step 3 で `pr-classification.json` として派生保存する。`selected_specialists` は `docs` / `tests` / `workflow` / `review-skill` / `python` / `security` / `generic` の read-only checklist 選択であり、GitHub 投稿範囲や write 権限を広げない
 - M1 で生成済みの旧 `run-plan.json` には `routing_decision` がないため、M2 partial 以降の strict schema では再生成が必要。production consumer はまだないため migration script は不要
 - Timeout 完了率の実測比較は #36 (F11 regression eval) の fixture/eval 完了後に行う。本リポジトリ内の回帰確認は `python3 tasks/validate_run_plan.py` と `python3 -m unittest discover -s tasks -p "test_*.py"` を流し、routing fields と既存 timeout proxy が悪化していないことを確認する
 - Budget class はレビュー観点や Must Fix 検出を抑制するためには使わない。`focused-fallback` でも security / bug / test を優先しつつレビュー自体は継続する

@@ -21,6 +21,7 @@
     "recommended_mode",
     "skip_reason",
     "routing_decision",
+    "pr_classification",
     "estimated_stages",
     "estimated_timeout_ms",
     "actual_duration_ms",
@@ -168,6 +169,9 @@
           "description": "Deterministic fact list built from files_changed, total_lines, risk_tags, depth_actual, and recommended_mode."
         }
       }
+    },
+    "pr_classification": {
+      "$ref": "pr-classification.schema.json"
     },
     "estimated_stages": {
       "type": "integer",

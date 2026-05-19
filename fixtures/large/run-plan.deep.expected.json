@@ -26,6 +26,19 @@
     "model_profile": "deep",
     "rationale": "files_changed=20, total_lines=276, risk_tags=[dependency,infra,test_touch], depth=deep, mode=standard"
   },
+  "pr_classification": {
+    "primary_type": "mixed",
+    "all_types": [
+      "test-only",
+      "workflow-ci"
+    ],
+    "selected_specialists": [
+      "tests",
+      "workflow"
+    ],
+    "rationale": "types=[test-only,workflow-ci], specialists=[tests,workflow], read_only=true",
+    "read_only": true
+  },
   "estimated_stages": 4,
   "estimated_timeout_ms": 1200000,
   "actual_duration_ms": null,

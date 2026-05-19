@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yuki777/pr-codex/blob/main/schemas/pr-classification.schema.json",
+  "title": "pr-codex PR classification artifact",
+  "description": "Deterministic PR type classification and read-only specialist checklist selection for /pr-codex:review.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "primary_type",
+    "all_types",
+    "selected_specialists",
+    "rationale",
+    "read_only"
+  ],
+  "properties": {
+    "primary_type": {
+      "type": "string",
+      "enum": [
+        "docs-only",
+        "test-only",
+        "workflow-ci",
+        "review-skill-contract",
+        "python-validator-runtime",
+        "security-sensitive",
+        "mixed"
+      ]
+    },
+    "all_types": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": [
+          "docs-only",
+          "test-only",
+          "workflow-ci",
+          "review-skill-contract",
+          "python-validator-runtime",
+          "security-sensitive"
+        ]
+      }
+    },
+    "selected_specialists": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": [
+          "generic",
+          "docs",
+          "tests",
+          "workflow",
+          "review-skill",
+          "python",
+          "security"
+        ]
+      }
+    },
+    "rationale": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240,
+      "pattern": "^[^\\r\\n]+$"
+    },
+    "read_only": {
+      "const": true
+    }
+  }
+}
