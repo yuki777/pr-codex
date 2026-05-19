@@ -25,6 +25,7 @@
     "estimated_timeout_ms",
     "actual_duration_ms",
     "actual_tokens",
+    "cost",
     "review_loop"
   ],
   "properties": {
@@ -314,6 +315,64 @@
           }
         }
       }
+    },
+    "cost": {
+      "type": "object",
+      "description": "Actual USD cost reported by provider/CLI output. This is never estimated from a repo-managed pricing table.",
+      "additionalProperties": false,
+      "required": [
+        "actual_usd",
+        "currency",
+        "source",
+        "components"
+      ],
+      "properties": {
+        "actual_usd": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "currency": {
+          "const": "USD"
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "provider_reported",
+            "unavailable"
+          ]
+        },
+        "components": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "tool",
+              "actual_usd",
+              "source"
+            ],
+            "properties": {
+              "tool": {
+                "type": "string",
+                "enum": [
+                  "claude",
+                  "codex"
+                ]
+              },
+              "actual_usd": {
+                "type": "number",
+                "minimum": 0
+              },
+              "source": {
+                "const": "cli_log"
+              }
+            }
+          }
+        }
+      }
     }
   },
   "allOf": [
@@ -507,6 +566,75 @@
           },
           "depth_downgrade_reason": {
             "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "cost": {
+            "properties": {
+              "source": {
+                "const": "unavailable"
+              }
+            },
+            "required": [
+              "source"
+            ]
+          }
+        },
+        "required": [
+          "cost"
+        ]
+      },
+      "then": {
+        "properties": {
+          "cost": {
+            "properties": {
+              "actual_usd": {
+                "type": "null"
+              },
+              "components": {
+                "type": "array",
+                "maxItems": 0
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "cost": {
+            "properties": {
+              "source": {
+                "const": "provider_reported"
+              }
+            },
+            "required": [
+              "source"
+            ]
+          }
+        },
+        "required": [
+          "cost"
+        ]
+      },
+      "then": {
+        "properties": {
+          "cost": {
+            "properties": {
+              "actual_usd": {
+                "type": "number",
+                "minimum": 0
+              },
+              "components": {
+                "type": "array",
+                "minItems": 1
+              }
+            }
           }
         }
       }

@@ -315,7 +315,7 @@ mv ~/claude-loop-pr-codex/sent/yuki777-pr-codex-24 \
 ### Run-plan artifact schema
 
 - `/pr-codex:review` はローカル artifact として `run-plan.json` を生成し、`schemas/run-plan.schema.json` で検証する。GitHub review body / inline comment payload / SARIF には `routing_decision` を含めない
-- M2/F8 では USD 推定・価格表・実プロバイダ名・実モデル名を扱わない。M3 で USD / 価格表を追加する場合も、公開 artifact へ出す情報は sanitize する
+- F8/M3 では USD cost は provider/CLI が実際に報告した値だけを `run-plan.json.cost` に記録する。repo-managed pricing table や token からの USD 推定は持たず、取得できない場合は `cost.source="unavailable"` とする。公開 artifact へ出す情報は sanitize する
 - `routing_decision.budget_class` は `small` / `medium` / `large` の 3 値。`files_changed`、`lines_added + lines_removed`、`risk_tags` のうち `security` / `data_migration` 件数だけから決定論的に算出する
 - `routing_decision.route` は M2 では `"claude+codex"` 固定。`selected_hunters` は互換性のため残し、F4 (#40) の specialist routing で route enum を拡張する hook として扱う
 - `routing_decision.model_profile` は `"standard"` / `"deep"` / `"focused-fallback"` の logical profile のみ。provider/model 名や private config path は書かない

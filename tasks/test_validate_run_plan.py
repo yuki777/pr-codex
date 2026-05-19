@@ -87,6 +87,54 @@ class ValidateRunPlanRoutingTest(unittest.TestCase):
         bad_profile["routing_decision"]["model_profile"] = "gpt-5.5"
         self.assertFalse(schema_matches(self.schema, bad_profile))
 
+    def test_actual_cost_contract_uses_provider_reported_values_only(self) -> None:
+        plan = self.valid_plan()
+        self.assertEqual(
+            plan["cost"],
+            {
+                "actual_usd": None,
+                "currency": "USD",
+                "source": "unavailable",
+                "components": [],
+            },
+        )
+        validate_run_plan_semantics(self.schema, plan)
+
+        reported = copy.deepcopy(plan)
+        reported["cost"] = {
+            "actual_usd": 0.1234,
+            "currency": "USD",
+            "source": "provider_reported",
+            "components": [
+                {"tool": "claude", "actual_usd": 0.05, "source": "cli_log"},
+                {"tool": "codex", "actual_usd": 0.0734, "source": "cli_log"},
+            ],
+        }
+        validate_run_plan_semantics(self.schema, reported)
+
+        missing_cost = copy.deepcopy(plan)
+        del missing_cost["cost"]
+        self.assertFalse(schema_matches(self.schema, missing_cost))
+
+        estimated = copy.deepcopy(plan)
+        estimated["cost"] = {
+            "actual_usd": 0.1234,
+            "currency": "USD",
+            "source": "estimated_from_pricing_table",
+            "components": [],
+        }
+        self.assertFalse(schema_matches(self.schema, estimated))
+
+        pricing_table = copy.deepcopy(plan)
+        pricing_table["cost"] = {
+            "actual_usd": 0.1234,
+            "currency": "USD",
+            "source": "provider_reported",
+            "components": [],
+            "pricing_table": {"gpt-5.5": 1.0},
+        }
+        self.assertFalse(schema_matches(self.schema, pricing_table))
+
     def test_validator_rejects_inconsistent_derived_fields(self) -> None:
         plan = self.valid_plan()
 
