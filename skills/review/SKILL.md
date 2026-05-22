@@ -378,7 +378,7 @@ test -f "${CLAUDE_PLUGIN_ROOT}/skills/lib/extract-diff-ranges.awk" && awk -f "${
 python3 $CLAUDE_PLUGIN_ROOT/tasks/detect_bear_sunday.py --repo-dir ~/claude-loop-pr-codex/$org-$repository-$pr_number/clone-codex --bear-review-skill "$HOME/.claude/skills/bear-review/SKILL.md" --bear-review-skill "$HOME/.claude/skills/BEAR.Skills/.claude/skills/bear-review/SKILL.md" --bear-review-skill "$HOME/BEAR.Skills/.claude/skills/bear-review/SKILL.md" --out-json ~/claude-loop-pr-codex/$org-$repository-$pr_number/bear-review-context.json
 ```
 
-`detect_bear_sunday.py` は `composer.json` の `bear/*` dependency を強いシグナルとして扱い、dependency がない場合は `src/Resource` と `src/Module` / `src/Provider` など複数 layout signal が揃った場合だけ BEAR.Sunday と判定する。PHPMD / composer / vendor-bin / BEAR.Skills が存在しないプロジェクトでも落ちないよう、artifact に `bear_review.skip_reason` を残して通常レビューは継続する。
+`detect_bear_sunday.py` は `composer.json` の `bear/sunday` dependency だけを BEAR.Sunday 判定シグナルとして扱う。`bear/resource` など他の `bear/*` package や `src/Resource` / `src/Module` などの layout signal だけでは BEAR.Sunday と判定しない。PHPMD / composer / vendor-bin / BEAR.Skills が存在しないプロジェクトでも落ちないよう、artifact に `bear_review.skip_reason` を残して通常レビューは継続する。
 
 - `--depth 50` で shallow clone し、ディスク・時間を節約しつつ `git diff origin/$base_branch...HEAD` が算出可能な深さを確保する
 - Claude Code 用: `clone-claude/`、Codex CLI 用: `clone-codex/`

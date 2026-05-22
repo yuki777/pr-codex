@@ -13,13 +13,6 @@ import json
 from pathlib import Path
 from typing import Any, Iterable
 
-BEAR_PACKAGES = {
-    "bear/sunday",
-    "bear/resource",
-    "bear/package",
-    "ray/di",
-}
-
 
 def _load_json(path: Path) -> dict[str, Any] | None:
     try:
@@ -40,18 +33,9 @@ def _composer_signals(repo_dir: Path) -> list[str]:
             continue
         for package in deps:
             package_name = str(package).lower()
-            if package_name in BEAR_PACKAGES or package_name.startswith("bear/"):
-                signals.append(f"composer:{package_name}")
+            if package_name == "bear/sunday":
+                signals.append("composer:bear/sunday")
     return sorted(set(signals))
-
-
-def _layout_signals(repo_dir: Path) -> list[str]:
-    candidates = [
-        ("layout:src/Resource", repo_dir / "src" / "Resource"),
-        ("layout:src/Module", repo_dir / "src" / "Module"),
-        ("layout:src/Provider", repo_dir / "src" / "Provider"),
-    ]
-    return [name for name, path in candidates if path.exists()]
 
 
 def _first_existing(paths: Iterable[Path]) -> Path | None:
@@ -64,14 +48,11 @@ def _first_existing(paths: Iterable[Path]) -> Path | None:
 def detect_bear_sunday(repo_dir: Path, bear_review_skill_paths: Iterable[Path]) -> dict[str, Any]:
     """Return a deterministic BEAR.Sunday detection result for ``repo_dir``."""
     repo_dir = repo_dir.resolve()
-    composer_signals = _composer_signals(repo_dir)
-    layout_signals = _layout_signals(repo_dir)
-    signals = composer_signals + layout_signals
+    signals = _composer_signals(repo_dir)
 
-    # A BEAR composer dependency is authoritative.  Without composer evidence,
-    # require at least two layout signals to avoid classifying any generic
-    # project with a single Resource directory as BEAR.Sunday.
-    is_bear_sunday = bool(composer_signals) or len(layout_signals) >= 2
+    # Only an explicit bear/sunday composer dependency enables BEAR.Sunday
+    # detection. Other bear/* packages and project layout alone are not enough.
+    is_bear_sunday = bool(signals)
     framework_detected = "bear-sunday" if is_bear_sunday else None
 
     skill_path = _first_existing(Path(p).expanduser() for p in bear_review_skill_paths)

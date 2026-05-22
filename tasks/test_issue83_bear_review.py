@@ -40,27 +40,27 @@ class BearSundayDetectionTest(unittest.TestCase):
             self.assertEqual(result["bear_review"]["status"], "available")
             self.assertEqual(result["bear_review"]["skill_path"], str(skill))
 
-    def test_detects_bear_sunday_from_multiple_layout_signals_without_dependency(self) -> None:
+    def test_does_not_detect_bear_resource_or_layout_without_bear_sunday_dependency(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp) / "repo"
             (repo / "src" / "Resource" / "Page").mkdir(parents=True)
             (repo / "src" / "Module").mkdir(parents=True)
-            (repo / "src" / "Resource" / "Page" / "Index.php").write_text("<?php\n", encoding="utf-8")
-            (repo / "src" / "Module" / "AppModule.php").write_text("<?php\n", encoding="utf-8")
+            (repo / "composer.json").write_text(
+                json.dumps({"require": {"bear/resource": "^1.0", "ray/di": "^2.0"}}),
+                encoding="utf-8",
+            )
 
             result = detect_bear_sunday(repo, [])
 
-            self.assertTrue(result["is_bear_sunday"])
-            self.assertEqual(result["framework_detected"], "bear-sunday")
-            self.assertIn("layout:src/Resource", result["detection_signals"])
-            self.assertIn("layout:src/Module", result["detection_signals"])
-            self.assertEqual(result["bear_review"]["status"], "unavailable")
-            self.assertEqual(result["bear_review"]["skip_reason"], "bear-review skill unavailable")
+            self.assertFalse(result["is_bear_sunday"])
+            self.assertIsNone(result["framework_detected"])
+            self.assertEqual(result["detection_signals"], [])
+            self.assertEqual(result["bear_review"]["status"], "not_applicable")
 
-    def test_non_bear_project_is_not_detected_even_if_one_layout_signal_exists(self) -> None:
+    def test_non_bear_project_is_not_detected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp) / "repo"
-            (repo / "src" / "Resource").mkdir(parents=True)
+            repo.mkdir()
             (repo / "composer.json").write_text(
                 json.dumps({"require": {"symfony/console": "^7.0"}}),
                 encoding="utf-8",
