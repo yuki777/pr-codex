@@ -252,17 +252,10 @@ GitHub Reviews API は PR diff の新ファイル側 hunk 範囲外の `line` �
 - 次アクション: 作成後、`pr.diff.ranges.txt` を Read ツールで取得し、Claude 側で `$must_fix` の各エントリを検証する
 
 ```bash
-awk '
-  /^diff --git/ { match($0, /b\/[^ ]+/); path = substr($0, RSTART+2, RLENGTH-2); next }
-  /^@@/ {
-    match($0, /\+[0-9]+,?[0-9]*/);
-    spec = substr($0, RSTART+1, RLENGTH-1);
-    n = split(spec, a, ",");
-    start = a[1]; len = (n == 2 ? a[2] : 1);
-    if (len > 0) printf "%s\tL%d-L%d\n", path, start, start+len-1;
-  }
-' ~/claude-loop-pr-codex/$dir_name/pr.diff > ~/claude-loop-pr-codex/$dir_name/pr.diff.ranges.txt
+test -f "${CLAUDE_PLUGIN_ROOT}/skills/lib/extract-diff-ranges.awk" && awk -f "${CLAUDE_PLUGIN_ROOT}/skills/lib/extract-diff-ranges.awk" ~/claude-loop-pr-codex/$dir_name/pr.diff > ~/claude-loop-pr-codex/$dir_name/pr.diff.ranges.txt
 ```
+
+`${CLAUDE_PLUGIN_ROOT}` が Bash subprocess に渡らず `test -f` が失敗した場合は、`echo "$CLAUDE_PLUGIN_ROOT"` または plugin cache の絶対パス確認で root を確定し、`${CLAUDE_PLUGIN_ROOT}` の位置を実値に置換した同じ `test -f ... && awk -f ...` コマンドを再実行する。root を確定できない場合は silent な空ファイル生成を避けるため中断する。
 
 続いて `pr.diff.ranges.txt` を Read ツールで取得する。`file_path` は `~` を `$HOME` の実値に展開した絶対パスで渡す。
 

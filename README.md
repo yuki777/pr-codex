@@ -231,6 +231,15 @@ python3 tasks/m1_m2_gate.py \
 
 ## ファイル構成
 
+Plugin 内の共用 helper:
+
+```
+$CLAUDE_PLUGIN_ROOT/skills/lib/
+  └── extract-diff-ranges.awk    # send / review 共用の diff hunk 範囲抽出
+```
+
+Runtime artifacts:
+
 ```
 ~/claude-loop-pr-codex/
   ├── $org-$repo-$pr/             # 進行中 / 未投稿のレビュー
