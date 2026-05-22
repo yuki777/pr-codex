@@ -2,7 +2,7 @@
 user-invocable: true
 name: pr-codex-send
 description: "/pr-codex:review で生成された統合レビュー(review.md)を GitHub PR にレビューコメントとして投稿し、処理済みディレクトリを sent/ に移動する"
-argument-hint: ""
+argument-hint: "[--auto-submit]"
 allowed-tools: ["Bash", "Read", "Write", "Glob", "Grep"]
 ---
 
@@ -22,15 +22,26 @@ allowed-tools: ["Bash", "Read", "Write", "Glob", "Grep"]
 
 ```
 /pr-codex:send
+/pr-codex:send --auto-submit
 ```
 
-対話実行を前提とする。Step 5 で投稿 payload のサマリを提示し、ユーザーの明示的な承認を得てから Step 6 で投稿する。`/loop` には載せない。
+引数なしは対話実行を前提とし、Step 5 で投稿 payload のサマリを提示してユーザーの明示的な承認を得てから Step 6 で投稿する。`--auto-submit` は Step 5 の最終投稿承認だけをスキップし、すべての validator / Step 4.5 preflight / Step 5.5 投稿直前 safety gate が成功した場合のみ Step 6 へ進む。unknown option や複数オプションは unsupported argument として中断する。
 
 1 回の実行で対象は 1 件のみ処理する。未投稿の completed レビューが複数ある場合は、`ls` の出力順（名前昇順）で最初の 1 件のみを処理し、残りは次回以降の `/pr-codex:send` 実行に委ねる。
 
 ## フロー
 
 各テンプレートはコードブロックの内容をそのまま 1 回のシェル実行単位として使う。変数（`$candidate`, `$dir_name`, `$org`, `$repository`, `$pr_number`, `$pr_url`, `$head_sha`, `$head_sha_short`, `$title`, `$review_url` など）の置換以外の改変は不可。
+
+### Step 0: 引数解析
+
+Skill 起動直後に `$ARGUMENTS` を解釈し、`$send_mode = interactive | auto_submit` に正規化する。
+
+- `$ARGUMENTS` が空文字列または空白のみ: `$send_mode=interactive`
+- `$ARGUMENTS` が完全に `--auto-submit` と一致: `$send_mode=auto_submit`
+- 未知オプション、位置引数、または `--auto-submit --other` のような複数オプション: `unsupported argument` として中断し、Step 1 以降の payload 生成や GitHub write は行わない
+
+`--auto-submit` は Step 5 の最終投稿承認だけを省略するモードであり、Should Fix body inclusion prompt、canonical artifact validation、SARIF validation、Step 4.5 verifier pipeline、head SHA 再確認、二重投稿防止 gate は省略しない。
 
 ### Step 1: 対象ディレクトリの選定
 
@@ -281,7 +292,7 @@ test -f "${CLAUDE_PLUGIN_ROOT}/skills/lib/extract-diff-ranges.awk" && awk -f "${
 
 ### Step 3.75: Should Fix body inclusion opt-in (Step 5 第1ステップ)
 
-`findings.verified.json` primary path で `$should_fix_body_summary_candidates` が 1 件以上ある場合のみ、payload 構築前に以下をユーザーへ提示する。fallback path、または候補 0 件の場合はこのステップを表示せず、`$include_should_fix_body_summary=false` / `$included_should_fix_body_summary=[]` として Step 4 へ進む。
+`findings.verified.json` primary path で `$should_fix_body_summary_candidates` が 1 件以上ある場合のみ、payload 構築前に以下をユーザーへ提示する。ただし `$send_mode == auto_submit` の場合は Should Fix body inclusion prompt は表示しない。auto-submit では既定値として `$include_should_fix_body_summary=false` / `$included_should_fix_body_summary=[]` を設定し、Should Fix body summary は default: no のまま Step 4 へ進む。fallback path、または候補 0 件の場合もこのステップを表示せず、`$include_should_fix_body_summary=false` / `$included_should_fix_body_summary=[]` として Step 4 へ進む。
 
 ```
 非ブロッキング改善 (Should Fix) の上位 3 件を投稿 body に含めますか? (default: no)
@@ -294,7 +305,7 @@ test -f "${CLAUDE_PLUGIN_ROOT}/skills/lib/extract-diff-ranges.awk" && awk -f "${
 
 候補は `findings.verified.json` の `findings[]` 配列順の先頭 3 件までを表示する。ユーザーの応答が `yes` / `y` / `はい` 等の明示的な承認である場合のみ `$include_should_fix_body_summary=true` とし、候補先頭から最大 3 件を `$included_should_fix_body_summary` として保持する。それ以外（`no` / `n` / `いいえ` / 曖昧・無回答）は default の `$include_should_fix_body_summary=false` として扱い、Should Fix は body に含めない。
 
-この opt-in は投稿そのものの承認ではない。Step 4.5 の Codex セルフレビューで最終 payload を検証した後、Step 5 第2ステップで従来どおり投稿可否を確認する。
+この opt-in は投稿そのものの承認ではない。Step 4.5 の Codex セルフレビューで最終 payload を検証した後、interactive mode では Step 5 第2ステップで従来どおり投稿可否を確認する。auto_submit mode では opt-in も最終承認も停止せず、Should Fix は body に含めない。
 
 ### Step 4: payload の構築
 
@@ -354,7 +365,7 @@ payload は Write ツールで `~/claude-loop-pr-codex/$dir_name/review-payload.
 
 ### Step 4.5: 投稿前 verifier pipeline (Codex セルフレビュー)
 
-Claude が生成した `review-payload.json` と review 側が生成した local-only `findings.sarif` を Codex CLI に独立検証させ、投稿直前の検証を **4 stage verifier pipeline** として実行する。Step 5 第2ステップ（最終承認プロンプト）の直前で必ず実行する。`findings.verified.json` は必須入力であり、Markdown fallback は使わない。検証では `comments[]` への Must Fix 以外の混入、Should Fix body summary の対応関係、Nit の payload 混入、SARIF schema/side/post_policy 違反、行範囲外コメント、event/body 不整合を検出する。従来互換の `preflight-codex.md` / `preflight-codex.log` は維持し、新たに構造化結果 `preflight-result.json` を出力する。検証プロンプトには `$CLAUDE_PLUGIN_ROOT/schemas/findings.v1.json`、`$CLAUDE_PLUGIN_ROOT/schemas/sarif-2.1.0.json`、`$CLAUDE_PLUGIN_ROOT/schemas/preflight-result.v1.json`、および各 validator/generator の絶対パスを埋め込み、`--cd ~/claude-loop-pr-codex/$dir_name` 配下の相対 `schemas/` には依存しない。
+Claude が生成した `review-payload.json` と review 側が生成した local-only `findings.sarif` を Codex CLI に独立検証させ、投稿直前の検証を **4 stage verifier pipeline** として実行する。`--auto-submit` でもスキップしない。Step 5 第2ステップ（interactive の最終承認プロンプト、または auto_submit の自動続行判断）の直前で必ず実行する。`findings.verified.json` は必須入力であり、Markdown fallback は使わない。検証では `comments[]` への Must Fix 以外の混入、Should Fix body summary の対応関係、Nit の payload 混入、SARIF schema/side/post_policy 違反、行範囲外コメント、event/body 不整合を検出する。従来互換の `preflight-codex.md` / `preflight-codex.log` は維持し、新たに構造化結果 `preflight-result.json` を出力する。検証プロンプトには `$CLAUDE_PLUGIN_ROOT/schemas/findings.v1.json`、`$CLAUDE_PLUGIN_ROOT/schemas/sarif-2.1.0.json`、`$CLAUDE_PLUGIN_ROOT/schemas/preflight-result.v1.json`、および各 validator/generator の絶対パスを埋め込み、`--cd ~/claude-loop-pr-codex/$dir_name` 配下の相対 `schemas/` には依存しない。
 
 `findings.verified.json` 検証プロンプトには `$CLAUDE_PLUGIN_ROOT/schemas/findings.v1.json` の**絶対パス**（Step 2.5 で解決した `schema_path`）と同梱 validator の絶対パス（`validator_path`）を埋め込む。SARIF 検証には `sarif_schema_path` / `sarif_validator_path` / `sarif_generator_path` を使う。`preflight-result.json` 抽出/検証には `preflight_schema_path` と `preflight_validator_path` を使い、Codex の出力崩れを `PASS` と誤判定しない。
 
@@ -530,7 +541,7 @@ RESULT_JSON の必須形（実際の出力ではこの object を fenced JSON �
 
 - いつ使うか: `preflight-prompt.md` を Write ツールで作成した直後、Step 5 の承認プロンプト前に必ず実行する
 - 判定条件: `preflight-codex.md` の最後の非空行に `VERDICT: PASS` または `VERDICT: FAIL` があり、最後の `### RESULT_JSON` 直後に fenced JSON が 1 個だけあり、その `verdict` と一致し、次の `preflight-result.json` 抽出/検証コマンドが終了コード 0 で成功する
-- 次アクション: `preflight-result.json.verdict == "PASS"` なら Step 5 へ進む。`FAIL` なら下記の失敗時処理へ進む。Codex 実行または JSON 抽出/検証が失敗した場合は FAIL と同等に扱い、payload 修正では直せない出力崩れとして再試行対象にする（最大 3 回）
+- 次アクション: `preflight-result.json.verdict == "PASS"` かつ `preflight-codex.md` の `VERDICT: PASS` が確認できた場合だけ Step 5 へ進む。`FAIL` なら下記の失敗時処理へ進む。Codex 実行または JSON 抽出/検証が失敗した場合は FAIL と同等に扱い、payload 修正では直せない出力崩れとして再試行対象にする（最大 3 回）
 - prompt は `exec` の `-` 引数と stdin redirection で渡す。Bash ツールへ渡すコマンド文字列に prompt 本文を直接埋め込んではならない
 
 ```bash
@@ -591,7 +602,7 @@ python3 $preflight_validator_path --schema $preflight_schema_path --from-markdow
 
 ### Step 5: 承認プロンプト
 
-Step 3.75 の Should Fix body inclusion opt-in（候補がある場合のみ表示）と Step 4.5 の Codex セルフレビューを終えた後、投稿前の最終確認として以下のサマリをテキストで提示し、明示的な承認を求める:
+Step 3.75 の Should Fix body inclusion opt-in（interactive かつ候補がある場合のみ表示）と Step 4.5 の Codex セルフレビューを終えた後、投稿前の最終確認として以下のサマリをテキストで提示する。`$send_mode=interactive` では明示的な承認を求める。`$send_mode=auto_submit` では最終投稿承認だけをスキップし、このサマリを表示したうえで承認入力なしで Step 5.5 へ進む:
 
 ```
 対象 PR: <$pr_url> (<$title>)
@@ -611,13 +622,13 @@ payload: ~/claude-loop-pr-codex/<$dir_name>/review-payload.json
 preflight result: ~/claude-loop-pr-codex/<$dir_name>/preflight-result.json
 移動先 (投稿後): ~/claude-loop-pr-codex/sent/<$dir_name>-<$head_sha_short>
 
-この内容で投稿してよろしいですか？ (yes/no)
+この内容で投稿してよろしいですか？ (yes/no; interactive のみ。auto_submit は承認入力なしで続行)
 ```
 
 `$out_of_range_comments` が空の場合も、サマリ行は `行範囲外で除外したインラインコメント: 0 件` として表示する。除外したエントリの箇条書きは 1 件以上ある場合のみ表示する。
 fallback path では `Should Fix body summary: included no (0/0 件、default: no)`、`Nit artifact: nit: 0 件` と表示する。primary path で `$nit_findings` が 1 件以上ある場合は `nits.md` のパスを表示し、0 件なら `nit: 0 件` と表示する。
 
-ユーザーの応答が `yes` / `y` / `はい` 等の明示的な承認である場合のみ Step 6 に進む。それ以外（`no` / `n` / `いいえ` / 曖昧・無回答）の場合は処理を中断し、以下を報告して終了する:
+interactive mode では、ユーザーの応答が `yes` / `y` / `はい` 等の明示的な承認である場合のみ Step 5.5 に進む。それ以外（`no` / `n` / `いいえ` / 曖昧・無回答）の場合は処理を中断し、以下を報告して終了する。auto_submit mode ではこの承認入力を行わず、Step 4.5 PASS 後に Step 5.5 の safety gate へ進む:
 
 - 投稿はスキップした旨
 - payload ファイルは保持されている旨 (`~/claude-loop-pr-codex/$dir_name/review-payload.json`)
@@ -626,9 +637,37 @@ fallback path では `Should Fix body summary: included no (0/0 件、default: n
 
 承認拒否時は `sent/` への移動は行わない。
 
+### Step 5.5: 投稿直前 safety gate
+
+Step 6 の GitHub write の直前に、interactive / auto_submit のどちらでも以下を必ず実行する。これにより `--auto-submit` でも古い review を自動投稿しない。
+
+- いつ使うか: Step 5 で interactive の承認を得た直後、または auto_submit で最終投稿承認だけをスキップした直後
+- 判定条件: `review-response.json` が存在しない、または存在しても `.html_url` が空である。`.html_url` が既に存在する場合は二重投稿の可能性があるため中断する
+- 次アクション: 成功なら現在の PR head 再取得へ。失敗なら Step 8 の失敗報告へ進み、Step 6 は実行しない
+
+```bash
+test ! -f ~/claude-loop-pr-codex/$dir_name/review-response.json || jq -e '(.html_url // "") == ""' ~/claude-loop-pr-codex/$dir_name/review-response.json
+```
+
+- いつ使うか: 二重投稿防止 gate の直後
+- 判定条件: 標準出力が現在の PR head SHA。`gh api "/repos/$org/$repository/pulls/$pr_number" --jq '.head.sha'` で取得する
+- 次アクション: 出力を `$current_head_sha` として保持し、次の比較テンプレートへ進む
+
+```bash
+gh api "/repos/$org/$repository/pulls/$pr_number" --jq '.head.sha'
+```
+
+- いつ使うか: `$current_head_sha` を取得した直後
+- 判定条件: `$current_head_sha` が `metadata.json.head_sha`（Step 2 で保持した `$head_sha`）と一致する
+- 次アクション: 一致すれば Step 6 へ。不一致ならレビュー生成後に追加 commit が入ったため中断し、古い review を自動投稿しない
+
+```bash
+test "$current_head_sha" = "$head_sha"
+```
+
 ### Step 6: `gh api` で投稿
 
-- いつ使うか: Step 5 でユーザーから明示的な承認を得た直後に実行する
+- いつ使うか: Step 5.5 の二重投稿防止 gate と head SHA 再確認が成功した直後に実行する
 - 判定条件: 終了コードが 0、かつ出力された `review-response.json` に `.html_url` が含まれる
 - 次アクション: 成功なら Step 7 へ進む。非ゼロ終了なら Step 8 の失敗報告へ遷移し、`sent/` への移動は行わない
 
@@ -726,6 +765,9 @@ test ! -d ~/claude-loop-pr-codex/$dir_name && test -d ~/claude-loop-pr-codex/sen
 - Step 3.5 で `pr.diff.ranges.txt` が空 → インラインコメント候補はすべて body 末尾の `## 行コメント不可 (diff 範囲外)` に移動し、`comments` 配列には含めない
 - Step 4.5 の Codex verifier が `RESULT_JSON` を出力しない、最後の `RESULT_JSON` 見出しが dangling、`RESULT_JSON` 後に追加 JSON fence / 余分な本文を出す、final `VERDICT:` line と JSON verdict が一致しない、または `tasks/validate_preflight_result.py` が `preflight-result.json` validation に失敗 → 構造化 preflight 失敗として最大 3 回まで再試行し、解消しなければ投稿を中止
 - Step 4.5 の `preflight-result.json.verdict == "FAIL"` かつ `requires_human_count > 0` → review 側の再生成が必要として即中断し、`preflight-result.json` / `preflight-codex.md` のパスと違反一覧を提示
+- Step 0 で未知オプションまたは複数オプション → `unsupported argument` として中断し、payload 生成や GitHub write は行わない
+- Step 5.5 で `review-response.json.html_url` が既に存在 → 二重投稿防止のため中断し、`gh api` は実行しない
+- Step 5.5 で現在の PR head SHA が `metadata.json.head_sha` と一致しない → レビュー生成後に追加 commit が入ったため中断し、古い review を自動投稿しない
 - `gh api` 422/403/404 → Step 8 の失敗報告で分岐し、`sent/` 移動は行わない
 - Step 7 で `sent/$dir_name-$head_sha_short/` がすでに存在 → ユーザーに通知して処理中断（投稿はすでに完了している点に注意）。`sent/` 移動は行わず、`review-response.json` を残した状態で終了する
 - Step 7 の移動完了検証が失敗 → `mv` が silent に失敗した可能性があるため Step 8 の失敗報告で手動確認を促し、`review-response.json` を残した状態で終了する
@@ -733,7 +775,7 @@ test ! -d ~/claude-loop-pr-codex/$dir_name && test -d ~/claude-loop-pr-codex/sen
 
 ## 実装上の制約
 
-本スキルは対話実行を前提とし、通常の permission mode で使うことを想定する（`/loop` には載せない）。ただし既存 `/pr-codex:review` と統一感を持たせるため、以下の原則を踏襲する:
+本スキルは通常の permission mode で使うことを想定する。引数なしは対話実行、`--auto-submit` は scheduler / `/loop` など非対話運用向けに最終投稿承認だけをスキップする。どちらのモードでも既存 `/pr-codex:review` と統一感を持たせるため、以下の原則を踏襲する:
 
 1. 各テンプレートは 1 テンプレート = 1 シェル実行単位として扱う
 2. テンプレートの改変は変数置換のみ許可する。フラグ、引数順、引用符、リダイレクトはテンプレート記載どおりに使う
@@ -744,7 +786,7 @@ test ! -d ~/claude-loop-pr-codex/$dir_name && test -d ~/claude-loop-pr-codex/sen
 7. `mv` は `sent/` への移動以外では使わない
 8. `gh` の write 系操作は `gh api --method POST .../reviews` のみとし、`gh pr review` / `gh pr comment` / `gh pr merge` などは使わない
 9. 1 回の実行で処理する対象ディレクトリは 1 件のみとする
-10. 投稿前の Step 5 承認プロンプトは必須。自動投稿はしない。Should Fix body summary は default no とし、Step 3.75 で明示 opt-in された場合だけ上位 3 件を body に含める
+10. 投稿前の Step 5 承認プロンプトは interactive mode では必須。`--auto-submit` では最終投稿承認だけをスキップできるが、Step 5.5 の二重投稿防止と head SHA 再確認は必須。Should Fix body summary は default no とし、interactive の Step 3.75 で明示 opt-in された場合だけ上位 3 件を body に含める。auto_submit mode では Should Fix prompt を表示せず default no を使う
 11. Step 3 の `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings.py ...` を **必ず**実行する。`findings.verified.json` 欠落または validator 失敗時に payload 生成や Markdown fallback へ進んではならない
 12. Step 4.5 の verifier pipeline は **必須**。スキップしてはならない。`preflight-result.json.verdict == "PASS"` と `preflight-codex.md` の `VERDICT: PASS` を確認するまで Step 5 に進まない。schema 検証観点では `$CLAUDE_PLUGIN_ROOT/schemas/findings.v1.json`、`$CLAUDE_PLUGIN_ROOT/schemas/sarif-2.1.0.json`、`$CLAUDE_PLUGIN_ROOT/schemas/preflight-result.v1.json` の絶対パスを prompt / 抽出コマンドに埋め込み、`--cd` 配下の相対 `schemas/` には依存しない
 

@@ -107,11 +107,18 @@ Stage ごとの責務、input/output artifact、halting 条件は [`skills/revie
 
 ## レビューの投稿
 
-`/pr-codex:review` は `review.md` をローカル生成するのみで、PRへの投稿は行わない。投稿は別スキル `/pr-codex:send` を手動で実行する。
+`/pr-codex:review` は `review.md` をローカル生成するのみで、PRへの投稿は行わない。投稿は別スキル `/pr-codex:send` で実行する。
 
 ```
 /pr-codex:send
+/pr-codex:send --auto-submit
 ```
+
+- `/pr-codex:send`: 従来どおり GitHub Reviews API の payload サマリを表示し、最終承認 prompt でユーザーの明示承認を得てから投稿する
+- `/pr-codex:send --auto-submit`: Step 4.5 の verifier pipeline が PASS した後、最終承認 prompt なしで投稿へ進む。unknown option は unsupported argument として中断する
+- `--auto-submit` でも Step 4.5 の verifier pipeline はスキップしない。canonical artifact validation、Must Fix 件数整合、diff range、`findings.sarif`、`preflight-result.json.verdict == PASS` と `preflight-codex.md` の `VERDICT: PASS` は必須
+- `--auto-submit` では Should Fix body summary は default no とし、Step 3.75 の Should Fix opt-in prompt では停止しない。Should Fix の自動同梱は別オプションで扱う
+- 投稿直前に現在の PR head を再取得して `metadata.json.head_sha` と比較し、不一致なら古い review を自動投稿しない。`review-response.json` に `.html_url` が既にある場合も二重投稿防止のため中断する
 
 ## 投稿後フィードバックの学習
 
@@ -142,14 +149,15 @@ python3 $CLAUDE_PLUGIN_ROOT/tasks/learn_feedback.py --input feedback-snapshot.js
 
 1. `~/claude-loop-pr-codex/` 配下から `status.json` が `state:completed` でかつ `findings.verified.json` / `review.md` が存在するディレクトリを1件選定する（名前昇順の先頭1件）
 2. `findings.verified.json` を必須の一次入力として `Must Fix` / `Should Fix` / `Nit` の投稿方針を抽出し、`review.md` から `## 総評` / `## 良い点` を body に使う（F13 以降は Markdown parser fallback へ切り替えず、欠落・schema 不整合なら中断する。root-cause cluster がない場合は Must Fix 件数も完全一致を要求し、cluster がある場合は canonical / Markdown / SARIF は全 finding 件数、`review-payload.json` は representative comment 件数として検証する）
-3. `Should Fix` のうち `post_policy: body_summary` の候補がある場合、上位 3 件を body の `## 非ブロッキング改善 (Should Fix)` に含めるかを確認する（default: no）
+3. `Should Fix` のうち `post_policy: body_summary` の候補がある場合、上位 3 件を body の `## 非ブロッキング改善 (Should Fix)` に含めるかを確認する（default: no）。`--auto-submit` 時はこの prompt では停止せず、Should Fix body summary は default no とする
 4. `Nit` は PR に投稿せず、primary path では `nits.md` にローカル artifact として書き出す（0 件なら作成しない）
 5. Step 4.5 の verifier pipeline を schema / range / semantic / payload consistency の 4 stage で実行し、従来互換の `preflight-codex.md` に加えて `preflight-result.json` を保存する。schema stage では `findings.sarif` の schema validation と `findings.verified.json` ↔ `review.md` ↔ `review-payload.json` ↔ `findings.sarif` の Must Fix count 整合性を検証する。root-cause cluster がある場合、canonical / Markdown / SARIF は全 Must Fix finding 数を保持し、`review-payload.json` は representative inline comment 数へ減ることを許可する。semantic stage では Must Fix の反証、Should Fix body summary の対応関係、Nit の payload 混入を検証する
-6. GitHub Reviews API への payload サマリをユーザーに提示し、明示的な承認を得る
-7. 承認後、`gh api --method POST .../reviews` で投稿（`event` は Must Fix ありなら `REQUEST_CHANGES`、なければ `COMMENT`。`APPROVE` は自動では出さない）
-8. 投稿成功後、対象ディレクトリを `~/claude-loop-pr-codex/sent/$org-$repo-$pr-$head_sha_short/` に移動する（同一 PR でも HEAD 更新後の再投稿履歴が衝突しないよう、`head_sha` の先頭 7 文字を suffix に付ける）
+6. GitHub Reviews API への payload サマリをユーザーに提示する。引数なしは明示的な承認を得る。`--auto-submit` は最終承認 prompt なしで次へ進む
+7. 投稿直前に `review-response.json` の `.html_url` が未設定であることを確認し、現在の PR head を再取得して `metadata.json.head_sha` と一致することを確認する
+8. 承認後または `--auto-submit` の safety gate 通過後、`gh api --method POST .../reviews` で投稿（`event` は Must Fix ありなら `REQUEST_CHANGES`、なければ `COMMENT`。`APPROVE` は自動では出さない）
+9. 投稿成功後、対象ディレクトリを `~/claude-loop-pr-codex/sent/$org-$repo-$pr-$head_sha_short/` に移動する（同一 PR でも HEAD 更新後の再投稿履歴が衝突しないよう、`head_sha` の先頭 7 文字を suffix に付ける）
 
-`/loop` には載せず、対話実行で使う。1回の実行で1件のみ処理する。
+対話実行では `/pr-codex:send` を使う。scheduler / `/loop` からレビュー生成後の投稿まで進めたい場合だけ `/pr-codex:send --auto-submit` を使う。1回の実行で1件のみ処理する。
 
 ### Should Fix / Nit の取り扱い
 
