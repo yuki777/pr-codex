@@ -1044,7 +1044,7 @@ def validate_escape_rule_docs() -> None:
 
     preprocessing_line = single_line_containing(
         text,
-        "{REVIEW_CRITERIA}` / `{RUN_PLAN_GUIDANCE}` / `{DEPTH_GUIDANCE}` を bash double-quote 内へ差し込む前",
+        "{REVIEW_CRITERIA}` / `{RUN_PLAN_GUIDANCE}` / `{DEPTH_GUIDANCE}` / `{BEAR_REVIEW_GUIDANCE}` を bash double-quote 内へ差し込む前",
     )
     constraint_line = single_line_containing(
         text,
@@ -1052,7 +1052,7 @@ def validate_escape_rule_docs() -> None:
     )
     preprocessing_rule = extract_escape_rule(
         preprocessing_line,
-        r"3つとも (?P<rule>.+?) の順でエスケープする",
+        r"4つとも (?P<rule>.+?) の順でエスケープする",
         "Step 4 preprocessing",
     )
     constraint_rule = extract_escape_rule(
