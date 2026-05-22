@@ -305,6 +305,7 @@ mv ~/claude-loop-pr-codex/sent/yuki777-pr-codex-24 \
 - hunter → verifier 境界の debug artifact は `schemas/findings.candidates.v1.json` (JSON Schema Draft 2020-12) で定義する。`findings.candidates.json` は `id == fingerprint` や 4軸 / evidence / posting policy を要求せず、verifier が canonical findings へ揃える
 - canonical runtime artifact は `schemas/findings.v1.json` (JSON Schema Draft 2020-12) で定義する
 - F5 の round artifact は `schemas/review-rounds.v1.json` で定義し、`review-rounds.json` に `max_rounds` / `time_budget_ms` / `no_new_evidence_rounds` / `repeated_contradiction_limit` と round metrics を保存する
+- review-rounds カウンタでは、`rounds[].output_candidates_count` と `metrics.posted_candidate_count` はどちらも remaining ACTIVE candidates を表す。`posted_candidate_count` は最終 round の `output_candidates_count` であり、名前に反して GitHub に投稿した件数ではない。また、`findings.verified.json の件数ではない`（canonical findings の採用数ではない）
 - fixture oracle は `schemas/expected-findings.v1.json` で定義する。runtime artifact とは分離し、`expected_outcome` / `acceptable_overrides` / `strictness_profile` / `minimum_evidence_level` など採点用メタデータを保持する
 - fixture scoring の出力は `schemas/score-report.v1.json`、M1→M2 gate report は `schemas/m1-m2-gate.v1.json` で定義する
 - CI read-only gate の出力は `schemas/ci-status.v1.json` で定義し、`read_only: true` と `policy.github_writes/rerun/cancel/raw_logs_persisted: false` を固定する

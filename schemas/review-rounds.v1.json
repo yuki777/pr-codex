@@ -92,8 +92,16 @@
           "minItems": 1,
           "items": {"enum": ["refine", "challenge", "verify"]}
         },
-        "input_candidates_count": {"type": "integer", "minimum": 0},
-        "output_candidates_count": {"type": "integer", "minimum": 0},
+        "input_candidates_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of ACTIVE candidates entering this refine/challenge/verify round. This is not the cumulative number of findings discovered across all rounds."
+        },
+        "output_candidates_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of candidates remaining ACTIVE in the loop AFTER this round. Compute as input_candidates_count - (verifier_pass_count + verifier_fail_count + insufficient_evidence_count) + new active candidates discovered during the round. Set to 0 when all candidates were verified/rejected and no active candidates remain."
+        },
         "new_evidence_count": {"type": "integer", "minimum": 0},
         "verifier_pass_count": {"type": "integer", "minimum": 0},
         "verifier_fail_count": {"type": "integer", "minimum": 0},
@@ -170,7 +178,11 @@
       ],
       "properties": {
         "total_rounds": {"type": "integer", "minimum": 0},
-        "posted_candidate_count": {"type": "integer", "minimum": 0},
+        "posted_candidate_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Legacy field name for remaining ACTIVE candidates at the end of the loop (= output_candidates_count of the final round). NOT the count of findings included in findings.verified.json, review.md, or the GitHub review payload."
+        },
         "verifier_fail_candidates": {"type": "integer", "minimum": 0},
         "suppressed_candidate_count": {"type": "integer", "minimum": 0},
         "no_new_evidence_rounds": {"type": "integer", "minimum": 0},
