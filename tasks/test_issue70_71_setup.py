@@ -85,6 +85,19 @@ class Issue71SarifJsonschemaSetupTest(unittest.TestCase):
 
         self.assertEqual(errors, [])
 
+    def test_sarif_validator_builtin_shape_checks_cover_emitted_sarif_fields_without_jsonschema(self) -> None:
+        schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+        findings = canonical_artifact()
+        sarif = build_sarif(findings, metadata=metadata(), ranges={"src/App.php": [(1, 20)]})
+        sarif["runs"][0]["tool"]["driver"]["informationUri"] = 123
+        sarif["runs"][0]["automationDetails"]["id"] = 456
+
+        with mock.patch.object(sarif_validator, "jsonschema", None):
+            errors = sarif_validator.validate_findings_sarif(schema, sarif, findings=findings)
+
+        self.assertTrue(any("tool.driver.informationUri" in error for error in errors), errors)
+        self.assertTrue(any("automationDetails.id" in error for error in errors), errors)
+
     def test_readme_documents_pep668_safe_jsonschema_install_options(self) -> None:
         text = README.read_text(encoding="utf-8")
         for snippet in (

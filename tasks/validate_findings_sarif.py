@@ -171,9 +171,8 @@ def validate_official_sarif_schema(schema: Any, data: Any) -> list[str]:
 
     jsonschema enables the full official SARIF schema check, but the command is
     often run inside plugin shells where optional Python packages are not yet
-    installed.  In that case, do not fail before pr-codex's stdlib shape and
-    cross-artifact checks can run; those checks still enforce the fields that
-    generate_findings_sarif.py emits and that send/review depend on.
+    installed. In that case, validate_sarif_shape still fail-closes on every
+    field that generate_findings_sarif.py emits and that send/review depend on.
     """
     if jsonschema is None:
         return []
@@ -208,6 +207,8 @@ def validate_sarif_shape(data: Any) -> list[str]:
             errors.append("$.runs[0].tool.driver.name: must be a non-empty string")
         if not is_non_empty_string(driver.get("version")):
             errors.append("$.runs[0].tool.driver.version: must be a non-empty string")
+        if not is_non_empty_string(driver.get("informationUri")):
+            errors.append("$.runs[0].tool.driver.informationUri: must be a non-empty string")
         rules = driver.get("rules")
         expected_rule_ids = [f"pr-codex/{category}" for category in CATEGORY_RULES]
         if not isinstance(rules, list):
@@ -234,6 +235,11 @@ def validate_sarif_shape(data: Any) -> list[str]:
             errors.append("$.runs[0].versionControlProvenance[0].repositoryUri: must be a non-empty string")
         if not is_non_empty_string(provenance[0].get("revisionId")):
             errors.append("$.runs[0].versionControlProvenance[0].revisionId: must be a non-empty string")
+    automation = run.get("automationDetails")
+    if not isinstance(automation, dict):
+        errors.append("$.runs[0].automationDetails: must be an object")
+    elif not is_non_empty_string(automation.get("id")):
+        errors.append("$.runs[0].automationDetails.id: must be a non-empty string")
     results = run.get("results")
     if not isinstance(results, list):
         errors.append("$.runs[0].results: must be an array")
