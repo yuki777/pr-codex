@@ -650,7 +650,9 @@ echo "$CLAUDE_PLUGIN_ROOT"
 
 Claude Code と Codex CLI の両方で独立にレビューし、結果を統合する。
 
-**4a と 4b は並行実行する。** 各ツールは独立した clone ディレクトリを使うため競合しない。両方の Bash コマンドを `run_in_background: true` で同時に発行し、両方の完了を待ってから 4c に進む。Step 4 前処理で読み込んだ観点本文で `{REVIEW_CRITERIA}` / `{RUN_PLAN_GUIDANCE}` / `{DEPTH_GUIDANCE}` を置換した **完全体のコマンド文字列**を Bash ツールへ渡すこと。
+**4a と 4b は並行実行する。** 各ツールは独立した clone ディレクトリを使うため競合しない。両方の Bash コマンドを `run_in_background: true` で同時に発行し、両方の完了通知を待ってから 4c に進む。Step 4 前処理で読み込んだ観点本文で `{REVIEW_CRITERIA}` / `{RUN_PLAN_GUIDANCE}` / `{DEPTH_GUIDANCE}` を置換した **完全体のコマンド文字列**を Bash ツールへ渡すこと。
+
+Claude Code Bash tool の foreground timeout 上限は `600000` ms。`estimated_timeout_ms` / `review_loop.time_budget_ms` は実行予算であり、Bash tool の foreground timeout 引数として渡さない。Step 4a / 4b で 20 分級の hunter 実行を許す場合は、foreground timeout を `1200000` に上げるのではなく `run_in_background: true` で起動し、両方の完了通知を待つ。
 
 #### 4a: Claude Code レビュー
 
@@ -659,7 +661,7 @@ Claude Code と Codex CLI の両方で独立にレビューし、結果を統合
 - いつ使うか: Step 3 完了後に 4b と同時に実行する（`run_in_background: true`）
 - 判定条件: `claude-review.md` が生成され、終了コードが 0
 - 次アクション: 4b と合わせて両方完了したら 4c へ、失敗または timeout なら Step 5 の failed 更新へ進む
-- timeout: `1200000`
+- Bash tool timeout: foreground timeout 引数は指定しない。timeout 上限 600000 ms を超える 20 分予算は `run_in_background: true` と完了通知待ちで扱う
 
 ```bash
 env -u CLAUDECODE claude -p "
@@ -707,7 +709,7 @@ pr.diff が存在しない／空の場合は 'PR_DIFF_UNAVAILABLE' の1行だけ
 - いつ使うか: Step 3 完了後に 4a と同時に実行する（`run_in_background: true`）
 - 判定条件: `codex-review.md` が生成され、終了コードが 0
 - 次アクション: 4a と合わせて両方完了したら 4c へ、失敗または timeout なら Step 5 の failed 更新へ進む
-- timeout: `1200000`
+- Bash tool timeout: foreground timeout 引数は指定しない。timeout 上限 600000 ms を超える 20 分予算は `run_in_background: true` と完了通知待ちで扱う
 
 ```bash
 codex \
@@ -1149,7 +1151,7 @@ F11 の regression eval (`score_fixture.py` / `m1_m2_gate.py`) は通常の `/pr
    - `pr.diff` は Step 3 の `gh pr diff` の標準出力を `>` でリダイレクトして作成する
    - `pr.diff.ranges.txt` は Step 3 の `awk` の標準出力を `>` でリダイレクトして作成する
    - `claude-review.md` / `codex-review.md` / `claude.log` / `codex.log` は Step 4a / 4b の標準出力・標準エラーを `>` / `2>` でリダイレクトして作成する
-7. Step 4a / 4b の timeout は必ず `1200000` に固定する
+7. Step 4a / 4b は `run_in_background: true` で起動し、foreground timeout 引数を `1200000` に固定してはならない。Claude Code Bash tool の foreground timeout 上限 600000 ms を超える実行予算は `run-plan.json.estimated_timeout_ms` / `review_loop.time_budget_ms` として扱い、完了通知待ちで管理する
 8. テンプレートに明示された `git fetch` / `git checkout FETCH_HEAD` / `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_candidates.py ...` / `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings.py ...` / `python3 $CLAUDE_PLUGIN_ROOT/tasks/generate_findings_sarif.py ...` / `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings_sarif.py ...` / `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_status.py ...` / temp file から final artifact への `mv` / 成果物ファイル作成以外の状態変更操作は実行しない。禁止例: `git push` / `git merge` / `git reset --*` / `git clean -fd[x]` / `git stash` / `git commit` / `git tag` / `git branch -D`、`rm -rf` 系、`gh pr` / `gh issue` の write 操作、および GitHub / Backlog / DocBase の write 系 MCP ツール
 9. 1回の実行で選定・処理する PR は 1 件のみとする
 10. Step 4a / 4b のプロンプト中に含まれる `{REVIEW_CRITERIA}` / `{RUN_PLAN_GUIDANCE}` / `{DEPTH_GUIDANCE}` プレースホルダは、Step 4 前処理で Read した `REVIEW_CRITERIA.md` と `run-plan.json` を元に Claude 側で置換したうえで、Bash ツールに渡す完全体のコマンド文字列として使う。`{REVIEW_CRITERIA}` / `{RUN_PLAN_GUIDANCE}` / `{DEPTH_GUIDANCE}` のいずれも bash double-quote 内で安全になるよう、差し込み前に **`\` → `\\`、`"` → `\"`、`$` → `\$`、`` ` `` → `\``** の順でエスケープする。シェルでのコマンド置換 (`$()`) やヒアドキュメントは使わない
