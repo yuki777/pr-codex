@@ -29,6 +29,28 @@ The user invoked this with: `$ARGUMENTS`
 `~/claude-loop-pr-codex/` をワーキングディレクトリとしてClaude Codeを起動する:
 
 ```bash
+plugin_root="${CLAUDE_PLUGIN_ROOT:-$(python3 - <<'PY'
+import os
+from pathlib import Path
+roots = []
+if os.environ.get("CLAUDE_CODE_PLUGIN_CACHE_DIR"):
+    roots.append(Path(os.environ["CLAUDE_CODE_PLUGIN_CACHE_DIR"]).expanduser())
+if os.environ.get("CLAUDE_CONFIG_DIR"):
+    roots.append(Path(os.environ["CLAUDE_CONFIG_DIR"]).expanduser() / "plugins" / "cache")
+roots.append(Path.home() / ".claude" / "plugins" / "cache")
+markers = []
+for root in roots:
+    markers.extend(root.glob("**/pr-codex/tasks/validate_findings.py"))
+if not markers:
+    raise SystemExit("CLAUDE_PLUGIN_ROOT is unset and pr-codex plugin root was not found")
+marker = max((m.resolve() for m in markers), key=lambda p: (p.stat().st_mtime_ns, str(p)))
+print(marker.parents[1])
+PY
+)}"
+test -d "$plugin_root/tasks" && test -d "$plugin_root/schemas"
+```
+
+```bash
 cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
 ```
 
@@ -242,10 +264,28 @@ install -d ~/claude-loop-pr-codex/$org-$repository-$pr_number
 - 次アクション: `ci-status.json.state` を review/send/developer bridge の判断材料として保持する。`failure` / `pending` は reviewer へコンテキストとして渡すが、この step 自体で投稿や rerun はしない
 
 ```bash
+plugin_root="${CLAUDE_PLUGIN_ROOT:-$(python3 - <<'PY'
+import os
+from pathlib import Path
+roots = []
+if os.environ.get("CLAUDE_CODE_PLUGIN_CACHE_DIR"):
+    roots.append(Path(os.environ["CLAUDE_CODE_PLUGIN_CACHE_DIR"]).expanduser())
+if os.environ.get("CLAUDE_CONFIG_DIR"):
+    roots.append(Path(os.environ["CLAUDE_CONFIG_DIR"]).expanduser() / "plugins" / "cache")
+roots.append(Path.home() / ".claude" / "plugins" / "cache")
+markers = []
+for root in roots:
+    markers.extend(root.glob("**/pr-codex/tasks/validate_findings.py"))
+if not markers:
+    raise SystemExit("CLAUDE_PLUGIN_ROOT is unset and pr-codex plugin root was not found")
+marker = max((m.resolve() for m in markers), key=lambda p: (p.stat().st_mtime_ns, str(p)))
+print(marker.parents[1])
+PY
+)}"
 gh api repos/$org/$repository/pulls/$pr_number > ~/claude-loop-pr-codex/$org-$repository-$pr_number/ci-pull.json && \
 gh pr view $pr_number --repo $org/$repository --json statusCheckRollup --jq '.statusCheckRollup' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/ci-status-rollup.json && \
 gh api "repos/$org/$repository/actions/runs?branch=$branch&head_sha=$head_sha&per_page=10" > ~/claude-loop-pr-codex/$org-$repository-$pr_number/ci-workflow-runs.json && \
-python3 $CLAUDE_PLUGIN_ROOT/tasks/ci_status.py \
+python3 "$plugin_root/tasks/ci_status.py" \
   --pull-json ~/claude-loop-pr-codex/$org-$repository-$pr_number/ci-pull.json \
   --status-check-rollup-json ~/claude-loop-pr-codex/$org-$repository-$pr_number/ci-status-rollup.json \
   --workflow-runs-json ~/claude-loop-pr-codex/$org-$repository-$pr_number/ci-workflow-runs.json \
@@ -259,10 +299,28 @@ failed job log を読む必要がある場合も read-only download に限定し
 - 旧 `gh` fallback: `gh pr view --json statusCheckRollup` が使えない場合は、`gh api --paginate repos/$org/$repository/commits/$head_sha/check-runs?per_page=100`（または combined status の `statuses`）を `--status-check-rollup-json` に渡して同じ helper で正規化する。check-runs API はページング対象なので、pagination なしで最初のページだけを gate 入力にしてはならない。
 
 ```bash
+plugin_root="${CLAUDE_PLUGIN_ROOT:-$(python3 - <<'PY'
+import os
+from pathlib import Path
+roots = []
+if os.environ.get("CLAUDE_CODE_PLUGIN_CACHE_DIR"):
+    roots.append(Path(os.environ["CLAUDE_CODE_PLUGIN_CACHE_DIR"]).expanduser())
+if os.environ.get("CLAUDE_CONFIG_DIR"):
+    roots.append(Path(os.environ["CLAUDE_CONFIG_DIR"]).expanduser() / "plugins" / "cache")
+roots.append(Path.home() / ".claude" / "plugins" / "cache")
+markers = []
+for root in roots:
+    markers.extend(root.glob("**/pr-codex/tasks/validate_findings.py"))
+if not markers:
+    raise SystemExit("CLAUDE_PLUGIN_ROOT is unset and pr-codex plugin root was not found")
+marker = max((m.resolve() for m in markers), key=lambda p: (p.stat().st_mtime_ns, str(p)))
+print(marker.parents[1])
+PY
+)}"
 gh api repos/$org/$repository/pulls/$pr_number > ~/claude-loop-pr-codex/$org-$repository-$pr_number/ci-pull.json && \
 set -o pipefail && gh api --paginate "repos/$org/$repository/commits/$head_sha/check-runs?per_page=100" | jq -sc '{check_runs: [.[].check_runs[]?]}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/ci-status-rollup.json && \
 gh api "repos/$org/$repository/actions/runs?branch=$branch&head_sha=$head_sha&per_page=10" > ~/claude-loop-pr-codex/$org-$repository-$pr_number/ci-workflow-runs.json && \
-python3 $CLAUDE_PLUGIN_ROOT/tasks/ci_status.py \
+python3 "$plugin_root/tasks/ci_status.py" \
   --pull-json ~/claude-loop-pr-codex/$org-$repository-$pr_number/ci-pull.json \
   --status-check-rollup-json ~/claude-loop-pr-codex/$org-$repository-$pr_number/ci-status-rollup.json \
   --workflow-runs-json ~/claude-loop-pr-codex/$org-$repository-$pr_number/ci-workflow-runs.json \
@@ -361,10 +419,28 @@ gh pr diff $pr_number --repo $org/$repository > ~/claude-loop-pr-codex/$org-$rep
 - 次アクション: status/metadata 作成へ進む
 
 ```bash
-test -f "${CLAUDE_PLUGIN_ROOT}/skills/lib/extract-diff-ranges.awk" && awk -f "${CLAUDE_PLUGIN_ROOT}/skills/lib/extract-diff-ranges.awk" ~/claude-loop-pr-codex/$org-$repository-$pr_number/pr.diff > ~/claude-loop-pr-codex/$org-$repository-$pr_number/pr.diff.ranges.txt
+plugin_root="${CLAUDE_PLUGIN_ROOT:-$(python3 - <<'PY'
+import os
+from pathlib import Path
+roots = []
+if os.environ.get("CLAUDE_CODE_PLUGIN_CACHE_DIR"):
+    roots.append(Path(os.environ["CLAUDE_CODE_PLUGIN_CACHE_DIR"]).expanduser())
+if os.environ.get("CLAUDE_CONFIG_DIR"):
+    roots.append(Path(os.environ["CLAUDE_CONFIG_DIR"]).expanduser() / "plugins" / "cache")
+roots.append(Path.home() / ".claude" / "plugins" / "cache")
+markers = []
+for root in roots:
+    markers.extend(root.glob("**/pr-codex/tasks/validate_findings.py"))
+if not markers:
+    raise SystemExit("CLAUDE_PLUGIN_ROOT is unset and pr-codex plugin root was not found")
+marker = max((m.resolve() for m in markers), key=lambda p: (p.stat().st_mtime_ns, str(p)))
+print(marker.parents[1])
+PY
+)}"
+test -f "$plugin_root/skills/lib/extract-diff-ranges.awk" && awk -f "$plugin_root/skills/lib/extract-diff-ranges.awk" ~/claude-loop-pr-codex/$org-$repository-$pr_number/pr.diff > ~/claude-loop-pr-codex/$org-$repository-$pr_number/pr.diff.ranges.txt
 ```
 
-`${CLAUDE_PLUGIN_ROOT}` が Bash subprocess に渡らず `test -f` が失敗した場合は、`echo "$CLAUDE_PLUGIN_ROOT"` または plugin cache の絶対パス確認で root を確定し、`${CLAUDE_PLUGIN_ROOT}` の位置を実値に置換した同じ `test -f ... && awk -f ...` コマンドを再実行する。root を確定できない場合は silent な空ファイル生成を避けるため Step 5 の failed 更新へ遷移する。
+`plugin_root` はセットアップで自己解決済みの値を使う。`test -f` が失敗した場合は、同じ fallback block を再実行して plugin root を再解決し、まだ root を確定できない場合は silent な空ファイル生成を避けるため Step 5 の failed 更新へ遷移する。
 
 ### Step 3b: BEAR.Sunday 判定
 
@@ -400,7 +476,25 @@ date -u +%Y-%m-%dT%H:%M:%S+00:00
 - 次アクション: metadata 作成へ進む
 
 ```bash
-jq -n --arg started_at "$started_at" --arg head_sha "$head_sha" '{state:"running",started_at:$started_at,head_sha:$head_sha,stage:"ranker",failed_stage:null}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json && python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_status.py --data ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json
+plugin_root="${CLAUDE_PLUGIN_ROOT:-$(python3 - <<'PY'
+import os
+from pathlib import Path
+roots = []
+if os.environ.get("CLAUDE_CODE_PLUGIN_CACHE_DIR"):
+    roots.append(Path(os.environ["CLAUDE_CODE_PLUGIN_CACHE_DIR"]).expanduser())
+if os.environ.get("CLAUDE_CONFIG_DIR"):
+    roots.append(Path(os.environ["CLAUDE_CONFIG_DIR"]).expanduser() / "plugins" / "cache")
+roots.append(Path.home() / ".claude" / "plugins" / "cache")
+markers = []
+for root in roots:
+    markers.extend(root.glob("**/pr-codex/tasks/validate_findings.py"))
+if not markers:
+    raise SystemExit("CLAUDE_PLUGIN_ROOT is unset and pr-codex plugin root was not found")
+marker = max((m.resolve() for m in markers), key=lambda p: (p.stat().st_mtime_ns, str(p)))
+print(marker.parents[1])
+PY
+)}"
+jq -n --arg started_at "$started_at" --arg head_sha "$head_sha" '{state:"running",started_at:$started_at,head_sha:$head_sha,stage:"ranker",failed_stage:null}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json && python3 "$plugin_root/tasks/validate_status.py" --data ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json
 ```
 
 - いつ使うか: `status.json` 作成後に実行する
@@ -651,17 +745,9 @@ Step 4a / 4b 共通のレビュー観点本文（MCP追加情報収集 / 7観点
 
 - `{REVIEW_CRITERIA}` / `{RUN_PLAN_GUIDANCE}` / `{DEPTH_GUIDANCE}` / `{BEAR_REVIEW_GUIDANCE}` を bash double-quote 内へ差し込む前に、4つとも `\` → `\\`、`"` → `\"`、`$` → `\$`、`` ` `` → `\`` の順でエスケープする
 
-さらに canonical findings の `producer.version` を埋めるため、同じ `$CLAUDE_PLUGIN_ROOT` を基準に `$CLAUDE_PLUGIN_ROOT/.claude-plugin/plugin.json` を Read ツールで取得し、`.version` を `$plugin_version` として保持する。`findings.verified.json` の `producer.version` は空文字列不可のため、取得に失敗した場合は Step 5 の **failed 更新** へ遷移する。`schemas/findings.v1.json` も同じ基準で Read し、Step 4c の schema validation に使う。
+さらに canonical findings の `producer.version` を埋めるため、同じ `plugin_root` を基準に `$plugin_root/.claude-plugin/plugin.json` を Read ツールで取得し、`.version` を `$plugin_version` として保持する。`findings.verified.json` の `producer.version` は空文字列不可のため、取得に失敗した場合は Step 5 の **failed 更新** へ遷移する。`schemas/findings.v1.json` も同じ基準で Read し、Step 4c の schema validation に使う。
 
-パス解決: Read ツールの `file_path` には `REVIEW_CRITERIA.md` の絶対パスを渡す。プラグイン環境では `$CLAUDE_PLUGIN_ROOT/skills/review/REVIEW_CRITERIA.md` に配置される。`$CLAUDE_PLUGIN_ROOT` が未設定・不明な場合は以下の Bash で値を取得してから絶対パスを組み立てる。
-
-- いつ使うか: `$CLAUDE_PLUGIN_ROOT` の値が不明で Read に渡す絶対パスを確定できない場合に実行する
-- 判定条件: 標準出力が非空
-- 次アクション: 出力値を先頭に `skills/review/REVIEW_CRITERIA.md` を連結した絶対パスを Read に渡す。空の場合は Glob ツールで `**/pr-codex/skills/review/REVIEW_CRITERIA.md` を検索してヒットしたパスを使う
-
-```bash
-echo "$CLAUDE_PLUGIN_ROOT"
-```
+パス解決: Read ツールの `file_path` には `REVIEW_CRITERIA.md` の絶対パスを渡す。プラグイン環境では `$plugin_root/skills/review/REVIEW_CRITERIA.md` に配置される。`plugin_root` が未解決の場合はセットアップの fallback block を実行してから `skills/review/REVIEW_CRITERIA.md` を連結する。
 
 ### Step 4: レビュー実行（2者レビュー方式）
 
@@ -796,7 +882,7 @@ MCP について:
 
 **logical stage: verifier / logical stage: explainer**。両方の hunter 出力が完了したら、メインコンテキスト（自分自身）が前半で verifier、後半で explainer を行う。Step 4c は **現行の新フロー（candidates + verified + review-rounds + SARIF）だけ**を使う。旧フロー（candidates / SARIF なし）は廃止済みであり、手順・validator・`mv` テンプレートを併記しない。Step 4c を物理的に複数 Bash 実行へ分割せず、既存の temp → validator → `mv` による atomicity を維持する:
 
-1. `claude-review.md` / `codex-review.md` / `pr.diff.ranges.txt` / `metadata.json` / `run-plan.json` を読み、さらに candidate schema (`$CLAUDE_PLUGIN_ROOT/schemas/findings.candidates.v1.json`)、canonical schema (`$CLAUDE_PLUGIN_ROOT/schemas/findings.v1.json`)、round artifact schema (`$CLAUDE_PLUGIN_ROOT/schemas/review-rounds.v1.json`)、SARIF schema (`$CLAUDE_PLUGIN_ROOT/schemas/sarif-2.1.0.json`) を Read する（パス解決は Step 4 前処理の `REVIEW_CRITERIA.md` と同じく `$CLAUDE_PLUGIN_ROOT` 基準で行う）。
+1. `claude-review.md` / `codex-review.md` / `pr.diff.ranges.txt` / `metadata.json` / `run-plan.json` を読み、さらに candidate schema (`$plugin_root/schemas/findings.candidates.v1.json`)、canonical schema (`$plugin_root/schemas/findings.v1.json`)、round artifact schema (`$plugin_root/schemas/review-rounds.v1.json`)、SARIF schema (`$plugin_root/schemas/sarif-2.1.0.json`) を Read する（パス解決は Step 4 前処理の `REVIEW_CRITERIA.md` と同じく `$CLAUDE_PLUGIN_ROOT` 基準で行う）。
 2. **スコープ検証 (必須)**: どちらか一方でも本文が `PR_DIFF_UNAVAILABLE` のみなら、統合成果物は作成せず Step 5 の **failed 更新** へ遷移する（`findings.candidates.json` / `findings.verified.json` / `review-rounds.json` / `findings.sarif` / `review.md` は生成しない）。
 3. まず 2 つの生レビューから hunter 候補を正規化し、**`findings.candidates.json` をメモリ上で構築する**。これは verifier 入力を debug 可能に残す中間 artifact であり、`schemas/findings.candidates.v1.json` に従う。candidate では `id != fingerprint`、4軸未確定、`evidence_level` 未確定、`posting` 未決定を許し、GitHub 投稿判断には使わない。
 4. **F5 反復精緻化ループ (必須)**: candidates を入力として、`review_loop.halting_policy` に従い `refine` → `challenge` → `verify` の round を最大 `max_rounds` 回だけ回す。各 round はメモリ上で候補を更新し、最終的に `review-rounds.json.tmp` (`schema_version="review-rounds.v1"`) としてローカルにだけ残す。halting 判定は決定論的に `time_budget` → `max_rounds` → `repeated_contradiction` → `all_candidates_verified/no_active_candidates` → `no_new_evidence` の優先順で行い、`time_budget_ms` に達したら次 round を開始しない。`new_evidence_count == 0` の round が `no_new_evidence_rounds` 連続した場合は `halt_reason="no_new_evidence"`、同じ contradiction signature が `repeated_contradiction_limit` 回出た場合は `halt_reason="repeated_contradiction"` として oscillation を止める。
@@ -830,26 +916,116 @@ MCP について:
 11. `run-plan.json` で `skip_reason != null`、`recommended_mode != "standard"`、`depth_actual != "standard"`、`depth_source != "default"`、`depth_downgraded == true`、または `depth_reason` が `changed lines > 5000` で始まる場合のいずれかに該当する場合は、`review.md` の `## 補足` に preflight 情報を最低限残す。`files_changed` / `lines_added` / `lines_removed` / `depth_reason` / `risk_tags` を明記し、`routing_decision` はローカル artifact 専用であり、`review.md` や GitHub 投稿 body へコピーしない。
 12. **件数一致 gate (必須)**: `findings.verified.json` の `severity=must_fix` 件数と、派生生成した `review.md` の `## 重大な問題 (Must Fix)` 見出し件数、および `findings.sarif` の `level=error` result 件数は **100% 一致** させる。1 件でもずれたら Step 5 の **failed 更新** へ遷移し、completed にしてはならない。
 13. 上記 runtime gate を通過した場合のみ、`findings.candidates.json` / `findings.verified.json` / `review-rounds.json` / `review.md`（必要なら `validation-report.json` も）をまず `*.tmp` へ `Write` ツールで書き出す。`findings.sarif.tmp` は `tasks/generate_findings_sarif.py` で canonical tmp から local-only SARIF として生成する。`Write` ツールは `~` やシェル変数（`$org` 等）を展開しないため、`file_path` にはホームディレクトリを `$HOME` の実値（例: `/Users/adachi`）に展開済みの絶対パスを渡し、`$org` / `$repository` / `$pr_number` も実値に置換してから呼び出す。
-14. **同梱 validator gate (必須)**: temp file 書き出し後、final artifact へ反映する前に以下の同梱 validator を必ず順番に実行する。`$CLAUDE_PLUGIN_ROOT` が shell 環境で未設定の場合は、Step 4 前処理で解決した plugin root の絶対パスに置換してから Bash ツールへ渡す（コマンド構造は変えない）。canonical findings validator / candidates validator / status validator は stdlib-only、SARIF validator は Python package `jsonschema>=4,<5` を使って同梱 OASIS schema を検証する。いずれも成果物を書き換えず検証だけに使い、npm cache やネットワークを使わず、作業ディレクトリ外へ書き込まない。`--ranges pr.diff.ranges.txt` を指定した生成/検証では、空の `pr.diff.ranges.txt` は「コメント可能範囲なし」として扱い、非空 finding / SARIF result を PASS させてはならない（`--ranges` 未指定時だけ range gate 無効）。必須フィールド欠落、型不一致、enum 不一致、`posting` / `evidence_level` 条件違反、4軸 gate 違反、`pr.number` 非整数、RFC3339 / URI format 不正、`end_line < start_line`、`id != fingerprint`、fingerprint 再計算不一致、`metadata.json` の投稿先 repo / PR number / head/base SHA と `findings.verified.json.pr.*` の不一致、SARIF schema/side/range/post_policy/Must Fix count 不一致など 1 件でも contract に反したら Step 5 の **failed 更新** へ遷移し、final artifact を書き出してはならない。
+14. **同梱 validator gate (必須)**: temp file 書き出し後、final artifact へ反映する前に以下の同梱 validator を必ず順番に実行する。`$CLAUDE_PLUGIN_ROOT` が shell 環境で未設定の場合は、Step 4 前処理で解決した plugin root の絶対パスに置換してから Bash ツールへ渡す（コマンド構造は変えない）。canonical findings validator / candidates validator / status validator は stdlib-only、SARIF validator は Python package `jsonschema>=4,<5` を使って同梱 OASIS schema を検証する。いずれも成果物を書き換えず検証だけに使い、npm cache やネットワークを使わず、作業ディレクトリ外へ書き込まない。SARIF 生成/検証のコマンド契約は `generate_findings_sarif.py --findings` と `validate_findings_sarif.py --schema` で、schema 入力は `schemas/sarif-2.1.0.json` を使う。`--ranges pr.diff.ranges.txt` を指定した生成/検証では、空の `pr.diff.ranges.txt` は「コメント可能範囲なし」として扱い、非空 finding / SARIF result を PASS させてはならない（`--ranges` 未指定時だけ range gate 無効）。必須フィールド欠落、型不一致、enum 不一致、`posting` / `evidence_level` 条件違反、4軸 gate 違反、`pr.number` 非整数、RFC3339 / URI format 不正、`end_line < start_line`、`id != fingerprint`、fingerprint 再計算不一致、`metadata.json` の投稿先 repo / PR number / head/base SHA と `findings.verified.json.pr.*` の不一致、SARIF schema/side/range/post_policy/Must Fix count 不一致など 1 件でも contract に反したら Step 5 の **failed 更新** へ遷移し、final artifact を書き出してはならない。
 
 ```bash
-python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_candidates.py --schema $CLAUDE_PLUGIN_ROOT/schemas/findings.candidates.v1.json --data ~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.candidates.json.tmp --metadata ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json
+plugin_root="${CLAUDE_PLUGIN_ROOT:-$(python3 - <<'PY'
+import os
+from pathlib import Path
+roots = []
+if os.environ.get("CLAUDE_CODE_PLUGIN_CACHE_DIR"):
+    roots.append(Path(os.environ["CLAUDE_CODE_PLUGIN_CACHE_DIR"]).expanduser())
+if os.environ.get("CLAUDE_CONFIG_DIR"):
+    roots.append(Path(os.environ["CLAUDE_CONFIG_DIR"]).expanduser() / "plugins" / "cache")
+roots.append(Path.home() / ".claude" / "plugins" / "cache")
+markers = []
+for root in roots:
+    markers.extend(root.glob("**/pr-codex/tasks/validate_findings.py"))
+if not markers:
+    raise SystemExit("CLAUDE_PLUGIN_ROOT is unset and pr-codex plugin root was not found")
+marker = max((m.resolve() for m in markers), key=lambda p: (p.stat().st_mtime_ns, str(p)))
+print(marker.parents[1])
+PY
+)}"
+python3 "$plugin_root/tasks/validate_candidates.py" --schema "$plugin_root/schemas/findings.candidates.v1.json" --data ~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.candidates.json.tmp --metadata ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json
 ```
 
 ```bash
-python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings.py --schema $CLAUDE_PLUGIN_ROOT/schemas/findings.v1.json --data ~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.verified.json.tmp --metadata ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json
+plugin_root="${CLAUDE_PLUGIN_ROOT:-$(python3 - <<'PY'
+import os
+from pathlib import Path
+roots = []
+if os.environ.get("CLAUDE_CODE_PLUGIN_CACHE_DIR"):
+    roots.append(Path(os.environ["CLAUDE_CODE_PLUGIN_CACHE_DIR"]).expanduser())
+if os.environ.get("CLAUDE_CONFIG_DIR"):
+    roots.append(Path(os.environ["CLAUDE_CONFIG_DIR"]).expanduser() / "plugins" / "cache")
+roots.append(Path.home() / ".claude" / "plugins" / "cache")
+markers = []
+for root in roots:
+    markers.extend(root.glob("**/pr-codex/tasks/validate_findings.py"))
+if not markers:
+    raise SystemExit("CLAUDE_PLUGIN_ROOT is unset and pr-codex plugin root was not found")
+marker = max((m.resolve() for m in markers), key=lambda p: (p.stat().st_mtime_ns, str(p)))
+print(marker.parents[1])
+PY
+)}"
+python3 "$plugin_root/tasks/validate_findings.py" --schema "$plugin_root/schemas/findings.v1.json" --data ~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.verified.json.tmp --metadata ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json
 ```
 
 ```bash
-python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_review_rounds.py --schema $CLAUDE_PLUGIN_ROOT/schemas/review-rounds.v1.json --data ~/claude-loop-pr-codex/$org-$repository-$pr_number/review-rounds.json.tmp
+plugin_root="${CLAUDE_PLUGIN_ROOT:-$(python3 - <<'PY'
+import os
+from pathlib import Path
+roots = []
+if os.environ.get("CLAUDE_CODE_PLUGIN_CACHE_DIR"):
+    roots.append(Path(os.environ["CLAUDE_CODE_PLUGIN_CACHE_DIR"]).expanduser())
+if os.environ.get("CLAUDE_CONFIG_DIR"):
+    roots.append(Path(os.environ["CLAUDE_CONFIG_DIR"]).expanduser() / "plugins" / "cache")
+roots.append(Path.home() / ".claude" / "plugins" / "cache")
+markers = []
+for root in roots:
+    markers.extend(root.glob("**/pr-codex/tasks/validate_findings.py"))
+if not markers:
+    raise SystemExit("CLAUDE_PLUGIN_ROOT is unset and pr-codex plugin root was not found")
+marker = max((m.resolve() for m in markers), key=lambda p: (p.stat().st_mtime_ns, str(p)))
+print(marker.parents[1])
+PY
+)}"
+python3 "$plugin_root/tasks/validate_review_rounds.py" --schema "$plugin_root/schemas/review-rounds.v1.json" --data ~/claude-loop-pr-codex/$org-$repository-$pr_number/review-rounds.json.tmp
 ```
 
 ```bash
-python3 $CLAUDE_PLUGIN_ROOT/tasks/generate_findings_sarif.py --findings ~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.verified.json.tmp --metadata ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json --ranges ~/claude-loop-pr-codex/$org-$repository-$pr_number/pr.diff.ranges.txt --output ~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.sarif.tmp
+plugin_root="${CLAUDE_PLUGIN_ROOT:-$(python3 - <<'PY'
+import os
+from pathlib import Path
+roots = []
+if os.environ.get("CLAUDE_CODE_PLUGIN_CACHE_DIR"):
+    roots.append(Path(os.environ["CLAUDE_CODE_PLUGIN_CACHE_DIR"]).expanduser())
+if os.environ.get("CLAUDE_CONFIG_DIR"):
+    roots.append(Path(os.environ["CLAUDE_CONFIG_DIR"]).expanduser() / "plugins" / "cache")
+roots.append(Path.home() / ".claude" / "plugins" / "cache")
+markers = []
+for root in roots:
+    markers.extend(root.glob("**/pr-codex/tasks/validate_findings.py"))
+if not markers:
+    raise SystemExit("CLAUDE_PLUGIN_ROOT is unset and pr-codex plugin root was not found")
+marker = max((m.resolve() for m in markers), key=lambda p: (p.stat().st_mtime_ns, str(p)))
+print(marker.parents[1])
+PY
+)}"
+python3 "$plugin_root/tasks/generate_findings_sarif.py" --findings ~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.verified.json.tmp --metadata ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json --ranges ~/claude-loop-pr-codex/$org-$repository-$pr_number/pr.diff.ranges.txt --output ~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.sarif.tmp
 ```
 
 ```bash
-python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings_sarif.py --schema $CLAUDE_PLUGIN_ROOT/schemas/sarif-2.1.0.json --data ~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.sarif.tmp --findings ~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.verified.json.tmp --ranges ~/claude-loop-pr-codex/$org-$repository-$pr_number/pr.diff.ranges.txt --markdown ~/claude-loop-pr-codex/$org-$repository-$pr_number/review.md.tmp
+plugin_root="${CLAUDE_PLUGIN_ROOT:-$(python3 - <<'PY'
+import os
+from pathlib import Path
+roots = []
+if os.environ.get("CLAUDE_CODE_PLUGIN_CACHE_DIR"):
+    roots.append(Path(os.environ["CLAUDE_CODE_PLUGIN_CACHE_DIR"]).expanduser())
+if os.environ.get("CLAUDE_CONFIG_DIR"):
+    roots.append(Path(os.environ["CLAUDE_CONFIG_DIR"]).expanduser() / "plugins" / "cache")
+roots.append(Path.home() / ".claude" / "plugins" / "cache")
+markers = []
+for root in roots:
+    markers.extend(root.glob("**/pr-codex/tasks/validate_findings.py"))
+if not markers:
+    raise SystemExit("CLAUDE_PLUGIN_ROOT is unset and pr-codex plugin root was not found")
+marker = max((m.resolve() for m in markers), key=lambda p: (p.stat().st_mtime_ns, str(p)))
+print(marker.parents[1])
+PY
+)}"
+python3 "$plugin_root/tasks/validate_findings_sarif.py" --schema "$plugin_root/schemas/sarif-2.1.0.json" --data ~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.sarif.tmp --findings ~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.verified.json.tmp --ranges ~/claude-loop-pr-codex/$org-$repository-$pr_number/pr.diff.ranges.txt --markdown ~/claude-loop-pr-codex/$org-$repository-$pr_number/review.md.tmp
 ```
 
 15. temp write / SARIF 生成 / 同梱 validator がすべて成功した場合のみ Bash の `mv` で final path へ反映する。途中で temp write / SARIF 生成 / validator / `mv` のいずれかが失敗した場合は Step 5 の **failed 更新** へ遷移し、completed にしてはならない。temp file を final artifact に反映する際は、以下の `mv` テンプレートだけを使う。`review.md` を先に反映し、その後 `findings.candidates.json`、`findings.verified.json`、`review-rounds.json`、最後に `findings.sarif` を反映する。これにより、completed 更新前に send primary path と検証済み副成果物の前提が成立しない状態を避ける。
@@ -947,7 +1123,25 @@ date -u +%Y-%m-%dT%H:%M:%S+00:00
 続けて `$cost_json` を作成する。
 
 ```bash
-cost_json=$(python3 $CLAUDE_PLUGIN_ROOT/tasks/extract_actual_cost.py --component claude=~/claude-loop-pr-codex/$org-$repository-$pr_number/claude.log --component codex=~/claude-loop-pr-codex/$org-$repository-$pr_number/codex.log)
+plugin_root="${CLAUDE_PLUGIN_ROOT:-$(python3 - <<'PY'
+import os
+from pathlib import Path
+roots = []
+if os.environ.get("CLAUDE_CODE_PLUGIN_CACHE_DIR"):
+    roots.append(Path(os.environ["CLAUDE_CODE_PLUGIN_CACHE_DIR"]).expanduser())
+if os.environ.get("CLAUDE_CONFIG_DIR"):
+    roots.append(Path(os.environ["CLAUDE_CONFIG_DIR"]).expanduser() / "plugins" / "cache")
+roots.append(Path.home() / ".claude" / "plugins" / "cache")
+markers = []
+for root in roots:
+    markers.extend(root.glob("**/pr-codex/tasks/validate_findings.py"))
+if not markers:
+    raise SystemExit("CLAUDE_PLUGIN_ROOT is unset and pr-codex plugin root was not found")
+marker = max((m.resolve() for m in markers), key=lambda p: (p.stat().st_mtime_ns, str(p)))
+print(marker.parents[1])
+PY
+)}"
+cost_json=$(python3 "$plugin_root/tasks/extract_actual_cost.py" --component claude=~/claude-loop-pr-codex/$org-$repository-$pr_number/claude.log --component codex=~/claude-loop-pr-codex/$org-$repository-$pr_number/codex.log)
 ```
 
 - いつ使うか: Step 4c まで成功した場合に最初に実行する
@@ -1001,7 +1195,25 @@ jq -n --argjson files_changed "$files_changed" --argjson hunks "$hunks" --argjso
 - 次アクション: Step 6 の結果報告へ進む
 
 ```bash
-jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" --arg head_sha "$head_sha" '{state:"completed",started_at:$started_at,finished_at:$finished_at,exit_code:0,head_sha:$head_sha,stage:"explainer",failed_stage:null}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json && python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_status.py --data ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json
+plugin_root="${CLAUDE_PLUGIN_ROOT:-$(python3 - <<'PY'
+import os
+from pathlib import Path
+roots = []
+if os.environ.get("CLAUDE_CODE_PLUGIN_CACHE_DIR"):
+    roots.append(Path(os.environ["CLAUDE_CODE_PLUGIN_CACHE_DIR"]).expanduser())
+if os.environ.get("CLAUDE_CONFIG_DIR"):
+    roots.append(Path(os.environ["CLAUDE_CONFIG_DIR"]).expanduser() / "plugins" / "cache")
+roots.append(Path.home() / ".claude" / "plugins" / "cache")
+markers = []
+for root in roots:
+    markers.extend(root.glob("**/pr-codex/tasks/validate_findings.py"))
+if not markers:
+    raise SystemExit("CLAUDE_PLUGIN_ROOT is unset and pr-codex plugin root was not found")
+marker = max((m.resolve() for m in markers), key=lambda p: (p.stat().st_mtime_ns, str(p)))
+print(marker.parents[1])
+PY
+)}"
+jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" --arg head_sha "$head_sha" '{state:"completed",started_at:$started_at,finished_at:$finished_at,exit_code:0,head_sha:$head_sha,stage:"explainer",failed_stage:null}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json && python3 "$plugin_root/tasks/validate_status.py" --data ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json
 ```
 
 - いつ使うか: Step 4a または 4b が timeout / 非ゼロ終了した場合、権限不足などで処理継続不可の場合、**または Step 4c のスコープ検証で `claude-review.md` / `codex-review.md` のいずれかが `PR_DIFF_UNAVAILABLE` のみだった場合**に実行する
@@ -1010,7 +1222,25 @@ jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" --arg head
 - 次アクション: Step 6 の結果報告へ進む
 
 ```bash
-jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" --arg head_sha "$head_sha" --arg failed_stage "$failed_stage" '{state:"failed",started_at:$started_at,finished_at:$finished_at,exit_code:1,head_sha:$head_sha,stage:$failed_stage,failed_stage:$failed_stage}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json && python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_status.py --data ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json
+plugin_root="${CLAUDE_PLUGIN_ROOT:-$(python3 - <<'PY'
+import os
+from pathlib import Path
+roots = []
+if os.environ.get("CLAUDE_CODE_PLUGIN_CACHE_DIR"):
+    roots.append(Path(os.environ["CLAUDE_CODE_PLUGIN_CACHE_DIR"]).expanduser())
+if os.environ.get("CLAUDE_CONFIG_DIR"):
+    roots.append(Path(os.environ["CLAUDE_CONFIG_DIR"]).expanduser() / "plugins" / "cache")
+roots.append(Path.home() / ".claude" / "plugins" / "cache")
+markers = []
+for root in roots:
+    markers.extend(root.glob("**/pr-codex/tasks/validate_findings.py"))
+if not markers:
+    raise SystemExit("CLAUDE_PLUGIN_ROOT is unset and pr-codex plugin root was not found")
+marker = max((m.resolve() for m in markers), key=lambda p: (p.stat().st_mtime_ns, str(p)))
+print(marker.parents[1])
+PY
+)}"
+jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" --arg head_sha "$head_sha" --arg failed_stage "$failed_stage" '{state:"failed",started_at:$started_at,finished_at:$finished_at,exit_code:1,head_sha:$head_sha,stage:$failed_stage,failed_stage:$failed_stage}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json && python3 "$plugin_root/tasks/validate_status.py" --data ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json
 ```
 
 ### Step 6: 結果報告
@@ -1108,7 +1338,7 @@ $CLAUDE_PLUGIN_ROOT/schemas/
 
 本スキルは Claude Code を `--permission-mode auto` で起動することを前提とする（README の「使い方」参照）。auto mode でも、許可済みツールやコマンドの内容によっては分類器の判断で承認が必要になり得るため、本スキルではテンプレートに明示された操作だけを実行する。
 
-ローカルの書き込みは作業ディレクトリ `~/claude-loop-pr-codex/` 配下に限り、`clone-claude/` / `clone-codex/` の作成と更新、`status.json` / `metadata.json` / `run-plan.json` / `pr.diff` / `pr.diff.ranges.txt` / `claude.log` / `codex.log` / `codex-review.md` / `claude-review.md` / `findings.candidates.json` / `findings.verified.json` / `findings.sarif` / `validation-report.json` / `review-rounds.json` / `review.md` と、それらの `*.tmp` 一時ファイル作成のみ許可する。schema / fingerprint / status / SARIF validation のために `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_candidates.py ...`、`python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings.py ...`、`python3 $CLAUDE_PLUGIN_ROOT/tasks/generate_findings_sarif.py ...`、`python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings_sarif.py ...`、`python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_status.py ...` を実行してよいが、validator は成果物を書き換えず検証だけに使う。
+ローカルの書き込みは作業ディレクトリ `~/claude-loop-pr-codex/` 配下に限り、`clone-claude/` / `clone-codex/` の作成と更新、`status.json` / `metadata.json` / `run-plan.json` / `pr.diff` / `pr.diff.ranges.txt` / `claude.log` / `codex.log` / `codex-review.md` / `claude-review.md` / `findings.candidates.json` / `findings.verified.json` / `findings.sarif` / `validation-report.json` / `review-rounds.json` / `review.md` と、それらの `*.tmp` 一時ファイル作成のみ許可する。schema / fingerprint / status / SARIF validation のために `python3 "$plugin_root/tasks/validate_candidates.py" ...`、`python3 "$plugin_root/tasks/validate_findings.py" ...`、`python3 "$plugin_root/tasks/generate_findings_sarif.py" ...`、`python3 "$plugin_root/tasks/validate_findings_sarif.py" ...`、`python3 "$plugin_root/tasks/validate_status.py" ...` を実行してよいが、validator は成果物を書き換えず検証だけに使う。
 
 F11 の regression eval (`score_fixture.py` / `m1_m2_gate.py`) は通常の `/pr-codex:review` 実行フローには組み込まない。手動 deep eval で `findings.verified.json` を採点する場合のみ、README / `fixtures/README.md` の手順に従って `artifacts/` 配下へ `score-report.v1` / `m1-m2-gate.v1` を出力する。CI では固定 stub の deterministic test だけを実行し、LLM や GitHub write/API 投稿は必須経路に入れない。
 
@@ -1127,7 +1357,7 @@ F11 の regression eval (`score_fixture.py` / `m1_m2_gate.py`) は通常の `/pr
    - `pr.diff.ranges.txt` は Step 3 の `awk` の標準出力を `>` でリダイレクトして作成する
    - `claude-review.md` / `codex-review.md` / `claude.log` / `codex.log` は Step 4a / 4b の標準出力・標準エラーを `>` / `2>` でリダイレクトして作成する
 7. Step 4a / 4b は `run_in_background: true` で起動し、foreground timeout 引数を `1200000` に固定してはならない。Claude Code Bash tool の foreground timeout 上限 600000 ms を超える実行予算は `run-plan.json.estimated_timeout_ms` / `review_loop.time_budget_ms` として扱い、完了通知待ちで管理する
-8. テンプレートに明示された `git fetch` / `git checkout FETCH_HEAD` / `jq -e '.require | has("bear/sunday")' ...` / `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_candidates.py ...` / `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings.py ...` / `python3 $CLAUDE_PLUGIN_ROOT/tasks/generate_findings_sarif.py ...` / `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings_sarif.py ...` / `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_status.py ...` / temp file から final artifact への `mv` / 成果物ファイル作成以外の状態変更操作は実行しない。禁止例: `git push` / `git merge` / `git reset --*` / `git clean -fd[x]` / `git stash` / `git commit` / `git tag` / `git branch -D`、`rm -rf` 系、`gh pr` / `gh issue` の write 操作、および GitHub / Backlog / DocBase の write 系 MCP ツール
+8. テンプレートに明示された `git fetch` / `git checkout FETCH_HEAD` / `jq -e '.require | has("bear/sunday")' ...` / `python3 "$plugin_root/tasks/validate_candidates.py" ...` / `python3 "$plugin_root/tasks/validate_findings.py" ...` / `python3 "$plugin_root/tasks/generate_findings_sarif.py" ...` / `python3 "$plugin_root/tasks/validate_findings_sarif.py" ...` / `python3 "$plugin_root/tasks/validate_status.py" ...` / temp file から final artifact への `mv` / 成果物ファイル作成以外の状態変更操作は実行しない。禁止例: `git push` / `git merge` / `git reset --*` / `git clean -fd[x]` / `git stash` / `git commit` / `git tag` / `git branch -D`、`rm -rf` 系、`gh pr` / `gh issue` の write 操作、および GitHub / Backlog / DocBase の write 系 MCP ツール
 9. 1回の実行で選定・処理する PR は 1 件のみとする
 10. Step 4a / 4b のプロンプト中に含まれる `{REVIEW_CRITERIA}` / `{RUN_PLAN_GUIDANCE}` / `{DEPTH_GUIDANCE}` / `{BEAR_REVIEW_GUIDANCE}` プレースホルダは、Step 4 前処理で Read した `REVIEW_CRITERIA.md`、`run-plan.json`、Step 3b の BEAR.Sunday 判定結果を元に Claude 側で置換したうえで、Bash ツールに渡す完全体のコマンド文字列として使う。`{REVIEW_CRITERIA}` / `{RUN_PLAN_GUIDANCE}` / `{DEPTH_GUIDANCE}` / `{BEAR_REVIEW_GUIDANCE}` のいずれも bash double-quote 内で安全になるよう、差し込み前に **`\` → `\\`、`"` → `\"`、`$` → `\$`、`` ` `` → `\``** の順でエスケープする。シェルでのコマンド置換 (`$()`) やヒアドキュメントは使わない
 

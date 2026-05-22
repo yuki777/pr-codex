@@ -167,7 +167,12 @@ def json_path_from_error(error: Any) -> str:
 
 
 def validate_official_sarif_schema(schema: Any, data: Any) -> list[str]:
-    """Validate the SARIF payload against the bundled OASIS Draft-07 schema."""
+    """Validate the SARIF payload against the bundled OASIS Draft-07 schema.
+
+    jsonschema enables the full official SARIF schema check. Without it, the
+    validator must fail closed because validate_sarif_shape is only a pr-codex
+    contract guard and cannot cover every official SARIF schema constraint.
+    """
     if jsonschema is None:
         return [
             "$schema_file: python package 'jsonschema' is required for official OASIS SARIF schema validation; "
@@ -186,6 +191,8 @@ def validate_sarif_shape(data: Any) -> list[str]:
     errors: list[str] = []
     if not isinstance(data, dict):
         return ["$: must be an object"]
+    if not is_non_empty_string(data.get("$schema")):
+        errors.append("$.$schema: must be a non-empty string")
     if data.get("version") != "2.1.0":
         errors.append("$.version: must equal '2.1.0'")
     runs = data.get("runs")
@@ -204,6 +211,8 @@ def validate_sarif_shape(data: Any) -> list[str]:
             errors.append("$.runs[0].tool.driver.name: must be a non-empty string")
         if not is_non_empty_string(driver.get("version")):
             errors.append("$.runs[0].tool.driver.version: must be a non-empty string")
+        if not is_non_empty_string(driver.get("informationUri")):
+            errors.append("$.runs[0].tool.driver.informationUri: must be a non-empty string")
         rules = driver.get("rules")
         expected_rule_ids = [f"pr-codex/{category}" for category in CATEGORY_RULES]
         if not isinstance(rules, list):
@@ -212,6 +221,23 @@ def validate_sarif_shape(data: Any) -> list[str]:
             actual_rule_ids = [rule.get("id") for rule in rules if isinstance(rule, dict)]
             if actual_rule_ids != expected_rule_ids:
                 errors.append("$.runs[0].tool.driver.rules: must fixed-list all 8 pr-codex category rules in schema order")
+            for rule_index, rule in enumerate(rules):
+                rpath = f"$.runs[0].tool.driver.rules[{rule_index}]"
+                if not isinstance(rule, dict):
+                    errors.append(f"{rpath}: must be an object")
+                    continue
+                category = CATEGORY_RULES[rule_index] if rule_index < len(CATEGORY_RULES) else None
+                if category is not None and rule.get("name") != f"pr-codex {category}":
+                    errors.append(f"{rpath}.name: must match pr-codex category")
+                short = rule.get("shortDescription")
+                if not isinstance(short, dict) or not is_non_empty_string(short.get("text")):
+                    errors.append(f"{rpath}.shortDescription.text: must be a non-empty string")
+                full = rule.get("fullDescription")
+                if not isinstance(full, dict) or not is_non_empty_string(full.get("text")):
+                    errors.append(f"{rpath}.fullDescription.text: must be a non-empty string")
+                properties = rule.get("properties")
+                if not isinstance(properties, dict) or properties.get("category") != category:
+                    errors.append(f"{rpath}.properties.category: must match pr-codex category")
     invocations = run.get("invocations")
     if not isinstance(invocations, list) or not invocations:
         errors.append("$.runs[0].invocations: must be a non-empty array")
@@ -230,6 +256,11 @@ def validate_sarif_shape(data: Any) -> list[str]:
             errors.append("$.runs[0].versionControlProvenance[0].repositoryUri: must be a non-empty string")
         if not is_non_empty_string(provenance[0].get("revisionId")):
             errors.append("$.runs[0].versionControlProvenance[0].revisionId: must be a non-empty string")
+    automation = run.get("automationDetails")
+    if not isinstance(automation, dict):
+        errors.append("$.runs[0].automationDetails: must be an object")
+    elif not is_non_empty_string(automation.get("id")):
+        errors.append("$.runs[0].automationDetails.id: must be a non-empty string")
     results = run.get("results")
     if not isinstance(results, list):
         errors.append("$.runs[0].results: must be an array")
