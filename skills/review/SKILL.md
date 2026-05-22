@@ -366,6 +366,20 @@ test -f "${CLAUDE_PLUGIN_ROOT}/skills/lib/extract-diff-ranges.awk" && awk -f "${
 
 `${CLAUDE_PLUGIN_ROOT}` が Bash subprocess に渡らず `test -f` が失敗した場合は、`echo "$CLAUDE_PLUGIN_ROOT"` または plugin cache の絶対パス確認で root を確定し、`${CLAUDE_PLUGIN_ROOT}` の位置を実値に置換した同じ `test -f ... && awk -f ...` コマンドを再実行する。root を確定できない場合は silent な空ファイル生成を避けるため Step 5 の failed 更新へ遷移する。
 
+### Step 3b: BEAR.Sunday / bear-review context artifact の生成
+
+対象リポジトリが BEAR.Sunday かどうかを deterministic に判定し、`bear-review` が利用可能な場合だけ Step 4a / 4b の hunter prompt に BEAR.Sunday 固有観点を追加する。これは既存の Claude + Codex の2者レビューを置き換えるものではなく、候補収集の追加観点である。`bear-review` 由来の指摘も Step 4c の既存の verifier / severity classification / posting policy を必ず通し、直接投稿対象にしてはならない。
+
+- いつ使うか: clone と `pr.diff.ranges.txt` 生成が完了した直後、`run-plan.json` 作成前に必ず実行する
+- 判定条件: `bear-review-context.json` が作成され、`schema_version == "bear-review-context.v1"` を持つ。`bear_review.status == "unavailable"` でも失敗扱いにせず、通常レビューは継続する
+- 次アクション: Step 4 前処理で `bear-review-context.json` を Read し、`{BEAR_REVIEW_GUIDANCE}` を組み立てる。`framework_detected == "bear-sunday"` かつ `bear_review.status == "available"` のときだけ BEAR.Sunday 固有観点を有効化する。それ以外は skip 理由を guidance に短く残す
+
+```bash
+python3 $CLAUDE_PLUGIN_ROOT/tasks/detect_bear_sunday.py --repo-dir ~/claude-loop-pr-codex/$org-$repository-$pr_number/clone-codex --bear-review-skill "$HOME/.claude/skills/bear-review/SKILL.md" --bear-review-skill "$HOME/.claude/skills/BEAR.Skills/.claude/skills/bear-review/SKILL.md" --bear-review-skill "$HOME/BEAR.Skills/.claude/skills/bear-review/SKILL.md" --out-json ~/claude-loop-pr-codex/$org-$repository-$pr_number/bear-review-context.json
+```
+
+`detect_bear_sunday.py` は `composer.json` の `bear/*` dependency を強いシグナルとして扱い、dependency がない場合は `src/Resource` と `src/Module` / `src/Provider` など複数 layout signal が揃った場合だけ BEAR.Sunday と判定する。PHPMD / composer / vendor-bin / BEAR.Skills が存在しないプロジェクトでも落ちないよう、artifact に `bear_review.skip_reason` を残して通常レビューは継続する。
+
 - `--depth 50` で shallow clone し、ディスク・時間を節約しつつ `git diff origin/$base_branch...HEAD` が算出可能な深さを確保する
 - Claude Code 用: `clone-claude/`、Codex CLI 用: `clone-codex/`
 - 各ツールが独立したディレクトリで動作するため、git/file操作の競合が発生しない
@@ -597,12 +611,12 @@ jq -n --arg depth_requested "$depth_requested" --slurpfile metadata ~/claude-loo
 
 ### Step 4 前処理: レビュー観点の読み込み
 
-Step 4a / 4b 共通のレビュー観点本文（MCP追加情報収集 / 7観点 / 出力フォーマット / 重要）は、このスキルディレクトリ内の `REVIEW_CRITERIA.md` に外出ししている。加えて Step 3 で生成した `run-plan.json` を読み、preflight に応じた `{RUN_PLAN_GUIDANCE}` と `{DEPTH_GUIDANCE}` を組み立てる。4a / 4b のプロンプトには `{REVIEW_CRITERIA}` / `{RUN_PLAN_GUIDANCE}` / `{DEPTH_GUIDANCE}` プレースホルダが埋め込まれており、**Claude 自身が Bash ツール呼び出し前にメモリ上で実値へ置換する**（シェル側で `$()` 展開は行わない）。
+Step 4a / 4b 共通のレビュー観点本文（MCP追加情報収集 / 7観点 / 出力フォーマット / 重要）は、このスキルディレクトリ内の `REVIEW_CRITERIA.md` に外出ししている。加えて Step 3 で生成した `run-plan.json` と `bear-review-context.json` を読み、preflight に応じた `{RUN_PLAN_GUIDANCE}` / `{DEPTH_GUIDANCE}` / `{BEAR_REVIEW_GUIDANCE}` を組み立てる。4a / 4b のプロンプトには `{REVIEW_CRITERIA}` / `{RUN_PLAN_GUIDANCE}` / `{DEPTH_GUIDANCE}` / `{BEAR_REVIEW_GUIDANCE}` プレースホルダが埋め込まれており、**Claude 自身が Bash ツール呼び出し前にメモリ上で実値へ置換する**（シェル側で `$()` 展開は行わない）。
 
 - いつ使うか: Step 3 完了後、Step 4a / 4b 起動前に必ず実行する
-- 判定条件: `REVIEW_CRITERIA.md` の全文と `run-plan.json` の内容を Read ツールで取得できる
+- 判定条件: `REVIEW_CRITERIA.md` の全文、`run-plan.json`、`bear-review-context.json` の内容を Read ツールで取得できる
 - 次アクション:
-  - 4a / 4b の Bash コマンド文字列中の `{REVIEW_CRITERIA}` を、下記の `{REVIEW_CRITERIA}` / `{RUN_PLAN_GUIDANCE}` / `{DEPTH_GUIDANCE}` 共通のエスケープ規則（`\` → `\\`、`"` → `\"`、`$` → `\$`、`` ` `` → `\``）に従って整形した本文で置換してから Bash ツールに渡す
+  - 4a / 4b の Bash コマンド文字列中の `{REVIEW_CRITERIA}` を、下記の `{REVIEW_CRITERIA}` / `{RUN_PLAN_GUIDANCE}` / `{DEPTH_GUIDANCE}` / `{BEAR_REVIEW_GUIDANCE}` 共通のエスケープ規則（`\` → `\\`、`"` → `\"`、`$` → `\$`、`` ` `` → `\``）に従って整形した本文で置換してから Bash ツールに渡す
   - `run-plan.json` から `.files_changed` / `.hunks` / `.lines_added` / `.lines_removed` / `.risk_tags` / `.selected_hunters` / `.depth_actual` / `.depth_source` / `.depth_reason` / `.depth_requested` / `.depth_downgraded` / `.depth_downgrade_reason` / `.recommended_mode` / `.skip_reason` / `.routing_decision.budget_class` / `.routing_decision.model_profile` / `.routing_decision.route` / `.routing_decision.rationale` / `.pr_classification` / `.estimated_stages` / `.estimated_timeout_ms` / `.review_loop` を保持する。Step 5 の `jq --argjson` に再利用するため、`.risk_tags` と `.selected_hunters` はそれぞれ `$risk_tags_json` / `$selected_hunters_json` として **JSON 配列文字列のまま**、`.pr_classification` は `$pr_classification_json` として **JSON object 文字列のまま**、`.review_loop` は `$review_loop_json` として **JSON object 文字列のまま**保持し、数値項目も `$files_changed` / `$hunks` / `$lines_added` / `$lines_removed` / `$estimated_stages` / `$estimated_timeout_ms` として保持する。`routing_decision.route` は Step 5 で artifact を再構築するため `$route` として保持するが hunter 個別プロンプトには渡さない。以下の方針で `{RUN_PLAN_GUIDANCE}` と `{DEPTH_GUIDANCE}` を組み立てて置換する
 
 `{RUN_PLAN_GUIDANCE}` の組み立て規則:
@@ -628,7 +642,14 @@ Step 4a / 4b 共通のレビュー観点本文（MCP追加情報収集 / 7観点
 - `depth_actual == "standard"` の場合: 変更行周辺と直接の呼び出し元 / 呼び出し先を優先し、広域探索・仮説列挙・低確度の横展開より 20 分以内完了を優先する
 - `depth_actual == "deep"` の場合: 変更行から到達する呼び出し元 / 呼び出し先、設定・スキーマ・権限境界、テスト差分を追加で確認し、反証検討を厚くする。ただしレビュー対象スコープは `pr.diff` と `metadata.json.files[]` に限定し、投稿対象の severity / post_policy は広げない
 - `depth_downgraded == true` の場合: ユーザーが `--deep` を指定していても 5000 行ガードにより standard として扱い、広域探索を増やさない
-- `{REVIEW_CRITERIA}` / `{RUN_PLAN_GUIDANCE}` / `{DEPTH_GUIDANCE}` を bash double-quote 内へ差し込む前に、3つとも `\` → `\\`、`"` → `\"`、`$` → `\$`、`` ` `` → `\`` の順でエスケープする
+`{BEAR_REVIEW_GUIDANCE}` の組み立て規則:
+
+- `bear-review-context.json.framework_detected == "bear-sunday"` かつ `bear_review.status == "available"` の場合: `BEAR.Sunday 固有観点` として Resource 設計、DI / Provider / Module、型安全性、PHPMD 指標（CC / NPath / parameter count / field count）を追加確認する。`bear-review` の内容は追加観点であり、既存の verifier / severity classification / posting policy を通過したものだけを canonical findings に採用する
+- `bear-review-context.json.framework_detected == "bear-sunday"` かつ `bear_review.status == "unavailable"` の場合: `bear_review.skip_reason` を明記し、BEAR.Sunday と判定した理由（`detection_signals`）だけを補助情報として渡す。通常レビューは継続し、PHPMD / composer / vendor-bin 不在をレビュー失敗扱いにしない
+- `framework_detected == null` の場合: `bear-review: not applicable` とだけ明記し、BEAR.Sunday 固有観点を追加しない
+- guidance には `detection_signals` と `bear_review.status` を平文で含めるが、ローカル絶対パスは必要最小限にし、GitHub 投稿 body へコピーしない
+
+- `{REVIEW_CRITERIA}` / `{RUN_PLAN_GUIDANCE}` / `{DEPTH_GUIDANCE}` / `{BEAR_REVIEW_GUIDANCE}` を bash double-quote 内へ差し込む前に、4つとも `\` → `\\`、`"` → `\"`、`$` → `\$`、`` ` `` → `\`` の順でエスケープする
 
 さらに canonical findings の `producer.version` を埋めるため、同じ `$CLAUDE_PLUGIN_ROOT` を基準に `$CLAUDE_PLUGIN_ROOT/.claude-plugin/plugin.json` を Read ツールで取得し、`.version` を `$plugin_version` として保持する。`findings.verified.json` の `producer.version` は空文字列不可のため、取得に失敗した場合は Step 5 の **failed 更新** へ遷移する。`schemas/findings.v1.json` も同じ基準で Read し、Step 4c の schema validation に使う。
 
@@ -646,7 +667,7 @@ echo "$CLAUDE_PLUGIN_ROOT"
 
 Claude Code と Codex CLI の両方で独立にレビューし、結果を統合する。
 
-**4a と 4b は並行実行する。** 各ツールは独立した clone ディレクトリを使うため競合しない。両方の Bash コマンドを `run_in_background: true` で同時に発行し、両方の完了通知を待ってから 4c に進む。Step 4 前処理で読み込んだ観点本文で `{REVIEW_CRITERIA}` / `{RUN_PLAN_GUIDANCE}` / `{DEPTH_GUIDANCE}` を置換した **完全体のコマンド文字列**を Bash ツールへ渡すこと。
+**4a と 4b は並行実行する。** 各ツールは独立した clone ディレクトリを使うため競合しない。両方の Bash コマンドを `run_in_background: true` で同時に発行し、両方の完了通知を待ってから 4c に進む。Step 4 前処理で読み込んだ観点本文で `{REVIEW_CRITERIA}` / `{RUN_PLAN_GUIDANCE}` / `{DEPTH_GUIDANCE}` / `{BEAR_REVIEW_GUIDANCE}` を置換した **完全体のコマンド文字列**を Bash ツールへ渡すこと。
 
 Claude Code Bash tool の foreground timeout 上限は `600000` ms。`estimated_timeout_ms` / `review_loop.time_budget_ms` は実行予算であり、Bash tool の foreground timeout 引数として渡さない。Step 4a / 4b で 20 分級の hunter 実行を許す場合は、foreground timeout を `1200000` に上げるのではなく `run_in_background: true` で起動し、両方の完了通知を待つ。
 
@@ -678,6 +699,8 @@ pr.diff が存在しない／空の場合は 'PR_DIFF_UNAVAILABLE' の1行だけ
 {RUN_PLAN_GUIDANCE}
 
 {DEPTH_GUIDANCE}
+
+{BEAR_REVIEW_GUIDANCE}
 
 {REVIEW_CRITERIA}
 
@@ -741,6 +764,8 @@ pr.diff が存在しない／空の場合は 'PR_DIFF_UNAVAILABLE' の1行だけ
 {RUN_PLAN_GUIDANCE}
 
 {DEPTH_GUIDANCE}
+
+{BEAR_REVIEW_GUIDANCE}
 
 {REVIEW_CRITERIA}
 
@@ -1036,6 +1061,7 @@ $CLAUDE_PLUGIN_ROOT/tasks/
   ├── validate_findings.py    ← canonical findings の schema / fingerprint / format / range validator
   └── validate_review_rounds.py ← review-rounds.json の local-only / halting validator
   ├── validate_candidates.py      ← hunter candidates の schema / metadata validator
+  ├── detect_bear_sunday.py       ← BEAR.Sunday 判定と bear-review 利用可否を bear-review-context.json に出力
   ├── validate_findings.py        ← canonical findings の schema / fingerprint / format / range validator
   ├── generate_findings_sarif.py  ← canonical findings から local-only findings.sarif を生成
   ├── validate_findings_sarif.py  ← SARIF schema / post_policy / count consistency validator
@@ -1059,6 +1085,7 @@ $CLAUDE_PLUGIN_ROOT/schemas/
         ├── run-plan.json        ← preflight 指標と routing_decision。Step 5 成功時に actual_duration_ms / actual_tokens を追記
         ├── pr.diff              ← PR 差分 (unified diff)。Step 4a/4b のスコープ確定情報源
         ├── pr.diff.ranges.txt   ← コメント可能行範囲。Step 4a/4b と Step 4c の行番号検証に使う
+        ├── bear-review-context.json ← BEAR.Sunday 判定と bear-review 利用可否。unavailable でも通常レビューは継続
         ├── clone-claude/        ← Claude Code 用 shallow clone (depth 50, base fetch 済み)
         ├── clone-codex/         ← Codex CLI 用 shallow clone (depth 50, base fetch 済み)
         ├── claude-review.md     ← Claude Code の生レビュー (hunter)
@@ -1098,13 +1125,14 @@ F11 の regression eval (`score_fixture.py` / `m1_m2_gate.py`) は通常の `/pr
    - `findings.verified.json.tmp` / `validation-report.json.tmp` / `review-rounds.json.tmp` / `review.md.tmp` は `Write` ツールで書き出し、gate 通過後に `mv` で final name へ反映する（`file_path` は `~` / `$...` を展開しないため、実値の絶対パスを渡す）
    - `findings.candidates.json.tmp` / `findings.verified.json.tmp` / `validation-report.json.tmp` / `review.md.tmp` は `Write` ツールで書き出し、`findings.sarif.tmp` は `generate_findings_sarif.py` の `--output` で書き出し、gate 通過後に `mv` で final name へ反映する（`file_path` は `~` / `$...` を展開しないため、実値の絶対パスを渡す）
    - `status.json` / `metadata.json` / `run-plan.json` は `jq -n --arg` / `--argjson` / `--slurpfile` / `--rawfile` の出力を `Bash` の `>` で書く
+   - `bear-review-context.json` は `python3 $CLAUDE_PLUGIN_ROOT/tasks/detect_bear_sunday.py ... --out-json` で書く。BEAR.Skills や PHPMD がない場合も通常レビュー継続のため `status=unavailable` を artifact に残す
    - `pr.diff` は Step 3 の `gh pr diff` の標準出力を `>` でリダイレクトして作成する
    - `pr.diff.ranges.txt` は Step 3 の `awk` の標準出力を `>` でリダイレクトして作成する
    - `claude-review.md` / `codex-review.md` / `claude.log` / `codex.log` は Step 4a / 4b の標準出力・標準エラーを `>` / `2>` でリダイレクトして作成する
 7. Step 4a / 4b は `run_in_background: true` で起動し、foreground timeout 引数を `1200000` に固定してはならない。Claude Code Bash tool の foreground timeout 上限 600000 ms を超える実行予算は `run-plan.json.estimated_timeout_ms` / `review_loop.time_budget_ms` として扱い、完了通知待ちで管理する
-8. テンプレートに明示された `git fetch` / `git checkout FETCH_HEAD` / `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_candidates.py ...` / `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings.py ...` / `python3 $CLAUDE_PLUGIN_ROOT/tasks/generate_findings_sarif.py ...` / `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings_sarif.py ...` / `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_status.py ...` / temp file から final artifact への `mv` / 成果物ファイル作成以外の状態変更操作は実行しない。禁止例: `git push` / `git merge` / `git reset --*` / `git clean -fd[x]` / `git stash` / `git commit` / `git tag` / `git branch -D`、`rm -rf` 系、`gh pr` / `gh issue` の write 操作、および GitHub / Backlog / DocBase の write 系 MCP ツール
+8. テンプレートに明示された `git fetch` / `git checkout FETCH_HEAD` / `python3 $CLAUDE_PLUGIN_ROOT/tasks/detect_bear_sunday.py ...` / `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_candidates.py ...` / `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings.py ...` / `python3 $CLAUDE_PLUGIN_ROOT/tasks/generate_findings_sarif.py ...` / `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings_sarif.py ...` / `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_status.py ...` / temp file から final artifact への `mv` / 成果物ファイル作成以外の状態変更操作は実行しない。禁止例: `git push` / `git merge` / `git reset --*` / `git clean -fd[x]` / `git stash` / `git commit` / `git tag` / `git branch -D`、`rm -rf` 系、`gh pr` / `gh issue` の write 操作、および GitHub / Backlog / DocBase の write 系 MCP ツール
 9. 1回の実行で選定・処理する PR は 1 件のみとする
-10. Step 4a / 4b のプロンプト中に含まれる `{REVIEW_CRITERIA}` / `{RUN_PLAN_GUIDANCE}` / `{DEPTH_GUIDANCE}` プレースホルダは、Step 4 前処理で Read した `REVIEW_CRITERIA.md` と `run-plan.json` を元に Claude 側で置換したうえで、Bash ツールに渡す完全体のコマンド文字列として使う。`{REVIEW_CRITERIA}` / `{RUN_PLAN_GUIDANCE}` / `{DEPTH_GUIDANCE}` のいずれも bash double-quote 内で安全になるよう、差し込み前に **`\` → `\\`、`"` → `\"`、`$` → `\$`、`` ` `` → `\``** の順でエスケープする。シェルでのコマンド置換 (`$()`) やヒアドキュメントは使わない
+10. Step 4a / 4b のプロンプト中に含まれる `{REVIEW_CRITERIA}` / `{RUN_PLAN_GUIDANCE}` / `{DEPTH_GUIDANCE}` / `{BEAR_REVIEW_GUIDANCE}` プレースホルダは、Step 4 前処理で Read した `REVIEW_CRITERIA.md`、`run-plan.json`、`bear-review-context.json` を元に Claude 側で置換したうえで、Bash ツールに渡す完全体のコマンド文字列として使う。`{REVIEW_CRITERIA}` / `{RUN_PLAN_GUIDANCE}` / `{DEPTH_GUIDANCE}` / `{BEAR_REVIEW_GUIDANCE}` のいずれも bash double-quote 内で安全になるよう、差し込み前に **`\` → `\\`、`"` → `\"`、`$` → `\$`、`` ` `` → `\``** の順でエスケープする。シェルでのコマンド置換 (`$()`) やヒアドキュメントは使わない
 
 補助注記（いずれもテンプレート一字一句原則の具体適用例）:
 
