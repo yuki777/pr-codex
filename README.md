@@ -75,6 +75,8 @@ cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
 
 `/pr-codex:review` はレビュー深度を `standard` / `deep` の 2 値で記録する。既定はコストと 20 分 timeout を優先する `standard` で、`deep` は高リスク・小規模 PR または手動指定向け。
 
+この 20 分は review budget / run-plan budget であり、Bash tool の foreground timeout ではない。Claude Code Bash tool の foreground timeout 上限 600000 ms を超えるため、review hunters は run_in_background: true で起動し、foreground timeout=1200000 は指定しない。
+
 | 入力 / signal | selected depth | artifact |
 | --- | --- | --- |
 | `/pr-codex:review --deep` かつ `lines_added + lines_removed <= 5000` | `deep` | `depth_source=argument`, `depth_requested=deep`, `depth_downgraded=false` |
