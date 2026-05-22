@@ -61,6 +61,10 @@ class ExtractDiffRangesTest(unittest.TestCase):
             +++ /dev/null
             @@ -1,2 +0,0 @@
             -gone
+            diff --git a/zero.txt b/zero.txt
+            --- a/zero.txt
+            +++ b/zero.txt
+            @@ -1,0 +5,0 @@
             diff --git a/single.txt b/single.txt
             --- a/single.txt
             +++ b/single.txt
