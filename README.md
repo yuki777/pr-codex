@@ -18,7 +18,7 @@ GitHub PRを **Claude Code** と **Codex CLI** の2者レビュー方式で自�
 - GitHub CLI (`gh`)
 - `jq`（SKILL.md 内の全テンプレートで利用する。macOS 標準では未インストール）
 - `python3`（同梱 validator / eval runner で `findings.candidates.json` / `findings.verified.json` / `status.json` / `preflight-result.json` / `findings.sarif` / fixture scoring artifact を検証するため）
-- Python package `jsonschema` (`jsonschema>=4,<5`) — `tasks/validate_findings_sarif.py` が同梱 OASIS SARIF v2.1.0 schema に対して official schema validation を行うため。未インストール時も stdlib fallback で pr-codex の shape / cross-artifact rule は検証する
+- Python package `jsonschema` (`jsonschema>=4,<5`) — `tasks/validate_findings_sarif.py` が同梱 OASIS SARIF v2.1.0 schema に対して official schema validation を行うため。未インストール時は schema-invalid な SARIF を通さないよう fail-closed で失敗する
 
 ## セットアップ
 

@@ -169,13 +169,15 @@ def json_path_from_error(error: Any) -> str:
 def validate_official_sarif_schema(schema: Any, data: Any) -> list[str]:
     """Validate the SARIF payload against the bundled OASIS Draft-07 schema.
 
-    jsonschema enables the full official SARIF schema check, but the command is
-    often run inside plugin shells where optional Python packages are not yet
-    installed. In that case, validate_sarif_shape still fail-closes on every
-    field that generate_findings_sarif.py emits and that send/review depend on.
+    jsonschema enables the full official SARIF schema check. Without it, the
+    validator must fail closed because validate_sarif_shape is only a pr-codex
+    contract guard and cannot cover every official SARIF schema constraint.
     """
     if jsonschema is None:
-        return []
+        return [
+            "$schema_file: python package 'jsonschema' is required for official OASIS SARIF schema validation; "
+            "install it with `python3 -m pip install jsonschema`"
+        ]
     try:
         jsonschema.Draft7Validator.check_schema(schema)
         validator = jsonschema.Draft7Validator(schema, format_checker=jsonschema.FormatChecker())

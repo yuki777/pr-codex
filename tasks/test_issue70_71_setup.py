@@ -75,7 +75,7 @@ class Issue70PluginRootSetupTest(unittest.TestCase):
 
 
 class Issue71SarifJsonschemaSetupTest(unittest.TestCase):
-    def test_sarif_validator_falls_back_to_builtin_shape_checks_without_jsonschema(self) -> None:
+    def test_sarif_validator_fails_closed_without_jsonschema(self) -> None:
         schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
         findings = canonical_artifact()
         sarif = build_sarif(findings, metadata=metadata(), ranges={"src/App.php": [(1, 20)]})
@@ -83,9 +83,9 @@ class Issue71SarifJsonschemaSetupTest(unittest.TestCase):
         with mock.patch.object(sarif_validator, "jsonschema", None):
             errors = sarif_validator.validate_findings_sarif(schema, sarif, findings=findings)
 
-        self.assertEqual(errors, [])
+        self.assertTrue(any("jsonschema" in error and "required" in error for error in errors), errors)
 
-    def test_sarif_validator_builtin_shape_checks_cover_emitted_sarif_fields_without_jsonschema(self) -> None:
+    def test_sarif_validator_builtin_shape_checks_still_report_emitted_field_errors_without_jsonschema(self) -> None:
         schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
         findings = canonical_artifact()
         sarif = build_sarif(findings, metadata=metadata(), ranges={"src/App.php": [(1, 20)]})
@@ -95,6 +95,7 @@ class Issue71SarifJsonschemaSetupTest(unittest.TestCase):
         with mock.patch.object(sarif_validator, "jsonschema", None):
             errors = sarif_validator.validate_findings_sarif(schema, sarif, findings=findings)
 
+        self.assertTrue(any("jsonschema" in error and "required" in error for error in errors), errors)
         self.assertTrue(any("tool.driver.informationUri" in error for error in errors), errors)
         self.assertTrue(any("automationDetails.id" in error for error in errors), errors)
 
