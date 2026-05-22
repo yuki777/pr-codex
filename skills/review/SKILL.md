@@ -409,27 +409,23 @@ jq -n --arg org "$org" --arg repository "$repository" --arg repository_full_name
 
 `depth_actual`（`standard` / `deep`）と `recommended_mode`（`standard` / `focused` / `skip`）は直交した軸として扱う。depth は「1観点あたりの掘り下げ深さ」、recommended_mode は「対象観点の絞り込み」を表すため、`depth_actual="deep"` かつ `recommended_mode="focused"` のような組み合わせも有効である。
 
-モード切替の暫定ルール:
+判定ロジックの canonical source は直後の `jq` テンプレート内の `def auto_deep` / `def depth_actual` / `def recommended_mode` / `def budget_class` / `def model_profile` とし、散文はその読み取り補助に限定する。条件が重なる場合は `jq` の評価順を優先し、表の `file-count rules` / `line-count rules` / `mode/depth rules` は同じ canonical def を参照する。`total_lines > 5000` では `--deep` 明示時も `depth_actual = "standard"` に強制する。
 
-- 明示 `--deep` → `depth_actual = "deep"`、`depth_source = "argument"`（ただし `lines_added + lines_removed > 5000` なら `standard` に強制降格し、`depth_downgraded = true` / `depth_downgrade_reason` を記録）
-- 明示 `--standard` → `depth_actual = "standard"`、`depth_source = "argument"`
-- 引数なし、かつ `risk_tags` に `security` または `data_migration` を含み、`files_changed <= 20` かつ `lines_added + lines_removed <= 1500` → `depth_actual = "deep"`、`depth_source = "auto"`
-- 引数なしで上記に該当しない場合 → `depth_actual = "standard"`、`depth_source = "default"`
-- `lines_added + lines_removed > 5000` → `--deep` 明示時も `depth_actual = "standard"` に強制
-- `files_changed > 50` → `recommended_mode = "focused"` に切替
-- `files_changed > 100` → `recommended_mode = "skip"` と `skip_reason` を設定（ただし M1 の既定実行は skip せず focused fallback）
+| 条件 | depth_actual | recommended_mode | budget_class | model_profile |
+|---|---|---|---|---|
+| `--deep` かつ `total_lines <= 5000` | `deep` | file-count rules | line-count rules | mode/depth rules |
+| `--deep` かつ `total_lines > 5000` | `standard`（downgrade） | file-count rules | line-count rules | mode/depth rules |
+| `--standard` | `standard` | file-count rules | line-count rules | mode/depth rules |
+| 引数なし、`risk_tags` に `security` または `data_migration` を含み、`files_changed <= 20` かつ `total_lines <= 1500` | `deep`（auto） | file-count rules | line-count rules | mode/depth rules |
+| 引数なし、上記以外 | `standard` | file-count rules | line-count rules | mode/depth rules |
+| `files_changed > 100` | depth rules | `skip` | `large` | `focused-fallback` |
+| `50 < files_changed <= 100` | depth rules | `focused` | line-count rules | `focused-fallback` |
+| `files_changed <= 50` | depth rules | `standard` | line-count rules | `deep` if `depth_actual == "deep"`, else `standard` |
+| `files_changed <= 10` かつ `total_lines <= 500` かつ `sensitive_risk_count == 0` | depth rules | file-count rules | `small` | mode/depth rules |
+| `files_changed <= 50` かつ `total_lines <= 5000`（small 以外） | depth rules | file-count rules | `medium` | mode/depth rules |
+| 上記以外 | depth rules | file-count rules | `large` | mode/depth rules |
 
-推定 timeout は `min(1200000, 300000 + files_changed*30000 + hunks*15000 + (lines_added+lines_removed)*100 + sensitive_risk_count*90000)` の暫定式で求める。`sensitive_risk_count` は `risk_tags` のうち `security` / `data_migration` の件数。
-
-予算・routing の派生ルール:
-
-- `budget_class = "small"`: `files_changed <= 10` かつ `total_lines <= 500` かつ `sensitive_risk_count == 0`
-- `budget_class = "medium"`: `small` ではなく、`files_changed <= 50` かつ `total_lines <= 5000`
-- `budget_class = "large"`: 上記以外
-- `model_profile = "deep"`: `recommended_mode == "standard"` かつ `depth_actual == "deep"`
-- `model_profile = "standard"`: `recommended_mode == "standard"` かつ `depth_actual == "standard"`
-- `model_profile = "focused-fallback"`: `recommended_mode == "focused"` または `"skip"`（skip 提案でもレビューは止めない）
-- `rationale` は `files_changed` / `total_lines` / `risk_tags` / `depth_actual` / `recommended_mode` の決定論的な事実列のみとし、LLM 自由生成文や provider/model 名を入れない
+推定 timeout は `min(1200000, 300000 + files_changed*30000 + hunks*15000 + total_lines*100 + sensitive_risk_count*90000)` を使う。`sensitive_risk_count` は `risk_tags` のうち `security` / `data_migration` の件数。`rationale` は `files_changed` / `total_lines` / `risk_tags` / `depth_actual` / `recommended_mode` の決定論的な事実列のみとし、LLM 自由生成文や provider/model 名を入れない。
 
 ```bash
 jq -n --arg depth_requested "$depth_requested" --slurpfile metadata ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json --rawfile diff ~/claude-loop-pr-codex/$org-$repository-$pr_number/pr.diff '
