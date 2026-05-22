@@ -50,6 +50,19 @@ Skill 起動直後に `$ARGUMENTS` を解釈し、`$send_mode = interactive | au
 - 次アクション: 出力を上から順に走査し、各行を `$candidate` として後続の判定テンプレートへ渡す
 
 ```bash
+plugin_root="${CLAUDE_PLUGIN_ROOT:-$(python3 - <<'PY'
+from pathlib import Path
+for marker in Path.home().glob('.claude/plugins/cache/**/pr-codex/tasks/validate_findings.py'):
+    print(marker.resolve().parents[1])
+    break
+else:
+    raise SystemExit('CLAUDE_PLUGIN_ROOT is unset and pr-codex plugin root was not found')
+PY
+)}"
+test -d "$plugin_root/tasks" && test -d "$plugin_root/schemas"
+```
+
+```bash
 ls -1 ~/claude-loop-pr-codex | grep -v '^sent$' | grep -v 'clear.sh'
 ```
 
@@ -109,7 +122,7 @@ test -f ~/claude-loop-pr-codex/$dir_name/findings.verified.json
 
 ### Step 2.5: plugin root / schema / validator path の解決
 
-Step 3 と Step 4.5 の verifier pipeline で `{SCHEMA_PATH}` / `{VALIDATOR_PATH}` / `{SARIF_SCHEMA_PATH}` / `{SARIF_VALIDATOR_PATH}` / `{SARIF_GENERATOR_PATH}` / `{PREFLIGHT_SCHEMA_PATH}` / `{PREFLIGHT_VALIDATOR_PATH}` を絶対パスへ置換できるよう、ここで各 path を保持する。`$CLAUDE_PLUGIN_ROOT` が未設定・不明な場合は review skill と同じ手順（`echo "$CLAUDE_PLUGIN_ROOT"`、空なら `**/pr-codex/skills/review/REVIEW_CRITERIA.md` の探索結果から plugin root を逆算）で絶対パスを確定する。
+Step 3 と Step 4.5 の verifier pipeline で `{SCHEMA_PATH}` / `{VALIDATOR_PATH}` / `{SARIF_SCHEMA_PATH}` / `{SARIF_VALIDATOR_PATH}` / `{SARIF_GENERATOR_PATH}` / `{PREFLIGHT_SCHEMA_PATH}` / `{PREFLIGHT_VALIDATOR_PATH}` に埋め込むため、ここで各 path を保持する。`CLAUDE_PLUGIN_ROOT` が未設定・不明な場合も、冒頭の `plugin_root` fallback block で plugin root を自己解決する。
 
 保持する値:
 
@@ -130,7 +143,7 @@ Step 3 と Step 4.5 の verifier pipeline で `{SCHEMA_PATH}` / `{VALIDATOR_PATH
 - いつ使うか: `findings.verified.json` 解析の開始直後、JSON 抽出や payload 生成の前に必ず実行する
 - 判定条件: 終了コード 0
 - 次アクション: 成功なら Read ツールで `findings.verified.json` を読み Step 3 の抽出へ進む。失敗ならユーザーに通知して中断し、Markdown fallback へは切り替えない
-- `$CLAUDE_PLUGIN_ROOT` が shell 環境で未設定の場合は、Step 2.5 で保持した `validator_path` / `schema_path` の実値へ置換してから Bash ツールへ渡す。Step 4.5 のプロンプトにも同じ絶対パスを埋め込む
+- `validator_path` / `schema_path` は Step 2.5 で `plugin_root` から組み立てた値を使う。Step 4.5 のプロンプトにも同じ絶対パスを埋め込む
 
 ```bash
 python3 $validator_path --schema $schema_path --data ~/claude-loop-pr-codex/$dir_name/findings.verified.json --metadata ~/claude-loop-pr-codex/$dir_name/metadata.json
@@ -263,10 +276,10 @@ GitHub Reviews API は PR diff の新ファイル側 hunk 範囲外の `line` �
 - 次アクション: 作成後、`pr.diff.ranges.txt` を Read ツールで取得し、Claude 側で `$must_fix` の各エントリを検証する
 
 ```bash
-test -f "${CLAUDE_PLUGIN_ROOT}/skills/lib/extract-diff-ranges.awk" && awk -f "${CLAUDE_PLUGIN_ROOT}/skills/lib/extract-diff-ranges.awk" ~/claude-loop-pr-codex/$dir_name/pr.diff > ~/claude-loop-pr-codex/$dir_name/pr.diff.ranges.txt
+test -f "$plugin_root/skills/lib/extract-diff-ranges.awk" && awk -f "$plugin_root/skills/lib/extract-diff-ranges.awk" ~/claude-loop-pr-codex/$dir_name/pr.diff > ~/claude-loop-pr-codex/$dir_name/pr.diff.ranges.txt
 ```
 
-`${CLAUDE_PLUGIN_ROOT}` が Bash subprocess に渡らず `test -f` が失敗した場合は、`echo "$CLAUDE_PLUGIN_ROOT"` または plugin cache の絶対パス確認で root を確定し、`${CLAUDE_PLUGIN_ROOT}` の位置を実値に置換した同じ `test -f ... && awk -f ...` コマンドを再実行する。root を確定できない場合は silent な空ファイル生成を避けるため中断する。
+`plugin_root` は冒頭で自己解決済みの値を使う。`test -f` が失敗した場合は、同じ fallback block を再実行して plugin root を再解決し、まだ root を確定できない場合は silent な空ファイル生成を避けるため中断する。
 
 続いて `pr.diff.ranges.txt` を Read ツールで取得する。`file_path` は `~` を `$HOME` の実値に展開した絶対パスで渡す。
 
@@ -365,9 +378,9 @@ payload は Write ツールで `~/claude-loop-pr-codex/$dir_name/review-payload.
 
 ### Step 4.5: 投稿前 verifier pipeline (Codex セルフレビュー)
 
-Claude が生成した `review-payload.json` と review 側が生成した local-only `findings.sarif` を Codex CLI に独立検証させ、投稿直前の検証を **4 stage verifier pipeline** として実行する。`--auto-submit` でもスキップしない。Step 5 第2ステップ（interactive の最終承認プロンプト、または auto_submit の自動続行判断）の直前で必ず実行する。`findings.verified.json` は必須入力であり、Markdown fallback は使わない。検証では `comments[]` への Must Fix 以外の混入、Should Fix body summary の対応関係、Nit の payload 混入、SARIF schema/side/post_policy 違反、行範囲外コメント、event/body 不整合を検出する。従来互換の `preflight-codex.md` / `preflight-codex.log` は維持し、新たに構造化結果 `preflight-result.json` を出力する。検証プロンプトには `$CLAUDE_PLUGIN_ROOT/schemas/findings.v1.json`、`$CLAUDE_PLUGIN_ROOT/schemas/sarif-2.1.0.json`、`$CLAUDE_PLUGIN_ROOT/schemas/preflight-result.v1.json`、および各 validator/generator の絶対パスを埋め込み、`--cd ~/claude-loop-pr-codex/$dir_name` 配下の相対 `schemas/` には依存しない。
+Claude が生成した `review-payload.json` と review 側が生成した local-only `findings.sarif` を Codex CLI に独立検証させ、投稿直前の検証を **4 stage verifier pipeline** として実行する。`--auto-submit` でもスキップしない。Step 5 第2ステップ（interactive の最終承認プロンプト、または auto_submit の自動続行判断）の直前で必ず実行する。`findings.verified.json` は必須入力であり、Markdown fallback は使わない。検証では `comments[]` への Must Fix 以外の混入、Should Fix body summary の対応関係、Nit の payload 混入、SARIF schema/side/post_policy 違反、行範囲外コメント、event/body 不整合を検出する。従来互換の `preflight-codex.md` / `preflight-codex.log` は維持し、新たに構造化結果 `preflight-result.json` を出力する。検証プロンプトには `$plugin_root/schemas/findings.v1.json`、`$plugin_root/schemas/sarif-2.1.0.json`、`$plugin_root/schemas/preflight-result.v1.json`、および各 validator/generator の絶対パスを埋め込み、`--cd ~/claude-loop-pr-codex/$dir_name` 配下の相対 `schemas/` には依存しない。
 
-`findings.verified.json` 検証プロンプトには `$CLAUDE_PLUGIN_ROOT/schemas/findings.v1.json` の**絶対パス**（Step 2.5 で解決した `schema_path`）と同梱 validator の絶対パス（`validator_path`）を埋め込む。SARIF 検証には `sarif_schema_path` / `sarif_validator_path` / `sarif_generator_path` を使う。`preflight-result.json` 抽出/検証には `preflight_schema_path` と `preflight_validator_path` を使い、Codex の出力崩れを `PASS` と誤判定しない。
+`findings.verified.json` 検証プロンプトには `$plugin_root/schemas/findings.v1.json` の**絶対パス**（Step 2.5 で解決した `schema_path`）と同梱 validator の絶対パス（`validator_path`）を埋め込む。SARIF 検証には `sarif_schema_path` / `sarif_validator_path` / `sarif_generator_path` を使う。`preflight-result.json` 抽出/検証には `preflight_schema_path` と `preflight_validator_path` を使い、Codex の出力崩れを `PASS` と誤判定しない。
 
 #### 4 stage と既存観点の対応
 
@@ -787,8 +800,8 @@ test ! -d ~/claude-loop-pr-codex/$dir_name && test -d ~/claude-loop-pr-codex/sen
 8. `gh` の write 系操作は `gh api --method POST .../reviews` のみとし、`gh pr review` / `gh pr comment` / `gh pr merge` などは使わない
 9. 1 回の実行で処理する対象ディレクトリは 1 件のみとする
 10. 投稿前の Step 5 承認プロンプトは interactive mode では必須。`--auto-submit` では最終投稿承認だけをスキップできるが、Step 5.5 の二重投稿防止と head SHA 再確認は必須。Should Fix body summary は default no とし、interactive の Step 3.75 で明示 opt-in された場合だけ上位 3 件を body に含める。auto_submit mode では Should Fix prompt を表示せず default no を使う
-11. Step 3 の `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings.py ...` を **必ず**実行する。`findings.verified.json` 欠落または validator 失敗時に payload 生成や Markdown fallback へ進んではならない
-12. Step 4.5 の verifier pipeline は **必須**。スキップしてはならない。`preflight-result.json.verdict == "PASS"` と `preflight-codex.md` の `VERDICT: PASS` を確認するまで Step 5 に進まない。schema 検証観点では `$CLAUDE_PLUGIN_ROOT/schemas/findings.v1.json`、`$CLAUDE_PLUGIN_ROOT/schemas/sarif-2.1.0.json`、`$CLAUDE_PLUGIN_ROOT/schemas/preflight-result.v1.json` の絶対パスを prompt / 抽出コマンドに埋め込み、`--cd` 配下の相対 `schemas/` には依存しない
+11. Step 3 の `python3 "$plugin_root/tasks/validate_findings.py" ...` を **必ず**実行する。`findings.verified.json` 欠落または validator 失敗時に payload 生成や Markdown fallback へ進んではならない
+12. Step 4.5 の verifier pipeline は **必須**。スキップしてはならない。`preflight-result.json.verdict == "PASS"` と `preflight-codex.md` の `VERDICT: PASS` を確認するまで Step 5 に進まない。schema 検証観点では `$plugin_root/schemas/findings.v1.json`、`$plugin_root/schemas/sarif-2.1.0.json`、`$plugin_root/schemas/preflight-result.v1.json` の絶対パスを prompt / 抽出コマンドに埋め込み、`--cd` 配下の相対 `schemas/` には依存しない
 
 ## ファイル構成
 

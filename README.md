@@ -18,9 +18,28 @@ GitHub PRを **Claude Code** と **Codex CLI** の2者レビュー方式で自�
 - GitHub CLI (`gh`)
 - `jq`（SKILL.md 内の全テンプレートで利用する。macOS 標準では未インストール）
 - `python3`（同梱 validator / eval runner で `findings.candidates.json` / `findings.verified.json` / `status.json` / `preflight-result.json` / `findings.sarif` / fixture scoring artifact を検証するため）
-- Python package `jsonschema` (`python3 -m pip install 'jsonschema>=4,<5'`) — `tasks/validate_findings_sarif.py` が同梱 OASIS SARIF v2.1.0 schema に対して official schema validation を行うため
+- Python package `jsonschema` (`jsonschema>=4,<5`) — `tasks/validate_findings_sarif.py` が同梱 OASIS SARIF v2.1.0 schema に対して official schema validation を行うため。未インストール時も stdlib fallback で pr-codex の shape / cross-artifact rule は検証する
 
 ## セットアップ
+
+
+### Python 依存と plugin root
+
+`validate_findings_sarif.py` の official OASIS SARIF schema validation には `jsonschema>=4,<5` を使う。PEP 668 で system Python への install が拒否される macOS/Homebrew 環境では venv を推奨する。
+
+```bash
+python3 -m venv ~/claude-loop-pr-codex/.venv
+. ~/claude-loop-pr-codex/.venv/bin/activate
+python3 -m pip install 'jsonschema>=4,<5'
+```
+
+venv を使わず user site に入れる場合だけ、環境によっては次のように `--break-system-packages` が必要になる。
+
+```bash
+python3 -m pip install --user --break-system-packages 'jsonschema>=4,<5'
+```
+
+`CLAUDE_PLUGIN_ROOT が未設定` の shell でも、SKILL.md の command template は `plugin_root="${CLAUDE_PLUGIN_ROOT:-...}"` で plugin root を自己解決する。fallback は plugin cache の `pr-codex/tasks/validate_findings.py` marker から root を算出するため、validator/tool 呼び出しを手動で絶対パスに置換しない。
 
 ### インストール
 
@@ -141,10 +160,19 @@ Stage ごとの責務、input/output artifact、halting 条件は [`skills/revie
 - PR が merge された事実だけ
 - bot/generated marker だけ
 
-実体は同梱 helper `$CLAUDE_PLUGIN_ROOT/tasks/learn_feedback.py` で、snapshot JSON から冪等に artifact を生成する。
+実体は同梱 helper `$CLAUDE_PLUGIN_ROOT/tasks/learn_feedback.py` で、snapshot JSON から冪等に artifact を生成する。`CLAUDE_PLUGIN_ROOT` が設定済みの環境では `python3 $CLAUDE_PLUGIN_ROOT/tasks/learn_feedback.py` として実行できる。
 
 ```bash
-python3 $CLAUDE_PLUGIN_ROOT/tasks/learn_feedback.py --input feedback-snapshot.json --output-dir ~/claude-loop-pr-codex/learn/yuki777-pr-codex-60-103766c
+plugin_root="${CLAUDE_PLUGIN_ROOT:-$(python3 - <<'PY'
+from pathlib import Path
+for marker in Path.home().glob('.claude/plugins/cache/**/pr-codex/tasks/validate_findings.py'):
+    print(marker.resolve().parents[1])
+    break
+else:
+    raise SystemExit('CLAUDE_PLUGIN_ROOT is unset and pr-codex plugin root was not found')
+PY
+)}"
+python3 "$plugin_root/tasks/learn_feedback.py" --input feedback-snapshot.json --output-dir ~/claude-loop-pr-codex/learn/yuki777-pr-codex-60-103766c
 ```
 
 `/pr-codex:send` の挙動:
