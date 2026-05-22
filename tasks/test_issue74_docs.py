@@ -54,10 +54,13 @@ class Issue74DocsTest(unittest.TestCase):
         )
 
     def test_step4c_removed_deprecated_verified_only_flow(self) -> None:
+        text = REVIEW_SKILL.read_text(encoding="utf-8")
         section = self._step4c()
-        self.assertNotIn("findings.verified.json` / `review.md` / `review-rounds.json`", section)
-        self.assertNotIn("`findings.verified.json` だけが残る状態", section)
-        self.assertNotIn("review.md` を先に反映し、その後 `findings.verified.json`、最後に `review-rounds.json`", section)
+        for haystack in (text, section):
+            self.assertNotIn("findings.verified.json` / `review.md` / `review-rounds.json`", haystack)
+            self.assertNotIn("`findings.verified.json` だけが残る状態", haystack)
+            self.assertNotIn("review.md` を先に反映し、その後 `findings.verified.json`、最後に `review-rounds.json`", haystack)
+            self.assertNotIn("schema / fingerprint validation のために `python3 $CLAUDE_PLUGIN_ROOT/tasks/validate_findings.py ...`", haystack)
 
 
 if __name__ == "__main__":
