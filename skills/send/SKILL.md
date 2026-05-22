@@ -51,12 +51,21 @@ Skill 起動直後に `$ARGUMENTS` を解釈し、`$send_mode = interactive | au
 
 ```bash
 plugin_root="${CLAUDE_PLUGIN_ROOT:-$(python3 - <<'PY'
+import os
 from pathlib import Path
-for marker in Path.home().glob('.claude/plugins/cache/**/pr-codex/tasks/validate_findings.py'):
-    print(marker.resolve().parents[1])
-    break
-else:
-    raise SystemExit('CLAUDE_PLUGIN_ROOT is unset and pr-codex plugin root was not found')
+roots = []
+if os.environ.get("CLAUDE_CODE_PLUGIN_CACHE_DIR"):
+    roots.append(Path(os.environ["CLAUDE_CODE_PLUGIN_CACHE_DIR"]).expanduser())
+if os.environ.get("CLAUDE_CONFIG_DIR"):
+    roots.append(Path(os.environ["CLAUDE_CONFIG_DIR"]).expanduser() / "plugins" / "cache")
+roots.append(Path.home() / ".claude" / "plugins" / "cache")
+markers = []
+for root in roots:
+    markers.extend(root.glob("**/pr-codex/tasks/validate_findings.py"))
+if not markers:
+    raise SystemExit("CLAUDE_PLUGIN_ROOT is unset and pr-codex plugin root was not found")
+marker = max((m.resolve() for m in markers), key=lambda p: (p.stat().st_mtime_ns, str(p)))
+print(marker.parents[1])
 PY
 )}"
 test -d "$plugin_root/tasks" && test -d "$plugin_root/schemas"
@@ -276,6 +285,24 @@ GitHub Reviews API は PR diff の新ファイル側 hunk 範囲外の `line` �
 - 次アクション: 作成後、`pr.diff.ranges.txt` を Read ツールで取得し、Claude 側で `$must_fix` の各エントリを検証する
 
 ```bash
+plugin_root="${CLAUDE_PLUGIN_ROOT:-$(python3 - <<'PY'
+import os
+from pathlib import Path
+roots = []
+if os.environ.get("CLAUDE_CODE_PLUGIN_CACHE_DIR"):
+    roots.append(Path(os.environ["CLAUDE_CODE_PLUGIN_CACHE_DIR"]).expanduser())
+if os.environ.get("CLAUDE_CONFIG_DIR"):
+    roots.append(Path(os.environ["CLAUDE_CONFIG_DIR"]).expanduser() / "plugins" / "cache")
+roots.append(Path.home() / ".claude" / "plugins" / "cache")
+markers = []
+for root in roots:
+    markers.extend(root.glob("**/pr-codex/tasks/validate_findings.py"))
+if not markers:
+    raise SystemExit("CLAUDE_PLUGIN_ROOT is unset and pr-codex plugin root was not found")
+marker = max((m.resolve() for m in markers), key=lambda p: (p.stat().st_mtime_ns, str(p)))
+print(marker.parents[1])
+PY
+)}"
 test -f "$plugin_root/skills/lib/extract-diff-ranges.awk" && awk -f "$plugin_root/skills/lib/extract-diff-ranges.awk" ~/claude-loop-pr-codex/$dir_name/pr.diff > ~/claude-loop-pr-codex/$dir_name/pr.diff.ranges.txt
 ```
 
