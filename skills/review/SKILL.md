@@ -360,26 +360,11 @@ gh pr diff $pr_number --repo $org/$repository > ~/claude-loop-pr-codex/$org-$rep
 - 判定条件: `pr.diff.ranges.txt` が作成される
 - 次アクション: status/metadata 作成へ進む
 
-> 注: 下記の awk スクリプト内 `$NF` `$3` は awk の自動フィールド変数であり、シェル変数ではない。
-> 実値置換せず、テンプレートそのままを Bash ツールへ渡すこと。`$org` `$repository` `$pr_number` のみ実値置換する。
-
 ```bash
-awk '
-  /^diff --git/ {
-    path = $NF
-    sub(/^b\//, "", path)
-    next
-  }
-  /^@@/ {
-    spec = $3
-    sub(/^\+/, "", spec)
-    n = split(spec, a, ",")
-    start = a[1] + 0
-    len = (n == 2 ? a[2] + 0 : 1)
-    if (len > 0) printf "%s\tL%d-L%d\n", path, start, start + len - 1
-  }
-' ~/claude-loop-pr-codex/$org-$repository-$pr_number/pr.diff > ~/claude-loop-pr-codex/$org-$repository-$pr_number/pr.diff.ranges.txt
+test -f "${CLAUDE_PLUGIN_ROOT}/skills/lib/extract-diff-ranges.awk" && awk -f "${CLAUDE_PLUGIN_ROOT}/skills/lib/extract-diff-ranges.awk" ~/claude-loop-pr-codex/$org-$repository-$pr_number/pr.diff > ~/claude-loop-pr-codex/$org-$repository-$pr_number/pr.diff.ranges.txt
 ```
+
+`${CLAUDE_PLUGIN_ROOT}` が Bash subprocess に渡らず `test -f` が失敗した場合は、`echo "$CLAUDE_PLUGIN_ROOT"` または plugin cache の絶対パス確認で root を確定し、`${CLAUDE_PLUGIN_ROOT}` の位置を実値に置換した同じ `test -f ... && awk -f ...` コマンドを再実行する。root を確定できない場合は silent な空ファイル生成を避けるため Step 5 の failed 更新へ遷移する。
 
 - `--depth 50` で shallow clone し、ディスク・時間を節約しつつ `git diff origin/$base_branch...HEAD` が算出可能な深さを確保する
 - Claude Code 用: `clone-claude/`、Codex CLI 用: `clone-codex/`
