@@ -34,7 +34,7 @@ allowed-tools: ["Bash", "Read", "Write", "Glob", "Grep"]
 /pr-codex:send --auto-submit --include-should-fix --include-nit
 ```
 
-引数なしは対話実行を前提とし、Step 5 で投稿 payload のサマリを提示してユーザーの明示的な承認を得てから Step 6 で投稿する。`--auto-submit` は Step 5 の最終投稿承認だけをスキップし、すべての validator / Step 4.5 preflight / Step 5.5 投稿直前 safety gate が成功した場合のみ Step 6 へ進む。`--include-should-fix` は Should Fix 全件を inline comment に含め、`--include-nit` は Nit 全件も inline comment に含める（`--include-nit` は `--include-should-fix` との併用必須）。diff 範囲外のものは body の `## 行コメント不可 (diff 範囲外)` へ退避する。unknown option、重複オプション、または無効な組み合わせは unsupported argument として中断する。
+引数なしは対話実行を前提とし、Step 5 で投稿 payload のサマリを提示してユーザーの明示的な承認を得てから Step 6 で投稿する。`--auto-submit` は Step 5 の最終投稿承認だけをスキップし、すべての validator / Step 4.5 preflight / Step 5.5 投稿直前 safety gate が成功した場合のみ Step 6 へ進む。`--include-should-fix` は投稿可能な Should Fix を inline comment に含め、`--include-nit` は投稿可能な Nit も inline comment に含める（`--include-nit` は `--include-should-fix` との併用必須）。diff 範囲外のものは body の `## 行コメント不可 (diff 範囲外)` へ退避する。unknown option、重複オプション、または無効な組み合わせは unsupported argument として中断する。
 
 1 回の実行で対象は 1 件のみ処理する。未投稿の completed レビューが複数ある場合は、`ls` の出力順（名前昇順）で最初の 1 件のみを処理し、残りは次回以降の `/pr-codex:send` 実行に委ねる。
 
@@ -48,8 +48,8 @@ Skill 起動直後に `$ARGUMENTS` を shell 風に空白分割して解釈し�
 
 - `$ARGUMENTS` が空文字列または空白のみ: `$send_mode=interactive` / `$include_should_fix=false` / `$include_nit=false`
 - `--auto-submit` が含まれる: `$send_mode=auto_submit`。含まれない場合は `$send_mode=interactive`
-- `--include-should-fix` が含まれる: `$include_should_fix=true` とし、Should Fix 候補を全件 inline comment 対象にする
-- `--include-nit` が含まれる: `$include_nit=true` とし、Nit 候補を全件 inline comment 対象にする。ただし `--include-nit` は `--include-should-fix` なしでは unsupported argument として中断する（--include-nit は --include-should-fix なしでは unsupported argument）
+- `--include-should-fix` が含まれる: `$include_should_fix=true` とし、投稿可能な Should Fix 候補を inline comment 対象にする
+- `--include-nit` が含まれる: `$include_nit=true` とし、投稿可能な Nit 候補を inline comment 対象にする。ただし `--include-nit` は `--include-should-fix` なしでは unsupported argument として中断する（--include-nit は --include-should-fix なしでは unsupported argument）
 - 未知オプション、位置引数、重複オプション、または `--include-nit` 単独のような無効な組み合わせ: `unsupported argument` として中断し、Step 1 以降の payload 生成や GitHub write は行わない
 
 `--auto-submit` は Step 5 の最終投稿承認だけを省略するモードであり、severity inclusion (`--include-should-fix` / `--include-nit`)、canonical artifact validation、SARIF validation、Step 4.5 verifier pipeline、head SHA 再確認、二重投稿防止 gate は省略しない。
@@ -184,9 +184,9 @@ Claude 側でメモリ上に以下を抽出する:
   - すべての finding で `id == fingerprint` が成り立ち、同梱 validator が正準アルゴリズムで再計算した fingerprint と一致すること
   - `findings[]` のうち `severity == "must_fix"` の要素を `$must_fix` 配列として抽出する
   - top-level `root_cause_clusters[]` がある場合は同梱 validator 済みの cluster detail を読み、各 cluster の `representative_finding_id` を representative posting 対象として扱う。cluster member は canonical finding としては残し、GitHub inline duplicate は代表コメントに集約する
-  - `findings[]` のうち `severity == "should_fix" && posting.post_policy == "body_summary"` の要素を `$should_fix_candidates` 配列として抽出する。順序は `findings[]` の登場順を保ち、`$include_should_fix == true` の場合は全件を `$inline_should_fix` として inline comment 対象にする。false の場合は空配列にする。diff 範囲外の Should Fix / Nit は body の `## 行コメント不可 (diff 範囲外)` へ退避する
-  - `findings[]` のうち `severity == "nit"` の要素を `$nit_findings` 配列として抽出する。`$include_nit == true` の場合は全件を `$inline_nit` として inline comment 対象にする。false の場合は `nits.md` にのみ書き出し、review payload には含めない
-  - M1 の投稿 contract として、`severity != "must_fix"` の finding は明示オプション指定時だけ send 側で inline comment に昇格できることを確認する
+  - `findings[]` のうち `severity == "should_fix" && posting.post_policy == "body_summary" && posting.explanation_postable == true` の要素を `$should_fix_candidates` 配列として抽出する。順序は `findings[]` の登場順を保ち、`$include_should_fix == true` の場合は範囲検証を通った全件を `$inline_should_fix` として inline comment 対象にする。false の場合は空配列にする。diff 範囲外の Should Fix / Nit は body の `## 行コメント不可 (diff 範囲外)` へ退避する
+  - `findings[]` のうち `severity == "nit"` の要素を `$nit_findings` 配列として `nits.md` 用に抽出する。inline 候補はこのうち `posting.post_policy == "body_summary" && posting.explanation_postable == true` の要素だけを `$nit_inline_candidates` 配列として抽出する。`local_only` / `suppress` / `explanation_postable == false` の Nit は `--include-nit` 指定時でも inline comment に昇格せず、`nits.md` のみに残す
+  - M1 の投稿 contract として、`severity != "must_fix"` の finding は canonical 側の `posting.post_policy` を変更せず、明示オプション指定時だけ send 側で `body_summary` かつ postable な finding を inline comment に昇格できることを確認する
   - `category == "security"` の finding は `security` extension を必須とし、`security.severity == "critical" | "high"` または `security.disclosure_policy != "inline_safe"` の場合は inline 投稿対象から除外する。公開 body に含める場合も `security.public_safe_summary` だけを使い、raw exploit detail / secret / 攻撃手順は載せない
 
 #### `findings.verified.json` から抽出するフィールド
@@ -215,9 +215,9 @@ Claude 側でメモリ上に以下を抽出する:
 | `suggestion_line` | `suggestion` を 1 行に畳み込んだ提案 |
 | `source_finding_id` | finding の `id` |
 
-`$should_fix_candidates` の上位判定は `findings[]` の配列順に固定し、send 側で severity / category / path などによる再ソートは行わない。`$include_should_fix == true` の場合は全件を `$inline_should_fix` として Step 4 の `comments[]` に使う。false の場合は `$inline_should_fix=[]` とする。
+`$should_fix_candidates` の上位判定は `findings[]` の配列順に固定し、send 側で severity / category / path などによる再ソートは行わない。`$include_should_fix == true` の場合は範囲検証を通った全件を `$inline_should_fix` として Step 4 の `comments[]` に使う。false の場合は `$inline_should_fix=[]` とする。
 
-各 Nit finding から以下を `nits.md` および `$include_nit == true` 時の inline comment 用に保持する:
+各 Nit finding から以下を `nits.md` 用に保持する。`$include_nit == true` 時の inline comment 候補は `$nit_findings` 全件ではなく、`posting.post_policy == "body_summary" && posting.explanation_postable == true` の `$nit_inline_candidates` だけに限定する:
 
 | 出力キー        | 値 |
 | --------------- | --- |
@@ -268,7 +268,7 @@ Step 3.5 で範囲外コメントをレビュー body 末尾へ退避するた�
 
 #### `nits.md` の書き出し (primary path のみ)
 
-`$nit_findings` が 1 件以上ある場合、Step 4 の payload 構築前に Write ツールで `~/claude-loop-pr-codex/$dir_name/nits.md` へ Markdown を書き出す。`file_path` には `~` を実値に展開した絶対パスを渡し、`$dir_name` も実値に置換する。0 件の場合は `nits.md` を作成しない。`$include_nit == true` の場合も local artifact として `nits.md` は残しつつ、全件を `$inline_nit` として inline comment にも含める。
+`$nit_findings` が 1 件以上ある場合、Step 4 の payload 構築前に Write ツールで `~/claude-loop-pr-codex/$dir_name/nits.md` へ Markdown を書き出す。`file_path` には `~` を実値に展開した絶対パスを渡し、`$dir_name` も実値に置換する。0 件の場合は `nits.md` を作成しない。`$include_nit == true` の場合も local artifact として `nits.md` は残しつつ、`$nit_inline_candidates` のうち範囲検証を通ったものだけを `$inline_nit` として inline comment に含める。`local_only` / `suppress` / `explanation_postable == false` の Nit は PR には投稿しない。
 
 形式:
 
@@ -291,9 +291,9 @@ F13 以降、`findings.verified.json` は必須の一次入力であり、`revie
 
 GitHub Reviews API は PR diff の新ファイル側 hunk 範囲外の `line` を 422 `Line could not be resolved` で拒否するため、payload 構築前に `pr.diff` からコメント可能行範囲を抽出し、Step 3 で得たインラインコメント候補を検証する。
 
-- いつ使うか: Step 3 で `$must_fix` 配列を作成した直後、Step 4 の payload 構築前に必ず実行する
+- いつ使うか: Step 3 で `$must_fix` / `$should_fix_candidates` / `$nit_inline_candidates` を作成した直後、Step 4 の payload 構築前に必ず実行する
 - 判定条件: `pr.diff.ranges.txt` が作成される
-- 次アクション: 作成後、`pr.diff.ranges.txt` を Read ツールで取得し、Claude 側で `$must_fix` の各エントリを検証する
+- 次アクション: 作成後、`pr.diff.ranges.txt` を Read ツールで取得し、Claude 側で `$must_fix` と、`$include_should_fix == true` の `$should_fix_candidates`、`$include_nit == true` の `$nit_inline_candidates` の各エントリを検証する
 
 ```bash
 plugin_root="${CLAUDE_PLUGIN_ROOT:-$(python3 - <<'PY'
@@ -331,13 +331,13 @@ test -f "$plugin_root/skills/lib/extract-diff-ranges.awk" && awk -f "$plugin_roo
 
 #### 範囲外エントリの扱い
 
-範囲外と判定した `$must_fix` のエントリは、以下のように扱う。
+範囲検証は `$must_fix`、`$include_should_fix == true` の `$should_fix_candidates`、`$include_nit == true` の `$nit_inline_candidates` に対して同じルールで適用する。範囲外と判定したエントリは、以下のように扱う。
 
-- `$must_fix` から除外し、`comments` 配列には含めない
+- 元の inline 配列（`$must_fix` / `$inline_should_fix` / `$inline_nit`）から除外し、`comments` 配列には含めない
 - 除外したエントリを `$out_of_range_comments` 配列として保持する
-- `$out_of_range_comments` には、元の見出し行、元の本文、種別 (`Must Fix`) を保持する
+- `$out_of_range_comments` には、元の見出し行、元の本文、種別 (`Must Fix` / `Should Fix` / `Nit`) を保持する
 - Step 4 のレビュー body 末尾に `## 行コメント不可 (diff 範囲外)` セクションを追加し、除外した各エントリの元の見出し行と本文を転記する
-- 除外後の `$must_fix` の相対順は、`findings.verified.json` の配列順を保つ
+- 除外後の `$must_fix` / `$inline_should_fix` / `$inline_nit` の相対順は、`findings.verified.json` の配列順を保つ
 
 既存の正常系 PR で全指摘が範囲内の場合、`$out_of_range_comments` は空配列となり、Step 4 以降の payload は従来と同じ内容になる。
 
@@ -345,9 +345,9 @@ test -f "$plugin_root/skills/lib/extract-diff-ranges.awk" && awk -f "$plugin_roo
 
 Step 0 で正規化した `$include_should_fix` / `$include_nit` に従い、inline comment に含める non-blocking finding を決める。ここではユーザーへの追加 opt-in prompt は表示しない。投稿可否の承認は interactive mode の Step 5 だけで行う。
 
-- `$include_should_fix == true`: `$should_fix_candidates` を全件 `$inline_should_fix` に設定する
+- `$include_should_fix == true`: `$should_fix_candidates` のうち範囲検証を通った全件を `$inline_should_fix` に設定し、範囲外のものは `$out_of_range_comments` に保持する
 - `$include_should_fix == false`: `$inline_should_fix=[]`
-- `$include_nit == true`: `$nit_findings` を全件 `$inline_nit` に設定する（Step 0 により `--include-should-fix` との併用済み）
+- `$include_nit == true`: `$nit_inline_candidates` のうち範囲検証を通った全件を `$inline_nit` に設定する（Step 0 により `--include-should-fix` との併用済み）。`$nit_findings` のうち `local_only` / `suppress` / `explanation_postable == false` のものは `$inline_nit` に入れない
 - `$include_nit == false`: `$inline_nit=[]`
 - fallback path、または候補 0 件の場合も prompt は表示せず、該当する included 配列を空にする
 
@@ -649,11 +649,11 @@ SARIF artifact: ~/claude-loop-pr-codex/<$dir_name>/findings.sarif (local-only, C
 body プレビュー:
   <$summary の先頭 200 文字。長ければ "..." で省略>
 インラインコメント: Must Fix N 件
-Should Fix inline comments: included <yes|no> (<included_count>/<candidate_count> 件、--include-should-fix で全件)
-Nit inline comments: included <yes|no> (<included_count>/<candidate_count> 件、--include-nit で全件)
+Should Fix inline comments: included <yes|no> (<included_count>/<candidate_count> 件、--include-should-fix で投稿可能候補を含める)
+Nit inline comments: included <yes|no> (<included_count>/<candidate_count> 件、--include-nit で投稿可能候補を含める)
 Nit artifact: <~/claude-loop-pr-codex/<$dir_name>/nits.md | nit: 0 件>
-（Should Fix / Nit は指定時に全件 inline comment に含めます。diff 範囲外は body へ退避します）
-行範囲外で除外したインラインコメント (Must Fix のみ): K 件
+（Should Fix / Nit は指定時に投稿可能なものを inline comment に含めます。diff 範囲外は body へ退避します）
+行範囲外で除外したインラインコメント (Must Fix / Should Fix / Nit): K 件
   - <path>:L<line> (本文末尾の「行コメント不可」セクションに移動)
 payload: ~/claude-loop-pr-codex/<$dir_name>/review-payload.json
 preflight result: ~/claude-loop-pr-codex/<$dir_name>/preflight-result.json
@@ -663,7 +663,7 @@ preflight result: ~/claude-loop-pr-codex/<$dir_name>/preflight-result.json
 ```
 
 `$out_of_range_comments` が空の場合も、サマリ行は `行範囲外で除外したインラインコメント: 0 件` として表示する。除外したエントリの箇条書きは 1 件以上ある場合のみ表示する。
-fallback path では `Should Fix inline comments: included no (0/0 件、--include-should-fix で全件)`、`Nit inline comments: included no (0/0 件、--include-nit で全件)`、`Nit artifact: nit: 0 件` と表示する。primary path で `$nit_findings` が 1 件以上ある場合は `nits.md` のパスを表示し、0 件なら `nit: 0 件` と表示する。
+fallback path では `Should Fix inline comments: included no (0/0 件、--include-should-fix で投稿可能候補を含める)`、`Nit inline comments: included no (0/0 件、--include-nit で投稿可能候補を含める)`、`Nit artifact: nit: 0 件` と表示する。primary path で `$nit_findings` が 1 件以上ある場合は `nits.md` のパスを表示し、0 件なら `nit: 0 件` と表示する。
 
 interactive mode では、ユーザーの応答が `yes` / `y` / `はい` 等の明示的な承認である場合のみ Step 5.5 に進む。それ以外（`no` / `n` / `いいえ` / 曖昧・無回答）の場合は処理を中断し、以下を報告して終了する。auto_submit mode ではこの承認入力を行わず、Step 4.5 PASS 後に Step 5.5 の safety gate へ進む:
 

@@ -56,12 +56,23 @@ class Issue88DocsTest(unittest.TestCase):
         for snippet in (
             "$inline_should_fix",
             "$inline_nit",
-            "`$include_should_fix == true` の場合は全件",
-            "`$include_nit == true` の場合は全件",
+            "$nit_inline_candidates",
+            "posting.post_policy == \"body_summary\" && posting.explanation_postable == true",
+            "範囲検証を通った全件",
+            "local_only` / `suppress` / `explanation_postable == false` の Nit は `--include-nit` 指定時でも inline comment に昇格せず",
             "diff 範囲外の Should Fix / Nit は body の `## 行コメント不可 (diff 範囲外)` へ退避",
             "`nits.md`",
         ):
             self.assertIn(snippet, extraction)
+
+        range_rules = section(text, "### Step 3.5:", "### Step 3.75:")
+        for snippet in (
+            "$must_fix` / `$should_fix_candidates` / `$nit_inline_candidates`",
+            "$include_should_fix == true` の `$should_fix_candidates`",
+            "$include_nit == true` の `$nit_inline_candidates`",
+            "種別 (`Must Fix` / `Should Fix` / `Nit`)",
+        ):
+            self.assertIn(snippet, range_rules)
 
         payload = section(text, "### Step 4:", "### Step 4.5:")
         for snippet in (
@@ -89,7 +100,8 @@ class Issue88DocsTest(unittest.TestCase):
             "/pr-codex:send --include-should-fix",
             "/pr-codex:send --auto-submit --include-should-fix --include-nit",
             "`--include-should-fix` は Must Fix + Should Fix を inline comment として投稿する",
-            "`--include-nit` は `--include-should-fix` と併用し、Must Fix + Should Fix + Nit を inline comment として投稿する",
+            "`--include-nit` は `--include-should-fix` と併用し、Must Fix + 投稿可能な Should Fix + 投稿可能な Nit を inline comment として投稿する",
+            "`local_only` / `suppress` / `explanation_postable: false` の Nit は投稿せず",
             "diff 範囲外のものは body の `## 行コメント不可 (diff 範囲外)` へ退避する",
             "unknown option や重複オプションは unsupported argument",
         ):
