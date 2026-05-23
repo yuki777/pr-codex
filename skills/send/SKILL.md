@@ -184,8 +184,8 @@ Claude 側でメモリ上に以下を抽出する:
   - すべての finding で `id == fingerprint` が成り立ち、同梱 validator が正準アルゴリズムで再計算した fingerprint と一致すること
   - `findings[]` のうち `severity == "must_fix"` の要素を `$must_fix` 配列として抽出する
   - top-level `root_cause_clusters[]` がある場合は同梱 validator 済みの cluster detail を読み、各 cluster の `representative_finding_id` を representative posting 対象として扱う。cluster member は canonical finding としては残し、GitHub inline duplicate は代表コメントに集約する
-  - `findings[]` のうち `severity == "should_fix" && posting.post_policy == "body_summary" && posting.explanation_postable == true && location.side == "RIGHT"` の要素を `$should_fix_candidates` 配列として抽出する。順序は `findings[]` の登場順を保ち、`$include_should_fix == true` の場合は範囲検証を通った全件を `$inline_should_fix` として inline comment 対象にする。false の場合は空配列にする。diff 範囲外または `location.side != "RIGHT"` の Should Fix / Nit は inline comment へ昇格せず、body の `## 行コメント不可 (diff 範囲外)` へ退避する
-  - `findings[]` のうち `severity == "nit"` の要素を `$nit_findings` 配列として `nits.md` 用に抽出する。inline 候補はこのうち `posting.post_policy == "body_summary" && posting.explanation_postable == true && location.side == "RIGHT"` の要素だけを `$nit_inline_candidates` 配列として抽出する。`local_only` / `suppress` / `explanation_postable == false` / `location.side != "RIGHT"` の Nit は `--include-nit` 指定時でも inline comment に昇格せず、`nits.md` のみに残す
+  - `findings[]` のうち `severity == "should_fix" && posting.post_policy == "body_summary" && posting.explanation_postable == true` の要素を `$should_fix_candidates` 配列として抽出する。順序は `findings[]` の登場順を保ち、`$include_should_fix == true` の場合は Step 3.5 で `location.side == "RIGHT"` かつ範囲検証を通ったものだけを `$inline_should_fix` として inline comment 対象にする。false の場合は空配列にする。diff 範囲外または `location.side != "RIGHT"` の Should Fix / Nit は inline comment へ昇格せず、body の `## 行コメント不可 (diff 範囲外)` へ退避する
+  - `findings[]` のうち `severity == "nit"` の要素を `$nit_findings` 配列として `nits.md` 用に抽出する。inline/fallback 候補はこのうち `posting.post_policy == "body_summary" && posting.explanation_postable == true` の要素だけを `$nit_inline_candidates` 配列として抽出する。`local_only` / `suppress` / `explanation_postable == false` の Nit は `--include-nit` 指定時でも inline comment に昇格せず、`nits.md` のみに残す。`location.side != "RIGHT"` の Nit は Step 3.5 で fallback に退避する
   - M1 の投稿 contract として、`severity != "must_fix"` の finding は canonical 側の `posting.post_policy` を変更せず、明示オプション指定時だけ send 側で `body_summary` かつ postable な finding を inline comment に昇格できることを確認する
   - `category == "security"` の finding は `security` extension を必須とし、`security.severity == "critical" | "high"` または `security.disclosure_policy != "inline_safe"` の場合は inline 投稿対象から除外する。公開 body に含める場合も `security.public_safe_summary` だけを使い、raw exploit detail / secret / 攻撃手順は載せない
 
@@ -215,9 +215,9 @@ Claude 側でメモリ上に以下を抽出する:
 | `suggestion_line` | `suggestion` を 1 行に畳み込んだ提案 |
 | `source_finding_id` | finding の `id` |
 
-`$should_fix_candidates` は `location.side == "RIGHT"` のものだけを保持する。LEFT-side finding は現 M1 workflow では GitHub inline comment に変換せず、`$include_should_fix == true` の場合でも Step 3.5 の inline 不可エントリとして body 退避対象にする。基礎条件は `severity == "should_fix" && posting.post_policy == "body_summary" && posting.explanation_postable == true` であり、これに RIGHT-side guard を加えたものだけを inline 候補にする。`$should_fix_candidates` の上位判定は `findings[]` の配列順に固定し、send 側で severity / category / path などによる再ソートは行わない。`$include_should_fix == true` の場合は範囲検証を通った全件を `$inline_should_fix` として Step 4 の `comments[]` に使う。false の場合は `$inline_should_fix=[]` とする。
+`$should_fix_candidates` は `location.side` にかかわらず保持し、LEFT-side finding は Step 3.5 で GitHub inline comment に変換せず body 退避対象にする。基礎条件は `severity == "should_fix" && posting.post_policy == "body_summary" && posting.explanation_postable == true` であり、RIGHT-side guard は抽出時ではなく Step 3.5 の inline 可否判定で適用する。`$should_fix_candidates` の上位判定は `findings[]` の配列順に固定し、send 側で severity / category / path などによる再ソートは行わない。`$include_should_fix == true` の場合は範囲検証を通った全件のうち、`location.side == "RIGHT"` のものだけを `$inline_should_fix` として Step 4 の `comments[]` に使い、LEFT-side は body 退避する。false の場合は `$inline_should_fix=[]` とする。
 
-各 Nit finding から以下を `nits.md` 用に保持する。`$include_nit == true` 時の inline comment 候補は `$nit_findings` 全件ではなく、`posting.post_policy == "body_summary" && posting.explanation_postable == true && location.side == "RIGHT"` の `$nit_inline_candidates` だけに限定する:
+各 Nit finding から以下を `nits.md` 用に保持する。`$include_nit == true` 時の inline/fallback 候補は `$nit_findings` 全件ではなく、`posting.post_policy == "body_summary" && posting.explanation_postable == true` の `$nit_inline_candidates` だけに限定する。RIGHT-side guard は抽出時ではなく Step 3.5 の inline 可否判定で適用する:
 
 | 出力キー        | 値 |
 | --------------- | --- |
@@ -228,7 +228,7 @@ Claude 側でメモリ上に以下を抽出する:
 | `suggestion`    | finding の `suggestion` |
 | `source_finding_id` | finding の `id` |
 
-`$nit_inline_candidates` も `location.side == "RIGHT"` のものだけを保持する。LEFT-side Nit は inline comment にせず、`nits.md` にだけ残す。`local_only` / `suppress` / `explanation_postable == false` の Nit は `--include-nit` 指定時でも inline comment に昇格せず、RIGHT-side guard の対象にもならない。diff 範囲外の Should Fix / Nit は body の `## 行コメント不可 (diff 範囲外)` へ退避する。
+`$nit_inline_candidates` も `location.side` にかかわらず保持し、LEFT-side Nit は Step 3.5 で inline comment にせず body 退避対象にする。`local_only` / `suppress` / `explanation_postable == false` の Nit は `--include-nit` 指定時でも inline comment に昇格せず、fallback 対象にもならない。diff 範囲外の Should Fix / Nit は body の `## 行コメント不可 (diff 範囲外)` へ退避する。
 
 #### primary path の必須ガード
 
