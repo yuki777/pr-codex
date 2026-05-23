@@ -73,6 +73,16 @@ class Issue88DocsTest(unittest.TestCase):
             self.assertIn(snippet, payload)
         self.assertNotIn("comments` 配列は Must Fix のみ", payload)
 
+        preflight = section(text, "## STAGE 3: semantic_preflight", "## STAGE 4: payload_consistency")
+        for snippet in (
+            "許可される severity は default では `must_fix` のみ",
+            "`--include-should-fix` 指定時は `must_fix` / `should_fix`",
+            "`--include-should-fix --include-nit` 指定時は `must_fix` / `should_fix` / `nit`",
+            "send 側の明示オプションだけで inline comment に昇格",
+        ):
+            self.assertIn(snippet, preflight)
+        self.assertNotIn("findings[].severity == 'must_fix'", preflight)
+
     def test_readme_documents_severity_flags_and_safety_boundaries(self) -> None:
         text = README.read_text(encoding="utf-8")
         for snippet in (

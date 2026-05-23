@@ -516,8 +516,8 @@ Codex は `preflight-codex.md` の末尾付近に `### RESULT_JSON` 見出しと
 
 ## STAGE 3: semantic_preflight
 以下を確認し、STAGE 3: PASS または STAGE 3: FAIL を出力してください。
-1. payload.comments[] の各要素が findings[].severity == 'must_fix' の finding に対応すること
-2. 未指定の should_fix / nit / note finding が inline payload に混入していないこと。指定された should_fix / nit は inline payload に含まれること。M1 posting contract として severity != 'must_fix' の finding に posting.post_policy == 'inline' が含まれていないこと
+1. payload.comments[] の各要素が findings[] の finding に対応し、許可された severity だけであること。許可される severity は default では `must_fix` のみ、`--include-should-fix` 指定時は `must_fix` / `should_fix`、`--include-should-fix --include-nit` 指定時は `must_fix` / `should_fix` / `nit` とする
+2. 未指定の should_fix / nit / note finding が inline payload に混入していないこと。指定された should_fix / nit は inline payload に含まれること。M1 posting contract として canonical 側の severity != 'must_fix' は `posting.post_policy == 'body_summary'` / `local_only` / `suppress` のままとし、send 側の明示オプションだけで inline comment に昇格すること
 3. severity == 'must_fix' の各 finding が以下を全部満たすこと: axes.real == 'yes' / axes.triggerable == 'yes' / axes.impactful == 'yes' / (axes.general == 'yes' または evidence_level in {'impact_explained', 'verified'}) / evidence_level != 'suspicion'。python3 {VALIDATOR_PATH} の再実行に成功している場合も、この観点を明示的に PASS / FAIL として報告する
 4. 反証 prompt: 各 Must Fix finding について、この指摘が誤りである可能性を 1 つだけ 1〜2 文で挙げてください。根拠は当該 finding 抜粋 / pr.diff / pr.diff.ranges.txt / metadata.json のみです。反証を挙げられない場合のみ採用し、挙げられた場合は rule=counterargument_succeeded、auto_fixable=false、requires_review_regeneration=true の violation にしてください
    - 正例: diff 上でも削除後の値が未定義になり得る経路を確認でき、反証を挙げられない → 採用 / PASS
