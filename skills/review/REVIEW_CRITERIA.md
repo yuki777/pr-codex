@@ -166,15 +166,15 @@ trigger path が再現できなくても `corroborated` かつ `impact_explained
 ### 改善提案 (Should Fix)
 修正が強く推奨される問題。同じフォーマットで記載。
 
-#### body summary 整形ルール
+#### Should Fix inline comment 整形ルール
 
-`/pr-codex:send` でユーザーが明示 opt-in した場合のみ、`severity == "should_fix" && posting.post_policy == "body_summary"` の finding を PR body の `## 非ブロッキング改善 (Should Fix)` に要約してよい。整形ルールは以下とする:
+`/pr-codex:send --include-should-fix` が指定された場合のみ、`severity == "should_fix" && posting.post_policy == "body_summary"` の finding を PR inline comment として投稿してよい。整形ルールは Must Fix と同じく path/line/body を持つ inline comment とし、diff 範囲外の場合は body の `## 行コメント不可 (diff 範囲外)` へ退避する。
 
-- 上位 3 件まで。上位判定は `findings.verified.json` の `findings[]` 配列順をそのまま使う
+- 上限なし。上位判定は `findings.verified.json` の `findings[]` 配列順をそのまま使う
 - 1 件あたり 3 行以内: `path:L<行>`、改善内容 1 行、提案 1 行
 - カテゴリ別グルーピングは行わず、単純な箇条書きにする
-- body 内の配置は `## 良い点` の下、`## 行コメント不可 (diff 範囲外)` の上とする
-- Nit / 補足はこのセクションに混ぜない
+- body section は作らない。diff 範囲外退避時だけ `## 行コメント不可 (diff 範囲外)` に混ぜる
+- Nit / 補足は Should Fix inline comment に混ぜない
 
 ### 軽微な指摘 (Nit)
 スタイルや好みに関する軽微な指摘。簡潔に記載（必ず `path/to/file.ext:L<行番号>` 表記を付与）。

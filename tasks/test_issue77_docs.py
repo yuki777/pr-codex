@@ -18,9 +18,9 @@ def section(text: str, start: str, end: str) -> str:
 
 
 class Issue77DocsTest(unittest.TestCase):
-    def test_send_skill_declares_and_parses_only_auto_submit(self) -> None:
+    def test_send_skill_declares_auto_submit_and_severity_flags(self) -> None:
         text = SEND_SKILL.read_text(encoding="utf-8")
-        self.assertIn('argument-hint: "[--auto-submit]"', text)
+        self.assertIn('argument-hint: "[--auto-submit] [--include-should-fix] [--include-nit]"', text)
         args = section(text, "### Step 0: 引数解析", "### Step 1:")
         for snippet in (
             "$ARGUMENTS",
@@ -28,19 +28,21 @@ class Issue77DocsTest(unittest.TestCase):
             "`--auto-submit`",
             "unsupported argument",
             "未知オプション",
-            "複数オプション",
+            "重複オプション",
+            "--include-should-fix",
+            "--include-nit",
         ):
             self.assertIn(snippet, args)
 
-    def test_auto_submit_keeps_should_fix_default_no_without_prompt(self) -> None:
+    def test_auto_submit_controls_only_final_prompt_not_severity_flags(self) -> None:
         text = SEND_SKILL.read_text(encoding="utf-8")
         step375 = section(text, "### Step 3.75:", "### Step 4:")
         for snippet in (
-            "$send_mode == auto_submit",
-            "$include_should_fix_body_summary=false",
-            "$included_should_fix_body_summary=[]",
-            "Should Fix body inclusion prompt は表示しない",
-            "default: no",
+            "$include_should_fix == true",
+            "$include_nit == true",
+            "$inline_should_fix=[]",
+            "$inline_nit=[]",
+            "`--auto-submit` は承認 stop だけを制御",
         ):
             self.assertIn(snippet, step375)
 
@@ -76,11 +78,11 @@ class Issue77DocsTest(unittest.TestCase):
         for snippet in (
             "/pr-codex:send --auto-submit",
             "最終承認 prompt なし",
-            "Should Fix body summary は default no",
+            "`--include-should-fix` は Must Fix + Should Fix を inline comment として投稿する",
             "Step 4.5 の verifier pipeline はスキップしない",
             "投稿直前に現在の PR head",
             "review-response.json",
-            "unknown option は unsupported argument",
+            "unknown option や重複オプションは unsupported argument",
         ):
             self.assertIn(snippet, text)
 

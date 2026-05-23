@@ -133,12 +133,16 @@ Stage ごとの責務、input/output artifact、halting 条件は [`skills/revie
 ```
 /pr-codex:send
 /pr-codex:send --auto-submit
+/pr-codex:send --include-should-fix
+/pr-codex:send --auto-submit --include-should-fix --include-nit
 ```
 
-- `/pr-codex:send`: 従来どおり GitHub Reviews API の payload サマリを表示し、最終承認 prompt でユーザーの明示承認を得てから投稿する
-- `/pr-codex:send --auto-submit`: Step 4.5 の verifier pipeline が PASS した後、最終承認 prompt なしで投稿へ進む。unknown option は unsupported argument として中断する
+- `/pr-codex:send`: 従来どおり GitHub Reviews API の payload サマリを表示し、最終承認 prompt でユーザーの明示承認を得てから、Must Fix 全件のみ投稿する
+- `/pr-codex:send --auto-submit`: Step 4.5 の verifier pipeline が PASS した後、最終承認 prompt なしで Must Fix 全件のみ投稿へ進む
+- `--include-should-fix` は Must Fix + Should Fix を inline comment として投稿する
+- `--include-nit` は `--include-should-fix` と併用し、Must Fix + Should Fix + Nit を inline comment として投稿する。diff 範囲外のものは body の `## 行コメント不可 (diff 範囲外)` へ退避する
 - `--auto-submit` でも Step 4.5 の verifier pipeline はスキップしない。canonical artifact validation、Must Fix 件数整合、diff range、`findings.sarif`、`preflight-result.json.verdict == PASS` と `preflight-codex.md` の `VERDICT: PASS` は必須
-- `--auto-submit` では Should Fix body summary は default no とし、Step 3.75 の Should Fix opt-in prompt では停止しない。Should Fix の自動同梱は別オプションで扱う
+- unknown option や重複オプションは unsupported argument として中断する。`--include-nit` 単独も unsupported argument として扱う
 - 投稿直前に現在の PR head を再取得して `metadata.json.head_sha` と比較し、不一致なら古い review を自動投稿しない。`review-response.json` に `.html_url` が既にある場合も二重投稿防止のため中断する
 
 ## 投稿後フィードバックの学習
@@ -188,8 +192,8 @@ python3 "$plugin_root/tasks/learn_feedback.py" --input feedback-snapshot.json --
 
 1. `~/claude-loop-pr-codex/` 配下から `status.json` が `state:completed` でかつ `findings.verified.json` / `review.md` が存在するディレクトリを1件選定する（名前昇順の先頭1件）
 2. `findings.verified.json` を必須の一次入力として `Must Fix` / `Should Fix` / `Nit` の投稿方針を抽出し、`review.md` から `## 総評` / `## 良い点` を body に使う（F13 以降は Markdown parser fallback へ切り替えず、欠落・schema 不整合なら中断する。root-cause cluster がない場合は Must Fix 件数も完全一致を要求し、cluster がある場合は canonical / Markdown / SARIF は全 finding 件数、`review-payload.json` は representative comment 件数として検証する）
-3. `Should Fix` のうち `post_policy: body_summary` の候補がある場合、上位 3 件を body の `## 非ブロッキング改善 (Should Fix)` に含めるかを確認する（default: no）。`--auto-submit` 時はこの prompt では停止せず、Should Fix body summary は default no とする
-4. `Nit` は PR に投稿せず、primary path では `nits.md` にローカル artifact として書き出す（0 件なら作成しない）
+3. `--include-should-fix` 指定時は `Should Fix` のうち `post_policy: body_summary` の候補を全件 inline comment に含める。未指定なら含めない
+4. `--include-nit` 指定時は `Nit` 全件を inline comment に含める。`nits.md` は local artifact として常に残す。diff 範囲外のものは body の `## 行コメント不可 (diff 範囲外)` へ退避する
 5. Step 4.5 の verifier pipeline を schema / range / semantic / payload consistency の 4 stage で実行し、従来互換の `preflight-codex.md` に加えて `preflight-result.json` を保存する。schema stage では `findings.sarif` の schema validation と `findings.verified.json` ↔ `review.md` ↔ `review-payload.json` ↔ `findings.sarif` の Must Fix count 整合性を検証する。root-cause cluster がある場合、canonical / Markdown / SARIF は全 Must Fix finding 数を保持し、`review-payload.json` は representative inline comment 数へ減ることを許可する。semantic stage では Must Fix の反証、Should Fix body summary の対応関係、Nit の payload 混入を検証する
 6. GitHub Reviews API への payload サマリをユーザーに提示する。引数なしは明示的な承認を得る。`--auto-submit` は最終承認 prompt なしで次へ進む
 7. 投稿直前に `review-response.json` の `.html_url` が未設定であることを確認し、現在の PR head を再取得して `metadata.json.head_sha` と一致することを確認する
@@ -201,13 +205,13 @@ python3 "$plugin_root/tasks/learn_feedback.py" --input feedback-snapshot.json --
 ### Should Fix / Nit の取り扱い
 
 - `Must Fix` は従来どおり GitHub review の inline comment として投稿される。`root_cause_clusters[]` がある場合は、各 cluster の `representative_finding_id` を inline 代表として扱い、同じ root cause の他 finding は代表コメント本文の affected findings summary に短く列挙する（canonical / SARIF / review.md には全 finding を残し、`review-payload.json` の `comments[]` だけ representative count になる。preflight の count gate は full count と representative payload count を別々に検証する）
-- `Should Fix` は自動では投稿されない。手動実行時に `yes` を選ぶと、author が見落としやすい非ブロッキング改善だけを上位 3 件まで PR body に短く同梱できる
-- `Nit` はノイズ抑制のため PR には載せず、`nits.md` に控えとして残す。投稿後は `sent/` 配下の履歴ディレクトリで確認できる
+- `Should Fix` は default では投稿されない。`--include-should-fix` 指定時だけ、全件を PR の inline comment として投稿できる
+- `Nit` は default では投稿せず、`nits.md` に控えとして残す。`--include-nit` 指定時だけ Nit 全件を PR の inline comment として投稿できる。投稿後は `sent/` 配下の履歴ディレクトリで確認できる
 - `findings.verified.json` がない fallback path では、従来どおり `Should Fix` / `Nit` / 補足を投稿 payload に含めない
 
 ### Local artifacts と GitHub 投稿対象の境界
 
-- GitHub Reviews API に送るのは `review-payload.json` の `body` と `comments[]` のみ。`comments[]` は Must Fix の inline comment だけを含む
+- GitHub Reviews API に送るのは `review-payload.json` の `body` と `comments[]` のみ。`comments[]` は Must Fix と、明示オプションで許可された Should Fix / Nit の inline comment を含む
 - `findings.verified.json` は canonical source、`review.md` / `review-payload.json` / `findings.sarif` / `nits.md` は派生成果物。canonical を単一の真実源とし、派生成果物を手で編集して canonical に逆流させない
 - `findings.sarif` は M2 では **local-only artifact**。GitHub Code Scanning への upload、CI からの公開、PR への添付は自動化しない（M3 の別 Issue で扱う）
 - `posting.post_policy=suppress` の finding は SARIF にも出さず、canonical 内部記録だけに残す。`local_only` と `nit` は SARIF `suppressions[]` を付けてノイズ公開の経路を閉じる
