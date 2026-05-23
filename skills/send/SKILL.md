@@ -184,8 +184,8 @@ Claude 側でメモリ上に以下を抽出する:
   - すべての finding で `id == fingerprint` が成り立ち、同梱 validator が正準アルゴリズムで再計算した fingerprint と一致すること
   - `findings[]` のうち `severity == "must_fix"` の要素を `$must_fix` 配列として抽出する
   - top-level `root_cause_clusters[]` がある場合は同梱 validator 済みの cluster detail を読み、各 cluster の `representative_finding_id` を representative posting 対象として扱う。cluster member は canonical finding としては残し、GitHub inline duplicate は代表コメントに集約する
-  - `findings[]` のうち `severity == "should_fix" && posting.post_policy == "body_summary" && posting.explanation_postable == true` の要素を `$should_fix_candidates` 配列として抽出する。順序は `findings[]` の登場順を保ち、`$include_should_fix == true` の場合は範囲検証を通った全件を `$inline_should_fix` として inline comment 対象にする。false の場合は空配列にする。diff 範囲外の Should Fix / Nit は body の `## 行コメント不可 (diff 範囲外)` へ退避する
-  - `findings[]` のうち `severity == "nit"` の要素を `$nit_findings` 配列として `nits.md` 用に抽出する。inline 候補はこのうち `posting.post_policy == "body_summary" && posting.explanation_postable == true` の要素だけを `$nit_inline_candidates` 配列として抽出する。`local_only` / `suppress` / `explanation_postable == false` の Nit は `--include-nit` 指定時でも inline comment に昇格せず、`nits.md` のみに残す
+  - `findings[]` のうち `severity == "should_fix" && posting.post_policy == "body_summary" && posting.explanation_postable == true && location.side == "RIGHT"` の要素を `$should_fix_candidates` 配列として抽出する。順序は `findings[]` の登場順を保ち、`$include_should_fix == true` の場合は範囲検証を通った全件を `$inline_should_fix` として inline comment 対象にする。false の場合は空配列にする。diff 範囲外または `location.side != "RIGHT"` の Should Fix / Nit は inline comment へ昇格せず、body の `## 行コメント不可 (diff 範囲外)` へ退避する
+  - `findings[]` のうち `severity == "nit"` の要素を `$nit_findings` 配列として `nits.md` 用に抽出する。inline 候補はこのうち `posting.post_policy == "body_summary" && posting.explanation_postable == true && location.side == "RIGHT"` の要素だけを `$nit_inline_candidates` 配列として抽出する。`local_only` / `suppress` / `explanation_postable == false` / `location.side != "RIGHT"` の Nit は `--include-nit` 指定時でも inline comment に昇格せず、`nits.md` のみに残す
   - M1 の投稿 contract として、`severity != "must_fix"` の finding は canonical 側の `posting.post_policy` を変更せず、明示オプション指定時だけ send 側で `body_summary` かつ postable な finding を inline comment に昇格できることを確認する
   - `category == "security"` の finding は `security` extension を必須とし、`security.severity == "critical" | "high"` または `security.disclosure_policy != "inline_safe"` の場合は inline 投稿対象から除外する。公開 body に含める場合も `security.public_safe_summary` だけを使い、raw exploit detail / secret / 攻撃手順は載せない
 
@@ -215,9 +215,9 @@ Claude 側でメモリ上に以下を抽出する:
 | `suggestion_line` | `suggestion` を 1 行に畳み込んだ提案 |
 | `source_finding_id` | finding の `id` |
 
-`$should_fix_candidates` の上位判定は `findings[]` の配列順に固定し、send 側で severity / category / path などによる再ソートは行わない。`$include_should_fix == true` の場合は範囲検証を通った全件を `$inline_should_fix` として Step 4 の `comments[]` に使う。false の場合は `$inline_should_fix=[]` とする。
+`$should_fix_candidates` は `location.side == "RIGHT"` のものだけを保持する。LEFT-side finding は現 M1 workflow では GitHub inline comment に変換せず、`$include_should_fix == true` の場合でも Step 3.5 の inline 不可エントリとして body 退避対象にする。基礎条件は `severity == "should_fix" && posting.post_policy == "body_summary" && posting.explanation_postable == true` であり、これに RIGHT-side guard を加えたものだけを inline 候補にする。`$should_fix_candidates` の上位判定は `findings[]` の配列順に固定し、send 側で severity / category / path などによる再ソートは行わない。`$include_should_fix == true` の場合は範囲検証を通った全件を `$inline_should_fix` として Step 4 の `comments[]` に使う。false の場合は `$inline_should_fix=[]` とする。
 
-各 Nit finding から以下を `nits.md` 用に保持する。`$include_nit == true` 時の inline comment 候補は `$nit_findings` 全件ではなく、`posting.post_policy == "body_summary" && posting.explanation_postable == true` の `$nit_inline_candidates` だけに限定する:
+各 Nit finding から以下を `nits.md` 用に保持する。`$include_nit == true` 時の inline comment 候補は `$nit_findings` 全件ではなく、`posting.post_policy == "body_summary" && posting.explanation_postable == true && location.side == "RIGHT"` の `$nit_inline_candidates` だけに限定する:
 
 | 出力キー        | 値 |
 | --------------- | --- |
@@ -227,6 +227,8 @@ Claude 側でメモリ上に以下を抽出する:
 | `problem`       | finding の `problem` |
 | `suggestion`    | finding の `suggestion` |
 | `source_finding_id` | finding の `id` |
+
+`$nit_inline_candidates` も `location.side == "RIGHT"` のものだけを保持する。LEFT-side Nit は inline comment にせず、`nits.md` にだけ残す。`local_only` / `suppress` / `explanation_postable == false` の Nit は `--include-nit` 指定時でも inline comment に昇格せず、RIGHT-side guard の対象にもならない。diff 範囲外の Should Fix / Nit は body の `## 行コメント不可 (diff 範囲外)` へ退避する。
 
 #### primary path の必須ガード
 
@@ -328,14 +330,15 @@ test -f "$plugin_root/skills/lib/extract-diff-ranges.awk" && awk -f "$plugin_roo
 - 複数行コメントは `[start_line, line]` の両端が同一 `path` の同じ hunk 範囲内に含まれる場合のみ有効。複数 hunk をまたぐ範囲は無効
 - `path` が `pr.diff.ranges.txt` に存在しない場合は無効
 - `pr.diff.ranges.txt` が空、または `pr.diff` が存在しない場合は、行範囲を確定できないためすべてのインラインコメント候補を無効として扱う
+- `location.side != "RIGHT"` の Should Fix / Nit は、現 M1 workflow では GitHub inline comment に変換できないため無効として扱う
 
 #### 範囲外エントリの扱い
 
-範囲検証は `$must_fix`、`$include_should_fix == true` の `$should_fix_candidates`、`$include_nit == true` の `$nit_inline_candidates` に対して同じルールで適用する。範囲外と判定したエントリは、以下のように扱う。
+範囲検証は `$must_fix`、`$include_should_fix == true` の `$should_fix_candidates`、`$include_nit == true` の `$nit_inline_candidates` に対して同じルールで適用する。範囲外または `location.side != "RIGHT"` と判定したエントリは、以下のように扱う。
 
 - 元の inline 配列（`$must_fix` / `$inline_should_fix` / `$inline_nit`）から除外し、`comments` 配列には含めない
 - 除外したエントリを `$out_of_range_comments` 配列として保持する
-- `$out_of_range_comments` には、元の見出し行、元の本文、種別 (`Must Fix` / `Should Fix` / `Nit`) を保持する
+- `$out_of_range_comments` には、元の見出し行、元の本文、種別 (`Must Fix` / `Should Fix` / `Nit`)、退避理由 (`diff 範囲外` / `LEFT-side 非対応`) を保持する
 - Step 4 のレビュー body 末尾に `## 行コメント不可 (diff 範囲外)` セクションを追加し、除外した各エントリの元の見出し行と本文を転記する
 - 除外後の `$must_fix` / `$inline_should_fix` / `$inline_nit` の相対順は、`findings.verified.json` の配列順を保つ
 
@@ -414,7 +417,7 @@ Codex は以下の 4 stage を順に判定する。各 stage は前段の結論�
 | --- | --- |
 | 1. `schema_validation` | `findings.verified.json` の `schema_version == "findings.v1"`、同梱 validator validation、top-level `pr.*` と `metadata.json` の一致、全 finding の `id == fingerprint` と正準 fingerprint 再計算一致、`findings.sarif` の schema validation、`canonical_must_fix == markdown_must_fix == sarif_must_fix`、および payload 側は cluster representative 集約後の Must Fix posting count と一致 |
 | 2. `range_validation` | `payload.comments[]` の `path` が `metadata.json.files[]` に含まれること、`line` / `start_line` が `pr.diff.ranges.txt` の同一 hunk 範囲内にあること |
-| 3. `semantic_preflight` | `payload.comments[]` が `severity == "must_fix"` または明示オプションで許可された `should_fix` / `nit` finding だけに対応すること、未指定の Should Fix / Nit / Note の inline 混入がないこと、指定されていない Should Fix / Nit が payload に混入していないこと、4 軸 + `evidence_level` gate、反証 prompt |
+| 3. `semantic_preflight` | `payload.comments[]` が `severity == "must_fix"` または明示オプションで許可された `should_fix` / `nit` finding だけに対応すること、未指定の Should Fix / Nit / Note の inline 混入がないこと、指定されていない Should Fix / Nit が payload に混入していないこと、diff 範囲外または LEFT-side 非対応として body 退避された opted-in finding を valid exclusion として扱うこと、4 軸 + `evidence_level` gate、反証 prompt |
 | 4. `payload_consistency` | `event` 判定、`body` 冒頭の `## 総評` 一致、`## 良い点` 一致、Must Fix count 整合性（cluster なし: `findings.verified.json` ↔ `review.md` ↔ `review-payload.json` ↔ `findings.sarif` が完全一致。cluster あり: canonical / review.md / SARIF は full count、`review-payload.json` と out-of-range Must Fix payload は representative expected payload count と一致）、Should Fix / Nit inline comment の 1:1 対応・全件 inclusion・範囲外退避 |
 
 semantic preflight の反証 prompt は Must Fix finding のみに適用する。Codex は各 Must Fix finding について「この指摘が誤りである可能性」を 1 つだけ、1〜2 文で探索する。`pr.diff` / `pr.diff.ranges.txt` / `metadata.json` / 当該 finding 抜粋だけを根拠にし、反証を挙げられない場合のみ採用する。反証を挙げられた場合は `counterargument_succeeded` violation として `requires_review_regeneration=true` で報告する（反証成功 = 不採用 / FAIL）。
@@ -517,7 +520,7 @@ Codex は `preflight-codex.md` の末尾付近に `### RESULT_JSON` 見出しと
 ## STAGE 3: semantic_preflight
 以下を確認し、STAGE 3: PASS または STAGE 3: FAIL を出力してください。
 1. payload.comments[] の各要素が findings[] の finding に対応し、許可された severity だけであること。許可される severity は default では `must_fix` のみ、`--include-should-fix` 指定時は `must_fix` / `should_fix`、`--include-should-fix --include-nit` 指定時は `must_fix` / `should_fix` / `nit` とする
-2. 未指定の should_fix / nit / note finding が inline payload に混入していないこと。指定された should_fix / nit は inline payload に含まれること。M1 posting contract として canonical 側の severity != 'must_fix' は `posting.post_policy == 'body_summary'` / `local_only` / `suppress` のままとし、send 側の明示オプションだけで inline comment に昇格すること
+2. 未指定の should_fix / nit / note finding が inline payload に混入していないこと。指定された should_fix / nit は、`posting.post_policy == 'body_summary'` / `posting.explanation_postable == true` / `location.side == 'RIGHT'` / diff 範囲内をすべて満たす場合は inline payload に含まれること。diff 範囲外または `location.side != 'RIGHT'` のため `## 行コメント不可 (diff 範囲外)` へ退避された opted-in should_fix / nit は、inline payload から除外されていても valid exclusion として扱うこと。M1 posting contract として canonical 側の severity != 'must_fix' は `posting.post_policy == 'body_summary'` / `local_only` / `suppress` のままとし、send 側の明示オプションだけで inline comment に昇格すること
 3. severity == 'must_fix' の各 finding が以下を全部満たすこと: axes.real == 'yes' / axes.triggerable == 'yes' / axes.impactful == 'yes' / (axes.general == 'yes' または evidence_level in {'impact_explained', 'verified'}) / evidence_level != 'suspicion'。python3 {VALIDATOR_PATH} の再実行に成功している場合も、この観点を明示的に PASS / FAIL として報告する
 4. 反証 prompt: 各 Must Fix finding について、この指摘が誤りである可能性を 1 つだけ 1〜2 文で挙げてください。根拠は当該 finding 抜粋 / pr.diff / pr.diff.ranges.txt / metadata.json のみです。反証を挙げられない場合のみ採用し、挙げられた場合は rule=counterargument_succeeded、auto_fixable=false、requires_review_regeneration=true の violation にしてください
    - 正例: diff 上でも削除後の値が未定義になり得る経路を確認でき、反証を挙げられない → 採用 / PASS

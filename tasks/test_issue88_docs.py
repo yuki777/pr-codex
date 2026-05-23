@@ -57,10 +57,12 @@ class Issue88DocsTest(unittest.TestCase):
             "$inline_should_fix",
             "$inline_nit",
             "$nit_inline_candidates",
-            "posting.post_policy == \"body_summary\" && posting.explanation_postable == true",
+            "posting.post_policy == \"body_summary\" && posting.explanation_postable == true && location.side == \"RIGHT\"",
+            "`$should_fix_candidates` は `location.side == \"RIGHT\"` のものだけを保持する",
+            "`$nit_inline_candidates` も `location.side == \"RIGHT\"` のものだけを保持する",
             "範囲検証を通った全件",
-            "local_only` / `suppress` / `explanation_postable == false` の Nit は `--include-nit` 指定時でも inline comment に昇格せず",
-            "diff 範囲外の Should Fix / Nit は body の `## 行コメント不可 (diff 範囲外)` へ退避",
+            "local_only` / `suppress` / `explanation_postable == false` / `location.side != \"RIGHT\"` の Nit は `--include-nit` 指定時でも inline comment に昇格せず",
+            "diff 範囲外または `location.side != \"RIGHT\"` の Should Fix / Nit は inline comment へ昇格せず",
             "`nits.md`",
         ):
             self.assertIn(snippet, extraction)
@@ -71,6 +73,8 @@ class Issue88DocsTest(unittest.TestCase):
             "$include_should_fix == true` の `$should_fix_candidates`",
             "$include_nit == true` の `$nit_inline_candidates`",
             "種別 (`Must Fix` / `Should Fix` / `Nit`)",
+            "`location.side != \"RIGHT\"` の Should Fix / Nit",
+            "退避理由 (`diff 範囲外` / `LEFT-side 非対応`)",
         ):
             self.assertIn(snippet, range_rules)
 
@@ -89,6 +93,8 @@ class Issue88DocsTest(unittest.TestCase):
             "許可される severity は default では `must_fix` のみ",
             "`--include-should-fix` 指定時は `must_fix` / `should_fix`",
             "`--include-should-fix --include-nit` 指定時は `must_fix` / `should_fix` / `nit`",
+            "diff 範囲外または `location.side != 'RIGHT'` のため `## 行コメント不可 (diff 範囲外)` へ退避された opted-in should_fix / nit",
+            "valid exclusion",
             "send 側の明示オプションだけで inline comment に昇格",
         ):
             self.assertIn(snippet, preflight)
