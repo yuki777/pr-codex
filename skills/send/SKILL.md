@@ -404,13 +404,13 @@ payload は Write ツールで `~/claude-loop-pr-codex/$dir_name/review-payload.
 
 ### Step 4.5: 投稿前 verifier pipeline (Codex セルフレビュー)
 
-Claude が生成した `review-payload.json` と review 側が生成した local-only `findings.sarif` を Codex CLI に独立検証させ、投稿直前の検証を **4 stage verifier pipeline** として実行する。`--auto-submit` でもスキップしない。Step 5 第2ステップ（interactive の最終承認プロンプト、または auto_submit の自動続行判断）の直前で必ず実行する。`findings.verified.json` は必須入力であり、Markdown fallback は使わない。検証では `comments[]` への Must Fix 以外の混入、Should Fix / Nit inline comment の対応関係と指定外混入、SARIF schema/side/post_policy 違反、行範囲外コメント、event/body 不整合を検出する。従来互換の `preflight-codex.md` / `preflight-codex.log` は維持し、新たに構造化結果 `preflight-result.json` を出力する。検証プロンプトには `$plugin_root/schemas/findings.v1.json`、`$plugin_root/schemas/sarif-2.1.0.json`、`$plugin_root/schemas/preflight-result.v1.json`、および各 validator/generator の絶対パスを埋め込み、`--cd ~/claude-loop-pr-codex/$dir_name` 配下の相対 `schemas/` には依存しない。
+Claude が生成した `review-payload.json` と review 側が生成した local-only `findings.sarif` を Codex CLI に独立検証させ、投稿直前の検証を **4 stage verifier pipeline** として実行する。`--auto-submit` でもスキップしない。Step 5 第2ステップ（interactive の最終承認プロンプト、または auto_submit の自動続行判断）の直前で必ず実行する。`findings.verified.json` は必須入力であり、Markdown fallback は使わない。検証では `comments[]` への Must Fix 以外の混入、Should Fix / Nit inline comment の対応関係と指定外混入、SARIF schema/side/post_policy 違反、行範囲外コメント、event/body 不整合を検出する。従来互換の `preflight-codex.md` / `preflight-codex.log` は維持し、新たに構造化結果 `preflight-result.json` を出力する。検証プロンプトには `$include_should_fix` / `$include_nit` の実行時 boolean を明示し、semantic stage はその active severity flags を根拠に許可 severity を決める。さらに `$plugin_root/schemas/findings.v1.json`、`$plugin_root/schemas/sarif-2.1.0.json`、`$plugin_root/schemas/preflight-result.v1.json`、および各 validator/generator の絶対パスを埋め込み、`--cd ~/claude-loop-pr-codex/$dir_name` 配下の相対 `schemas/` には依存しない。
 
 `findings.verified.json` 検証プロンプトには `$plugin_root/schemas/findings.v1.json` の**絶対パス**（Step 2.5 で解決した `schema_path`）と同梱 validator の絶対パス（`validator_path`）を埋め込む。SARIF 検証には `sarif_schema_path` / `sarif_validator_path` / `sarif_generator_path` を使う。`preflight-result.json` 抽出/検証には `preflight_schema_path` と `preflight_validator_path` を使い、Codex の出力崩れを `PASS` と誤判定しない。
 
 #### 4 stage と既存観点の対応
 
-Codex は以下の 4 stage を順に判定する。各 stage は前段の結論に依存せず、毎回 `findings.verified.json` / `findings.sarif` / `review-payload.json` / `review.md` / `pr.diff` / `pr.diff.ranges.txt` / `metadata.json` / 当該 finding 抜粋を根拠として再検証する。既存観点として、Must Fix 対応、Should Fix / Nit inline comment の 1:1 対応、全件 inclusion、指定外混入禁止、body セクション順序も stage 内で検証する。
+Codex は以下の 4 stage を順に判定する。各 stage は前段の結論に依存せず、毎回 `findings.verified.json` / `findings.sarif` / `review-payload.json` / `review.md` / `pr.diff` / `pr.diff.ranges.txt` / `metadata.json` / `active severity flags` / 当該 finding 抜粋を根拠として再検証する。既存観点として、Must Fix 対応、Should Fix / Nit inline comment の 1:1 対応、全件 inclusion、指定外混入禁止、body セクション順序も stage 内で検証する。
 
 
 | Stage | 検証観点 |
@@ -472,7 +472,7 @@ Codex は `preflight-codex.md` の末尾付近に `### RESULT_JSON` 見出しと
 
 - いつ使うか: Step 4 で `review-payload.json` を生成した直後、Codex verifier コマンドの直前に必ず作成する
 - 作成方法: Write ツールで `~/claude-loop-pr-codex/$dir_name/preflight-prompt.md` に以下の prompt 本文を書き出す。`file_path` は `~` と `$dir_name` を実値へ展開した絶対パスで渡す
-- 置換ルール: `{SCHEMA_PATH}` / `{VALIDATOR_PATH}` / `{SARIF_SCHEMA_PATH}` / `{SARIF_VALIDATOR_PATH}` / `{SARIF_GENERATOR_PATH}` / `{PREFLIGHT_SCHEMA_PATH}` / `{PREFLIGHT_VALIDATOR_PATH}` は Step 2.5 で保持した絶対パスへ Claude 側で置換してから書き出す。shell で prompt 本文を展開してはならない
+- 置換ルール: `{INCLUDE_SHOULD_FIX}` / `{INCLUDE_NIT}` は Step 0 で正規化した `$include_should_fix` / `$include_nit` の `true` / `false` 文字列に置換し、`{SCHEMA_PATH}` / `{VALIDATOR_PATH}` / `{SARIF_SCHEMA_PATH}` / `{SARIF_VALIDATOR_PATH}` / `{SARIF_GENERATOR_PATH}` / `{PREFLIGHT_SCHEMA_PATH}` / `{PREFLIGHT_VALIDATOR_PATH}` は Step 2.5 で保持した絶対パスへ Claude 側で置換してから書き出す。shell で prompt 本文を展開してはならない
 - 理由: prompt 本文には Markdown backtick や JSON double quote が含まれるため、shell の double-quoted argument として渡すと command substitution / quote 分割で壊れる。prompt file + stdin 経由に固定し、shell は本文を解釈しない
 
 ```markdown
@@ -495,6 +495,11 @@ Codex は `preflight-codex.md` の末尾付近に `### RESULT_JSON` 見出しと
 - pr.diff: PR diff 本文。semantic preflight で finding 実在性と反証探索に使う
 - pr.diff.ranges.txt: コメント可能な hunk 範囲一覧
 - metadata.json: 対象 PR のメタデータ（files 配列を含む）
+
+## active severity flags
+- include_should_fix: {INCLUDE_SHOULD_FIX}
+- include_nit: {INCLUDE_NIT}
+- 許可 severity はこの boolean だけを根拠に決める。`include_should_fix=false` なら payload.comments[] に should_fix / nit を含めてはならない。`include_should_fix=true` かつ `include_nit=false` なら must_fix / should_fix だけを許可する。`include_should_fix=true` かつ `include_nit=true` なら must_fix / should_fix / nit を許可する
 
 ## 共通ルール
 - findings.verified.json が存在しない場合は schema_validation の findings_validator_failed として FAIL。review.md fallback は使わない
@@ -519,7 +524,7 @@ Codex は `preflight-codex.md` の末尾付近に `### RESULT_JSON` 見出しと
 
 ## STAGE 3: semantic_preflight
 以下を確認し、STAGE 3: PASS または STAGE 3: FAIL を出力してください。
-1. payload.comments[] の各要素が findings[] の finding に対応し、許可された severity だけであること。許可される severity は default では `must_fix` のみ、`--include-should-fix` 指定時は `must_fix` / `should_fix`、`--include-should-fix --include-nit` 指定時は `must_fix` / `should_fix` / `nit` とする
+1. payload.comments[] の各要素が findings[] の finding に対応し、active severity flags で許可された severity だけであること。許可される severity は `include_should_fix=false` では `must_fix` のみ、`include_should_fix=true && include_nit=false` では `must_fix` / `should_fix`、`include_should_fix=true && include_nit=true` では `must_fix` / `should_fix` / `nit` とする
 2. 未指定の should_fix / nit / note finding が inline payload に混入していないこと。指定された should_fix / nit は、`posting.post_policy == 'body_summary'` / `posting.explanation_postable == true` / `location.side == 'RIGHT'` / diff 範囲内をすべて満たす場合は inline payload に含まれること。diff 範囲外または `location.side != 'RIGHT'` のため `## 行コメント不可 (diff 範囲外)` へ退避された opted-in should_fix / nit は、inline payload から除外されていても valid exclusion として扱うこと。M1 posting contract として canonical 側の severity != 'must_fix' は `posting.post_policy == 'body_summary'` / `local_only` / `suppress` のままとし、send 側の明示オプションだけで inline comment に昇格すること
 3. severity == 'must_fix' の各 finding が以下を全部満たすこと: axes.real == 'yes' / axes.triggerable == 'yes' / axes.impactful == 'yes' / (axes.general == 'yes' または evidence_level in {'impact_explained', 'verified'}) / evidence_level != 'suspicion'。python3 {VALIDATOR_PATH} の再実行に成功している場合も、この観点を明示的に PASS / FAIL として報告する
 4. 反証 prompt: 各 Must Fix finding について、この指摘が誤りである可能性を 1 つだけ 1〜2 文で挙げてください。根拠は当該 finding 抜粋 / pr.diff / pr.diff.ranges.txt / metadata.json のみです。反証を挙げられない場合のみ採用し、挙げられた場合は rule=counterargument_succeeded、auto_fixable=false、requires_review_regeneration=true の violation にしてください

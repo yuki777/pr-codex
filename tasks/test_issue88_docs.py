@@ -92,9 +92,10 @@ class Issue88DocsTest(unittest.TestCase):
 
         preflight = section(text, "## STAGE 3: semantic_preflight", "## STAGE 4: payload_consistency")
         for snippet in (
-            "許可される severity は default では `must_fix` のみ",
-            "`--include-should-fix` 指定時は `must_fix` / `should_fix`",
-            "`--include-should-fix --include-nit` 指定時は `must_fix` / `should_fix` / `nit`",
+            "active severity flags で許可された severity",
+            "`include_should_fix=false` では `must_fix` のみ",
+            "`include_should_fix=true && include_nit=false` では `must_fix` / `should_fix`",
+            "`include_should_fix=true && include_nit=true` では `must_fix` / `should_fix` / `nit`",
             "diff 範囲外または `location.side != 'RIGHT'` のため `## 行コメント不可 (diff 範囲外)` へ退避された opted-in should_fix / nit",
             "valid exclusion",
             "send 側の明示オプションだけで inline comment に昇格",
@@ -114,6 +115,9 @@ class Issue88DocsTest(unittest.TestCase):
             "オプション未指定時の Should Fix / Nit payload 混入禁止",
             "`--include-should-fix` / `--include-nit` 指定時の inline 許可 severity",
             "body 退避された opted-in finding の valid exclusion",
+            "active severity flags",
+            "{INCLUDE_SHOULD_FIX}",
+            "{INCLUDE_NIT}",
             "unknown option や重複オプションは unsupported argument",
         ):
             self.assertIn(snippet, text)
