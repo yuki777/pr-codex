@@ -111,6 +111,7 @@ class Issue88DocsTest(unittest.TestCase):
             "`--include-should-fix` は Must Fix + Should Fix を inline comment として投稿する",
             "`--include-nit` は `--include-should-fix` と併用し、Must Fix + 投稿可能な Should Fix + 投稿可能な Nit を inline comment として投稿する",
             "`local_only` / `suppress` / `explanation_postable: false` の Nit は投稿せず",
+            "`nits.md` は Nit がある場合のみ local artifact として残す",
             "diff 範囲外のものは body の `## 行コメント不可 (diff 範囲外)` へ退避する",
             "オプション未指定時の Should Fix / Nit payload 混入禁止",
             "`--include-should-fix` / `--include-nit` 指定時の inline 許可 severity",
