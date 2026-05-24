@@ -24,11 +24,12 @@ class Issue21DocsTest(unittest.TestCase):
         step3 = section(text, "### Step 3: `findings.verified.json` の解析 (primary)", "### Step 3b:")
 
         required_snippets = [
-            '`severity == "should_fix" && posting.post_policy == "body_summary"`',
-            'Step 5 の opt-in がない限り body には含めない',
-            '先頭から最大 3 件',
+            '`severity == "should_fix" && posting.post_policy == "body_summary" && posting.explanation_postable == true`',
+            '`$include_should_fix == true` の場合は範囲検証を通った全件',
+            '`$nit_inline_candidates`',
             '`severity == "nit"`',
-            '`posting.post_policy` の値に関わらず GitHub payload には含めず',
+            '`local_only` / `suppress` / `explanation_postable == false` の Nit は `--include-nit` 指定時でも inline comment に昇格せず',
+            'diff 範囲外の Should Fix / Nit は body の `## 行コメント不可 (diff 範囲外)` へ退避',
             '`nits.md`',
         ]
         for snippet in required_snippets:
@@ -39,11 +40,11 @@ class Issue21DocsTest(unittest.TestCase):
         step375 = section(text, "### Step 3.75:", "### Step 4:")
 
         required_snippets = [
-            "非ブロッキング改善 (Should Fix) の上位 3 件",
-            "default: no",
-            "含める場合のみ yes",
-            "`yes` / `y` / `はい` 等の明示的な承認",
-            "候補先頭から最大 3 件",
+            "$include_should_fix == true",
+            "$inline_should_fix=[]",
+            "$include_nit == true",
+            "$inline_nit=[]",
+            "追加 opt-in prompt は表示しない",
         ]
         for snippet in required_snippets:
             self.assertIn(snippet, step375)
@@ -53,11 +54,11 @@ class Issue21DocsTest(unittest.TestCase):
         step5 = section(text, "### Step 5: 承認プロンプト", "### Step 6:")
 
         required_snippets = [
-            "Should Fix body summary: included <yes|no>",
+            "Should Fix inline comments: included <yes|no>",
             "<included_count>/<candidate_count>",
-            "default: no",
+            "--include-should-fix で投稿可能候補を含める",
             "Nit artifact",
-            "Nit は PR には載せず nits.md にのみ残します",
+            "Should Fix / Nit は指定時に投稿可能なものを inline comment に含めます",
         ]
         for snippet in required_snippets:
             self.assertIn(snippet, step5)
@@ -71,13 +72,12 @@ class Issue21DocsTest(unittest.TestCase):
     def test_review_criteria_defines_capped_should_fix_body_summary_format(self) -> None:
         text = REVIEW_CRITERIA.read_text(encoding="utf-8")
         required_snippets = [
-            "## 非ブロッキング改善 (Should Fix)",
-            "上位 3 件まで",
+            "Should Fix inline comment 整形ルール",
+            "上限なし",
             "1 件あたり 3 行以内",
             "path:L<行>",
             "改善内容 1 行、提案 1 行",
-            "## 良い点",
-            "## 行コメント不可 (diff 範囲外)",
+                        "## 行コメント不可 (diff 範囲外)",
         ]
         for snippet in required_snippets:
             self.assertIn(snippet, text)
@@ -86,9 +86,10 @@ class Issue21DocsTest(unittest.TestCase):
         text = README.read_text(encoding="utf-8")
         required_snippets = [
             "`Must Fix` は従来どおり GitHub review の inline comment",
-            "`Should Fix` は自動では投稿されない",
-            "上位 3 件まで PR body",
-            "`Nit` はノイズ抑制のため PR には載せず",
+            "`Should Fix` は default では投稿されない",
+            "`post_policy: body_summary` かつ `explanation_postable: true` の候補を PR の inline comment",
+            "`Nit` は default では投稿せず",
+            "`local_only` / `suppress` / `explanation_postable: false` の Nit は投稿せず",
             "`nits.md`",
         ]
         for snippet in required_snippets:
