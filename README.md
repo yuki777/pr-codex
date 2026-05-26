@@ -51,7 +51,7 @@ python3 -m pip install --user --break-system-packages 'jsonschema>=4,<5'
 ### アップデート
 
 ```
-/plugin update pr-codex
+claude plugin marketplace update pr-codex
 ```
 
 ### アンインストール
