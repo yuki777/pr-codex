@@ -14,7 +14,7 @@
   ],
   "depth_actual": "standard",
   "depth_source": "default",
-  "depth_reason": "no depth argument and no high-risk small-PR signal; selected default standard",
+  "depth_reason": "no high-risk small-PR signal; selected default standard",
   "depth_requested": null,
   "depth_downgraded": false,
   "depth_downgrade_reason": null,

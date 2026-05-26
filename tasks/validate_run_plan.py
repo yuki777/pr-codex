@@ -68,16 +68,11 @@ RISK_TAG_CASES = [
 
 ESCAPE_RULE_TEXT = '`\\` → `\\\\`、`"` → `\\"`、`$` → `\\$`、`` ` `` → `\\``'
 
-DEPTH_REASON_ARGUMENT_DEEP = "requested --deep"
-DEPTH_REASON_ARGUMENT_STANDARD = "requested --standard"
-DEPTH_REASON_DOWNGRADED = (
-    "requested --deep but changed lines > 5000; forced standard to preserve the 20 minute timeout"
-)
 DEPTH_REASON_LARGE_DEFAULT = "changed lines > 5000; selected standard to preserve the 20 minute timeout"
 DEPTH_REASON_AUTO_DEEP = (
     "risk_tags include security or data_migration and PR size is <= 20 files / <= 1500 changed lines; selected deep"
 )
-DEPTH_REASON_DEFAULT_STANDARD = "no depth argument and no high-risk small-PR signal; selected default standard"
+DEPTH_REASON_DEFAULT_STANDARD = "no high-risk small-PR signal; selected default standard"
 
 
 def load_json(path: Path) -> object:
@@ -137,7 +132,7 @@ def run_jq(args: list[str], jq_filter: str, input_text: str | None = None) -> ob
 
 
 def preflight_block() -> str:
-    block = extract_bash_block("jq -n --arg depth_requested")
+    block = extract_bash_block("jq -n --slurpfile metadata")
     required = "&& test -s ~/claude-loop-pr-codex/$org-$repository-$pr_number/run-plan.json"
     if required not in block:
         raise AssertionError("run-plan template must guard with && test -s")
@@ -157,13 +152,10 @@ def files_list_block() -> str:
     return block
 
 
-def run_preflight_template(metadata_path: Path, diff_path: Path, depth_requested: str = "") -> object:
+def run_preflight_template(metadata_path: Path, diff_path: Path) -> object:
     return run_jq(
         [
             "-n",
-            "--arg",
-            "depth_requested",
-            depth_requested,
             "--slurpfile",
             "metadata",
             str(metadata_path),
@@ -609,22 +601,6 @@ def validate_fixture(name: str, schema: dict[str, object]) -> None:
     assert actual == expected, f"{name}: run-plan mismatch\nexpected={expected}\nactual={actual}"
     validate_run_plan_semantics(schema, expected)
 
-    for depth_requested, expected_name in (
-        ("deep", "run-plan.deep.expected.json"),
-        ("standard", "run-plan.standard.expected.json"),
-    ):
-        expected_override = load_json(FIXTURE_ROOT / name / expected_name)
-        with tempfile.TemporaryDirectory() as tmpdir:
-            runtime_metadata_path = Path(tmpdir) / "metadata.json"
-            runtime_metadata_path.write_text(json.dumps({"files": files}, ensure_ascii=False, indent=2) + "\n")
-            actual_override = run_preflight_template(runtime_metadata_path, diff_path, depth_requested=depth_requested)
-        assert actual_override == expected_override, (
-            f"{name} {depth_requested}: run-plan mismatch\n"
-            f"expected={expected_override}\n"
-            f"actual={actual_override}"
-        )
-        validate_schema(schema, expected_override)
-
 
 def make_diff_text(files: list[str], hunks: int, lines_added: int, lines_removed: int) -> str:
     lines: list[str] = []
@@ -643,7 +619,6 @@ def synthetic_plan(
     hunks: int,
     lines_added: int,
     lines_removed: int,
-    depth_requested: str = "",
 ) -> object:
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
@@ -651,7 +626,7 @@ def synthetic_plan(
         diff_path = tmp / "pr.diff"
         metadata_path.write_text(json.dumps({"files": files}, ensure_ascii=False, indent=2) + "\n")
         diff_path.write_text(make_diff_text(files, hunks, lines_added, lines_removed))
-        return run_preflight_template(metadata_path, diff_path, depth_requested=depth_requested)
+        return run_preflight_template(metadata_path, diff_path)
 
 
 def validate_threshold_behavior(schema: dict[str, object]) -> None:
@@ -672,47 +647,15 @@ def validate_threshold_behavior(schema: dict[str, object]) -> None:
     assert security_auto["depth_reason"] == DEPTH_REASON_AUTO_DEEP
     validate_schema(schema, security_auto)
 
-    requested_deep = synthetic_plan(["src/module.ts"], 1, 100, 50, depth_requested="deep")
-    assert requested_deep["depth_actual"] == "deep"
-    assert requested_deep["depth_source"] == "argument"
-    assert requested_deep["depth_requested"] == "deep"
-    assert requested_deep["depth_reason"] == DEPTH_REASON_ARGUMENT_DEEP
-    validate_schema(schema, requested_deep)
-
-    requested_standard = synthetic_plan(["src/auth/login.go"], 1, 100, 50, depth_requested="standard")
-    assert requested_standard["depth_actual"] == "standard"
-    assert requested_standard["depth_source"] == "argument"
-    assert requested_standard["depth_requested"] == "standard"
-    assert requested_standard["depth_reason"] == DEPTH_REASON_ARGUMENT_STANDARD
-    validate_schema(schema, requested_standard)
-
-    just_under_guard = synthetic_plan(["src/auth/login.go"], 80, 4999, 0, depth_requested="deep")
-    assert just_under_guard["depth_actual"] == "deep"
-    assert just_under_guard["depth_downgraded"] is False
-    validate_schema(schema, just_under_guard)
-
-    exactly_guard = synthetic_plan(["src/auth/login.go"], 80, 5000, 0, depth_requested="deep")
-    assert exactly_guard["depth_actual"] == "deep"
-    assert exactly_guard["depth_downgraded"] is False
-    validate_schema(schema, exactly_guard)
-
     line_heavy = synthetic_plan([f"src/module_{index}.ts" for index in range(20)], 80, 5001, 0)
     assert line_heavy["depth_actual"] == "standard"
     assert line_heavy["depth_source"] == "default"
+    assert line_heavy["depth_requested"] is None
     assert line_heavy["depth_reason"] == DEPTH_REASON_LARGE_DEFAULT
     assert line_heavy["depth_downgraded"] is False
     assert line_heavy["recommended_mode"] == "standard"
     assert line_heavy["routing_decision"]["model_profile"] == "standard"
     validate_run_plan_semantics(schema, line_heavy)
-
-    downgraded = synthetic_plan([f"src/module_{index}.ts" for index in range(20)], 80, 5001, 0, depth_requested="deep")
-    assert downgraded["depth_actual"] == "standard"
-    assert downgraded["depth_source"] == "argument"
-    assert downgraded["depth_requested"] == "deep"
-    assert downgraded["depth_downgraded"] is True
-    assert downgraded["depth_reason"] == DEPTH_REASON_DOWNGRADED
-    assert downgraded["depth_downgrade_reason"] == DEPTH_REASON_DOWNGRADED
-    validate_schema(schema, downgraded)
 
     focused = synthetic_plan([f"src/file_{index}.ts" for index in range(51)], 120, 800, 400)
     assert focused["recommended_mode"] == "focused"
@@ -721,24 +664,12 @@ def validate_threshold_behavior(schema: dict[str, object]) -> None:
     assert focused["routing_decision"]["model_profile"] == "focused-fallback"
     validate_run_plan_semantics(schema, focused)
 
-    focused_deep = synthetic_plan([f"src/file_{index}.ts" for index in range(51)], 120, 800, 400, depth_requested="deep")
-    assert focused_deep["recommended_mode"] == "focused"
-    assert focused_deep["depth_actual"] == "deep"
-    assert focused_deep["depth_source"] == "argument"
-    validate_schema(schema, focused_deep)
-
     skipped = synthetic_plan([f"src/file_{index}.ts" for index in range(101)], 240, 1500, 900)
     assert skipped["recommended_mode"] == "skip"
     assert isinstance(skipped["skip_reason"], str) and skipped["skip_reason"]
     assert skipped["depth_actual"] == "standard"
     assert skipped["routing_decision"]["model_profile"] == "focused-fallback"
     validate_run_plan_semantics(schema, skipped)
-
-    skipped_deep = synthetic_plan([f"src/file_{index}.ts" for index in range(101)], 240, 1500, 900, depth_requested="deep")
-    assert skipped_deep["recommended_mode"] == "skip"
-    assert skipped_deep["depth_actual"] == "deep"
-    assert skipped_deep["depth_source"] == "argument"
-    validate_schema(schema, skipped_deep)
 
     duration_case = run_duration_template(
         focused,
@@ -846,17 +777,6 @@ def validate_risk_tag_detection() -> None:
         )
 
 
-def validate_invalid_depth_argument_rejected() -> None:
-    for invalid in ("deeper", "deep standard"):
-        try:
-            synthetic_plan(["src/module.ts"], 1, 1, 0, depth_requested=invalid)
-        except AssertionError as exc:
-            if f"unsupported depth_requested: {invalid}" not in str(exc):
-                raise AssertionError(f"unexpected invalid depth error for {invalid!r}: {exc}") from exc
-        else:
-            raise AssertionError(f"invalid depth argument {invalid!r} must fail instead of being silently ignored")
-
-
 def validate_paginated_files_template() -> None:
     page_one = [{"filename": f"src/file_{index}.ts"} for index in range(100)]
     page_two = [{"filename": "src/file_100.ts"}]
@@ -953,40 +873,53 @@ def validate_step2b_jq_allowlist_docs() -> None:
         "Step 2b の metadata 取得テンプレートだけは",
         "`gh api ... --jq '...'` を明示的に使う",
         "`gh pr view --jq` は使わない",
+        "title: .title",
+        "pr_url: .html_url",
+        "missing title",
+        "missing pr_url",
     ]
     for snippet in required_snippets:
         if snippet not in text:
             raise AssertionError(f"Step 2b metadata allowlist docs missing required snippet: {snippet}")
 
 
-def validate_depth_argument_docs() -> None:
+def validate_review_argument_docs() -> None:
     text = SKILL_PATH.read_text()
     required_snippets = [
-        'argument-hint: "[--deep|--standard]"',
+        'argument-hint: "[<PR URL|PR number>]"',
         "The user invoked this with: `$ARGUMENTS`",
-        '$depth_requested = "deep"',
-        '$depth_requested = "standard"',
-        "複数引数が含まれる場合",
+        "$review_target",
+        "https://github.com/<org>/<repo>/pull/<number>",
+        "PR 番号",
+        "depth は自動判定します",
+        "複数引数",
         "unsupported argument",
         "silent ignore",
+        "Step 0: 引数解析と直接指定の解決",
+        "`$target_mode = \"direct\"`",
         "`depth_actual`（`standard` / `deep`）と `recommended_mode`（`standard` / `focused` / `skip`）は直交した軸",
         "{DEPTH_GUIDANCE}",
-        "`--deep` 明示時も `depth_actual = \"standard\"` に強制",
+        "`depth_requested` は常に `null`",
+        "`depth_downgraded` は常に `false`",
     ]
     for snippet in required_snippets:
         if snippet not in text:
-            raise AssertionError(f"depth argument docs missing required snippet: {snippet}")
+            raise AssertionError(f"review argument docs missing required snippet: {snippet}")
 
     if "depth_actual = \"deep\"\n    else \"deep\"" in text:
         raise AssertionError("depth default must not remain deep")
+    for removed in ("/pr-codex:review --deep", "/pr-codex:review --standard", 'argument-hint: "[--deep|--standard]"'):
+        if removed in text:
+            raise AssertionError(f"removed depth option still documented in review skill: {removed}")
 
     readme = (ROOT / "README.md").read_text()
     readme_snippets = [
         "## Depth control",
-        "/pr-codex:review --deep",
-        "/pr-codex:review --standard",
+        "/pr-codex:review https://github.com/org/repo/pull/123",
+        "/pr-codex:review 123",
         "`depth_source=auto`",
-        "`depth_source=argument`, `depth_requested=deep`, `depth_downgraded=true`, `depth_downgrade_reason`",
+        "`depth_requested=null`",
+        "`depth_downgraded=false`",
         "`depth_source=default`, `depth_downgraded=false`, `depth_reason` に大規模ガード理由を記録",
         "`recommended_mode` (`standard` / `focused` / `skip`) は depth とは直交する別軸",
         "GitHub への自動投稿範囲は depth では拡大しない",
@@ -994,6 +927,9 @@ def validate_depth_argument_docs() -> None:
     for snippet in readme_snippets:
         if snippet not in readme:
             raise AssertionError(f"README depth docs missing required snippet: {snippet}")
+    for removed in ("/pr-codex:review --deep", "/pr-codex:review --standard", "`depth_source` は `argument`"):
+        if removed in readme:
+            raise AssertionError(f"removed depth option still documented in README: {removed}")
 
 
 def validate_review_preflight_supplement_docs() -> None:
@@ -1004,7 +940,6 @@ def validate_review_preflight_supplement_docs() -> None:
         'recommended_mode != "standard"',
         'depth_actual != "standard"',
         'depth_source != "default"',
-        "depth_downgraded == true",
         "`changed lines > 5000`",
         'files_changed',
         'lines_added',
@@ -1081,8 +1016,10 @@ def validate_schema_contract(schema: dict[str, object]) -> None:
     for key in ("rounds_completed", "halt_reason", "verifier_fail_candidates", "repeated_contradiction_events"):
         assert key in round_metrics["properties"], f"round_metrics missing {key}"
     assert schema["properties"]["depth_actual"]["enum"] == ["deep", "standard"]
-    assert schema["properties"]["depth_source"]["enum"] == ["argument", "auto", "default"]
-    assert schema["properties"]["depth_requested"]["enum"] == ["deep", "standard", None]
+    assert schema["properties"]["depth_source"]["enum"] == ["auto", "default"]
+    assert schema["properties"]["depth_requested"]["const"] is None
+    assert schema["properties"]["depth_downgraded"]["const"] is False
+    assert schema["properties"]["depth_downgrade_reason"]["const"] is None
 
     cost_schema = schema["properties"].get("cost")
     assert isinstance(cost_schema, dict), "run-plan schema must include cost"
@@ -1139,27 +1076,13 @@ def validate_schema_contract(schema: dict[str, object]) -> None:
     assert routing_schema["properties"]["route"]["enum"] == [ROUTE_M2]
     assert routing_schema["properties"]["model_profile"]["enum"] == ["standard", "deep", "focused-fallback"]
 
-    argument_plan = synthetic_plan(["src/module.ts"], 1, 1, 0, depth_requested="standard")
-    validate_run_plan_semantics(schema, argument_plan)
-
-    argument_without_request = dict(argument_plan, depth_requested=None)
-    if schema_matches(schema, argument_without_request):
-        raise AssertionError("schema must reject depth_source=argument without depth_requested")
-
-    standard_requested_but_deep = dict(argument_plan, depth_actual="deep")
-    if schema_matches(schema, standard_requested_but_deep):
-        raise AssertionError("schema must reject depth_requested=standard with depth_actual=deep")
-
-    deep_requested_but_standard_without_downgrade = dict(
-        synthetic_plan(["src/module.ts"], 1, 1, 0, depth_requested="deep"),
-        depth_actual="standard",
-    )
-    if schema_matches(schema, deep_requested_but_standard_without_downgrade):
-        raise AssertionError("schema must reject depth_requested=deep standard actual without downgrade")
-
     default_with_request = dict(synthetic_plan(["src/module.ts"], 1, 1, 0), depth_requested="standard")
     if schema_matches(schema, default_with_request):
-        raise AssertionError("schema must reject non-argument depth_source with depth_requested")
+        raise AssertionError("schema must reject any non-null depth_requested")
+
+    default_with_downgrade = dict(synthetic_plan(["src/module.ts"], 1, 1, 0), depth_downgraded=True)
+    if schema_matches(schema, default_with_downgrade):
+        raise AssertionError("schema must reject depth_downgraded=true because depth options were removed")
 
     default_with_deep_actual = dict(synthetic_plan(["src/module.ts"], 1, 1, 0), depth_actual="deep")
     if schema_matches(schema, default_with_deep_actual):
@@ -1169,15 +1092,8 @@ def validate_schema_contract(schema: dict[str, object]) -> None:
     if schema_matches(schema, auto_with_standard_actual):
         raise AssertionError("schema must reject depth_source=auto with depth_actual=standard")
 
-    downgraded = synthetic_plan(["src/module.ts"], 1, 5001, 0, depth_requested="deep")
-    validate_run_plan_semantics(schema, downgraded)
-
-    downgraded_without_reason = dict(downgraded, depth_downgrade_reason=None)
-    if schema_matches(schema, downgraded_without_reason):
-        raise AssertionError("schema must reject downgraded depth without depth_downgrade_reason")
-
     not_downgraded_with_reason = dict(
-        synthetic_plan(["src/module.ts"], 1, 1, 0, depth_requested="deep"),
+        synthetic_plan(["src/module.ts"], 1, 1, 0),
         depth_downgrade_reason="unexpected",
     )
     if schema_matches(schema, not_downgraded_with_reason):
@@ -1194,10 +1110,9 @@ def main() -> None:
     validate_threshold_behavior(schema)
     validate_routing_matrix(schema)
     validate_risk_tag_detection()
-    validate_invalid_depth_argument_rejected()
     validate_completed_head_check_before_files()
     validate_step2b_jq_allowlist_docs()
-    validate_depth_argument_docs()
+    validate_review_argument_docs()
     validate_review_preflight_supplement_docs()
     validate_step5_write_order()
     validate_escape_rule_docs()

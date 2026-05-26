@@ -2,7 +2,7 @@
 user-invocable: true
 name: pr-codex
 description: "GitHub PRを Claude Code と Codex CLI の2者レビュー方式で自動レビューする"
-argument-hint: "[--deep|--standard]"
+argument-hint: "[<PR URL|PR number>]"
 allowed-tools: ["Bash", "Read", "Write", "Glob", "Grep"]
 ---
 
@@ -14,15 +14,15 @@ GitHubのレビュー依頼PRを自動レビューするコマンド。Claude Co
 
 The user invoked this with: `$ARGUMENTS`
 
-起動直後に Claude 側で `$ARGUMENTS` を解析し、レビュー深度の明示指定を `$depth_requested` として保持する。
+起動直後に Claude 側で `$ARGUMENTS` を解析し、レビュー対象の直接指定を `$review_target` として保持する。レビュー深度 (`standard` / `deep`) は引数では受け付けず、Step 3 の `run-plan.json` で常に自動判定する。
 
-- 引数なし: `$depth_requested = ""`（run-plan の自動推定または default を使う）
-- `--deep`: `$depth_requested = "deep"`
-- `--standard`: `$depth_requested = "standard"`
+- 引数なし: `$review_target = ""`。従来どおり Search API でレビュー依頼 PR を自動検索・選定する
+- `https://github.com/<org>/<repo>/pull/<number>`: 指定された PR を直接レビューする
+- `<number>`: 現在の git repository の `origin` を対象 repo として、指定された PR 番号を直接レビューする
 
-上記以外の引数、または複数引数が含まれる場合は、ユーザーに `unsupported argument: <value>。使える引数は --deep または --standard です。` と報告して **処理を中断** する。未知の引数を silent ignore してレビューを続行してはならない。
+上記以外の引数、複数引数、または `--deep` / `--standard` などのオプションが含まれる場合は、ユーザーに `unsupported argument: <value>。使える引数は PR URL または PR 番号のみです。depth は自動判定します。` と報告して **処理を中断** する。未知の引数を silent ignore してレビューを続行してはならない。
 
-`--deep` は高リスク・小規模 PR を深く見るための手動指定、`--standard` は高速 path を明示する指定である。どちらも `/pr-codex:send` の自動投稿範囲を広げるものではない。
+PR 番号のみの指定は、現在の working directory が対象 repository の git checkout であり `gh repo view --json nameWithOwner --jq .nameWithOwner` で `owner/repo` を解決できる場合だけ有効とする。`~/claude-loop-pr-codex` など repository context がない場所で PR 番号のみが指定された場合は、推測せず PR URL 指定を案内して中断する。
 
 ## セットアップ
 
@@ -60,13 +60,27 @@ Codex CLI 側のレビュー実行は、本スキル内で `-m gpt-5.5` を指�
 
 ```
 /loop 10m /pr-codex:review
+/pr-codex:review https://github.com/org/repo/pull/123
+/pr-codex:review 123
 ```
 
 ワーキングディレクトリを `~/claude-loop-pr-codex/` にすることで、配下のファイルに直接アクセスできる。
 
 ## フロー
 
+### Step 0: 引数解析と直接指定の解決
+
+`$ARGUMENTS` は Claude が解釈済みの文字列として扱い、shell で再分割しない。空文字列、PR URL 1 個、PR 番号 1 個だけを受け付ける。
+
+- 引数なしの場合: `$target_mode = "auto"` とし、Step 1 の Search API に進む
+- PR URL の場合: URL から `$org` / `$repository` / `$pr_number` を取り出し、`$target_mode = "direct"` として Step 2 の自動選定をスキップする。URL は `https://github.com/<org>/<repo>/pull/<number>` だけを受け付ける
+- PR 番号の場合: `gh repo view --json nameWithOwner --jq .nameWithOwner` で現在の repository を解決し、その `owner/repo` と PR 番号から `$org` / `$repository` / `$pr_number` を設定する。repository を解決できない場合は、PR URL 指定を案内して中断する
+
+直接指定時は、`$pr_url = "https://github.com/$org/$repository/pull/$pr_number"` として保持する。`$title` と canonical な `$pr_url` は Step 2b の `gh api repos/$org/$repository/pulls/$pr_number --jq ...` で取得した値を優先する。
+
 ### Step 1: レビュー対象PR候補の取得
+
+`$target_mode == "direct"` の場合、Step 1 は実行しない。指定された `$org` / `$repository` / `$pr_number` を使い、Step 2 の requested reviewers / approve 済み判定もスキップして、直接指定 PR の status 判定へ進む。
 
 GitHub Search API でレビュー依頼されている Open PR を取得する。
 Notifications API と異なり、リポジトリの Watch 設定に依存しない。
@@ -117,6 +131,8 @@ gh api -H "Accept: application/vnd.github+json" \
 - `review-requested:USERNAME` は GitHub docs 上、ユーザー直接指定とチーム経由の両方を含むと明記されている
 
 ### Step 2: 候補PRの選定
+
+`$target_mode == "direct"` の場合、この自動選定は実行しない。指定 PR はレビュー依頼の有無や approve 済み状態に関係なく対象にできるため、requested reviewers / approve 済み判定をスキップする。ただし `status.json` による冪等性チェックは維持する。
 
 取得した候補（`$org`, `$repository`, `$pr_number`, `$title`, `$pr_url`）を上から順に走査し、以下の条件で最初の1件を選定する:
 
@@ -178,15 +194,19 @@ jq -r '.started_at' ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.js
 
 全候補がスキップなら何もせず終了。
 
-### Step 2b: 選定PRの `repository_full_name` / `head_sha` / `base_sha` / `branch` / `base_branch` / `merge_commit_sha` / `files` を取得
+#### 直接指定 PR の status 判定
 
-Step 2 で対象PRを1件選定した直後、未レビュー / failed / stale / completed のどの経路でもまず `repository_full_name` / `head_sha` / `base_sha` / `branch` / `base_branch` / `merge_commit_sha` を取得する。`repository_full_name` は fork head repo ではなく、GitHub review の投稿先と同じ **base repo** (`.base.repo.full_name`) とする。`state == "completed"` の場合はこの時点で保存済み `head_sha` と比較し、同一ならスキップして PR 変更ファイル一覧は取得しない。未レビュー / failed / stale、または completed だが `head_sha` が変わっている場合だけ、完全な `files[]` を REST API paginate で取得して Step 3 へ進む。Step 3 の clone と `metadata.json` / `run-plan.json` 作成・Step 4 の PR 差分スコープ制御・Step 4c の canonical findings 生成は `$repository_full_name` / `$head_sha` / `$base_sha` / `$branch` / `$base_branch` / `$merge_commit_sha` / `$files_json` に依存するため、選定後に欠落すると後続が破綻する。
+`$target_mode == "direct"` の場合は、Search API の候補走査ではなく、指定された `$org` / `$repository` / `$pr_number` の `status.json` だけを確認する。`status.json` が存在しない、`state == "failed"`、または `state == "running"` だが 30 分超過で stale の場合は Step 2b へ進む。`state == "running"` かつ 30 分以内ならスキップする。`state == "completed"` の場合は Step 2b で現在の `head_sha` を取得し、保存済み `head_sha` と一致すればスキップ、異なれば追加コミットありとしてレビューを再実行する。
 
-まず `repository_full_name` / `head_sha` / `base_sha` / `branch` / `base_branch` / `merge_commit_sha` を取得する。
+### Step 2b: 選定PRの `repository_full_name` / `head_sha` / `base_sha` / `branch` / `base_branch` / `merge_commit_sha` / `title` / `pr_url` / `files` を取得
 
-- いつ使うか: Step 2 で対象PRを1件選定した直後に必ず実行する
-- 判定条件: 標準出力に `{"repository_full_name":"...","head_sha":"...","base_sha":"...","branch":"...","base_branch":"...","merge_commit_sha":"..."}` の JSON が出力される（required field のいずれかが欠落した場合は `gh api --jq` が非ゼロ終了し、stderr に `missing <field>` が出る。`merge_commit_sha` は open PR では空文字列でよい）
-- 次アクション: 出力 JSON の `.repository_full_name` を `$repository_full_name`、`.head_sha` を `$head_sha`、`.base_sha` を `$base_sha`、`.branch` を `$branch`、`.base_branch` を `$base_branch`、`.merge_commit_sha` を `$merge_commit_sha` に保持する。`state == "completed"` の場合は、続く保存済み `head_sha` 比較テンプレートを先に実行する。一致したらこの候補をスキップし、異なる場合だけ **別テンプレートで完全な `files[]` を取得**して Step 3 へ進む。`state != "completed"` の場合はそのまま完全な `files[]` を取得する
+Step 2 で対象PRを1件選定した直後、または Step 0 で直接指定 PR を解決した直後、未レビュー / failed / stale / completed のどの経路でもまず `repository_full_name` / `head_sha` / `base_sha` / `branch` / `base_branch` / `merge_commit_sha` / `title` / `pr_url` を取得する。`repository_full_name` は fork head repo ではなく、GitHub review の投稿先と同じ **base repo** (`.base.repo.full_name`) とする。`state == "completed"` の場合はこの時点で保存済み `head_sha` と比較し、同一ならスキップして PR 変更ファイル一覧は取得しない。未レビュー / failed / stale、または completed だが `head_sha` が変わっている場合だけ、完全な `files[]` を REST API paginate で取得して Step 3 へ進む。Step 3 の clone と `metadata.json` / `run-plan.json` 作成・Step 4 の PR 差分スコープ制御・Step 4c の canonical findings 生成は `$repository_full_name` / `$head_sha` / `$base_sha` / `$branch` / `$base_branch` / `$merge_commit_sha` / `$title` / `$pr_url` / `$files_json` に依存するため、選定後に欠落すると後続が破綻する。
+
+まず `repository_full_name` / `head_sha` / `base_sha` / `branch` / `base_branch` / `merge_commit_sha` / `title` / `pr_url` を取得する。
+
+- いつ使うか: Step 2 で対象PRを1件選定した直後、または Step 0 で直接指定 PR を解決した直後に必ず実行する
+- 判定条件: 標準出力に `{"repository_full_name":"...","head_sha":"...","base_sha":"...","branch":"...","base_branch":"...","merge_commit_sha":"...","title":"...","pr_url":"..."}` の JSON が出力される（required field のいずれかが欠落した場合は `gh api --jq` が非ゼロ終了し、stderr に `missing <field>` が出る。`merge_commit_sha` は open PR では空文字列でよい）
+- 次アクション: 出力 JSON の `.repository_full_name` を `$repository_full_name`、`.head_sha` を `$head_sha`、`.base_sha` を `$base_sha`、`.branch` を `$branch`、`.base_branch` を `$base_branch`、`.merge_commit_sha` を `$merge_commit_sha`、`.title` を `$title`、`.pr_url` を `$pr_url` に保持する。`state == "completed"` の場合は、続く保存済み `head_sha` 比較テンプレートを先に実行する。一致したらこの候補をスキップし、異なる場合だけ **別テンプレートで完全な `files[]` を取得**して Step 3 へ進む。`state != "completed"` の場合はそのまま完全な `files[]` を取得する
 
 ```bash
 gh api repos/$org/$repository/pulls/$pr_number --jq '
@@ -196,13 +216,17 @@ gh api repos/$org/$repository/pulls/$pr_number --jq '
     base_sha: .base.sha,
     branch: .head.ref,
     base_branch: .base.ref,
-    merge_commit_sha: (.merge_commit_sha // "")
+    merge_commit_sha: (.merge_commit_sha // ""),
+    title: .title,
+    pr_url: .html_url
   }
   | if ((.repository_full_name // "") == "") then error("missing repository_full_name")
     elif ((.head_sha // "") == "") then error("missing head_sha")
     elif ((.base_sha // "") == "") then error("missing base_sha")
     elif ((.branch // "") == "") then error("missing branch")
     elif ((.base_branch // "") == "") then error("missing base_branch")
+    elif ((.title // "") == "") then error("missing title")
+    elif ((.pr_url // "") == "") then error("missing pr_url")
     else . end
 '
 ```
@@ -233,7 +257,7 @@ set -o pipefail && gh api repos/$org/$repository/pulls/$pr_number/files --pagina
 
 #### 変数の保持例
 
-1つ目の `gh api --jq` の出力が `{"repository_full_name":"octo/example","head_sha":"deadbeef01","base_sha":"cafebabe02","branch":"feat/dark-mode","base_branch":"main","merge_commit_sha":""}`、2つ目の `jq -sce` の出力が `["src/theme.ts","src/App.tsx"]` の場合、以下のように Bash 変数へ保持する:
+1つ目の `gh api --jq` の出力が `{"repository_full_name":"octo/example","head_sha":"deadbeef01","base_sha":"cafebabe02","branch":"feat/dark-mode","base_branch":"main","merge_commit_sha":"","title":"Dark mode","pr_url":"https://github.com/octo/example/pull/123"}`、2つ目の `jq -sce` の出力が `["src/theme.ts","src/App.tsx"]` の場合、以下のように Bash 変数へ保持する:
 
 - `$repository_full_name = octo/example`（base repo の owner/repo 形式の文字列。fork PR でも投稿先 repo と一致させる）
 - `$head_sha = deadbeef01`（文字列そのまま）
@@ -241,9 +265,11 @@ set -o pipefail && gh api repos/$org/$repository/pulls/$pr_number/files --pagina
 - `$branch = feat/dark-mode`（文字列そのまま）
 - `$base_branch = main`（文字列そのまま）
 - `$merge_commit_sha = ""`（open PR では空文字列。merge commit が取得できる場合はその SHA）
+- `$title = Dark mode`（文字列そのまま）
+- `$pr_url = https://github.com/octo/example/pull/123`（文字列そのまま）
 - `$files_json = ["src/theme.ts","src/App.tsx"]`（**JSON 配列そのままの文字列**。Step 3 の metadata.json 生成で `jq --argjson files "$files_json"` に渡す）
 
-`$files_json` は 2つ目のテンプレートの標準出力そのままを JSON 配列文字列として保持したもの。`$repository_full_name` は canonical findings の `pr.repository` にそのまま使うが、必ず `.base.repo.full_name` 由来の投稿先 repo とし、`.head.repo.full_name` 由来の fork repo を入れてはならない。`$base_sha` は `pr.base_sha` と `metadata.json.base_sha` の両方に使う。`$merge_commit_sha` は empty string の場合に限り metadata では `null` に正規化してよい。抽出は Claude 側で 2 回の出力を読み取って変数へ分解する（シェル側で追加の `jq` パイプは挟まない。1 テンプレート = 1 シェル実行単位の原則に従う）。
+`$files_json` は 2つ目のテンプレートの標準出力そのままを JSON 配列文字列として保持したもの。`$repository_full_name` は canonical findings の `pr.repository` にそのまま使うが、必ず `.base.repo.full_name` 由来の投稿先 repo とし、`.head.repo.full_name` 由来の fork repo を入れてはならない。`$base_sha` は `pr.base_sha` と `metadata.json.base_sha` の両方に使う。`$merge_commit_sha` は empty string の場合に限り metadata では `null` に正規化してよい。`$title` / `$pr_url` は Search API や URL parse 由来の値より Step 2b の Pulls API 由来を優先する。抽出は Claude 側で 2 回の出力を読み取って変数へ分解する（シェル側で追加の `jq` パイプは挟まない。1 テンプレート = 1 シェル実行単位の原則に従う）。
 
 ### Step 3: 作業ディレクトリの準備
 
@@ -513,19 +539,16 @@ jq -n --arg org "$org" --arg repository "$repository" --arg repository_full_name
 - 判定条件: `run-plan.json` が作成され、`files_changed` / `hunks` / `lines_added` / `lines_removed` / `risk_tags` / `selected_hunters` / `depth_actual` / `depth_source` / `depth_reason` / `depth_requested` / `depth_downgraded` / `depth_downgrade_reason` / `recommended_mode` / `skip_reason` / `routing_decision` / `estimated_stages` / `estimated_timeout_ms` / `actual_duration_ms` / `actual_tokens` / `cost` が埋まる
 - 次アクション: Step 4 前処理へ進む
 
-`run-plan.json` は Step 2b の `files[]` と Step 3 の `pr.diff`、および起動時に解析した `$depth_requested` を使う preflight artifactで、**logical stage: ranker** の正式な出力である。M2 では `routing_decision` に token/duration/file-count/risk proxy 由来の `budget_class` と logical `model_profile` を残す。M3 では `cost` に provider/CLI が実際に報告した actual USD cost だけを記録し、pricing table や token からの USD 推定は持たない。`cost.source="unavailable"` の場合は推測せず null のまま残す。実プロバイダ名・実モデル名・private config は絶対に書かない。`selected_hunters` は ranker 出力の interface として配列のまま維持するが、F4 では常に `["claude","codex"]` を出力し、`routing_decision.route` も M2 では常に `"claude+codex"` とする。route enum は将来 F4 の specialist routing で拡張できるよう、ここでは固定値の hook のみ残す。`recommended_mode == "skip"` は「/loop では skip 推奨、手動では警告のみ」の**提案値**であり、M1/F4/M2 の既定では実際のレビューを止めず `focused fallback` で継続する。
+`run-plan.json` は Step 2b の `files[]` と Step 3 の `pr.diff` を使う preflight artifactで、**logical stage: ranker** の正式な出力である。レビュー深度は引数で受け付けず、`risk_tags` / PR サイズ / 大規模ガードから決定論的に自動判定する。M2 では `routing_decision` に token/duration/file-count/risk proxy 由来の `budget_class` と logical `model_profile` を残す。M3 では `cost` に provider/CLI が実際に報告した actual USD cost だけを記録し、pricing table や token からの USD 推定は持たない。`cost.source="unavailable"` の場合は推測せず null のまま残す。実プロバイダ名・実モデル名・private config は絶対に書かない。`selected_hunters` は ranker 出力の interface として配列のまま維持するが、F4 では常に `["claude","codex"]` を出力し、`routing_decision.route` も M2 では常に `"claude+codex"` とする。route enum は将来 F4 の specialist routing で拡張できるよう、ここでは固定値の hook のみ残す。`recommended_mode == "skip"` は「/loop では skip 推奨、手動では警告のみ」の**提案値**であり、M1/F4/M2 の既定では実際のレビューを止めず `focused fallback` で継続する。
 
 `depth_actual`（`standard` / `deep`）と `recommended_mode`（`standard` / `focused` / `skip`）は直交した軸として扱う。depth は「1観点あたりの掘り下げ深さ」、recommended_mode は「対象観点の絞り込み」を表すため、`depth_actual="deep"` かつ `recommended_mode="focused"` のような組み合わせも有効である。
 
-判定ロジックの canonical source は直後の `jq` テンプレート内の `def auto_deep` / `def depth_actual` / `def recommended_mode` / `def budget_class` / `def model_profile` とし、散文はその読み取り補助に限定する。条件が重なる場合は `jq` の評価順を優先し、表の `file-count rules` / `line-count rules` / `mode/depth rules` は同じ canonical def を参照する。`total_lines > 5000` では `--deep` 明示時も `depth_actual = "standard"` に強制する。
+判定ロジックの canonical source は直後の `jq` テンプレート内の `def auto_deep` / `def depth_actual` / `def recommended_mode` / `def budget_class` / `def model_profile` とし、散文はその読み取り補助に限定する。条件が重なる場合は `jq` の評価順を優先し、表の `file-count rules` / `line-count rules` / `mode/depth rules` は同じ canonical def を参照する。`total_lines > 5000` では `depth_actual = "standard"` に強制する。
 
 | 条件 | depth_actual | recommended_mode | budget_class | model_profile |
 |---|---|---|---|---|
-| `--deep` かつ `total_lines <= 5000` | `deep` | file-count rules | line-count rules | mode/depth rules |
-| `--deep` かつ `total_lines > 5000` | `standard`（downgrade） | file-count rules | line-count rules | mode/depth rules |
-| `--standard` | `standard` | file-count rules | line-count rules | mode/depth rules |
-| 引数なし、`risk_tags` に `security` または `data_migration` を含み、`files_changed <= 20` かつ `total_lines <= 1500` | `deep`（auto） | file-count rules | line-count rules | mode/depth rules |
-| 引数なし、上記以外 | `standard` | file-count rules | line-count rules | mode/depth rules |
+| `risk_tags` に `security` または `data_migration` を含み、`files_changed <= 20` かつ `total_lines <= 1500` | `deep`（auto） | file-count rules | line-count rules | mode/depth rules |
+| 上記以外 | `standard` | file-count rules | line-count rules | mode/depth rules |
 | `files_changed > 100` | depth rules | `skip` | `large` | `focused-fallback` |
 | `50 < files_changed <= 100` | depth rules | `focused` | line-count rules | `focused-fallback` |
 | `files_changed <= 50` | depth rules | `standard` | line-count rules | `deep` if `depth_actual == "deep"`, else `standard` |
@@ -536,12 +559,7 @@ jq -n --arg org "$org" --arg repository "$repository" --arg repository_full_name
 推定 timeout は `min(1200000, 300000 + files_changed*30000 + hunks*15000 + total_lines*100 + sensitive_risk_count*90000)` を使う。`sensitive_risk_count` は `risk_tags` のうち `security` / `data_migration` の件数。`rationale` は `files_changed` / `total_lines` / `risk_tags` / `depth_actual` / `recommended_mode` の決定論的な事実列のみとし、LLM 自由生成文や provider/model 名を入れない。
 
 ```bash
-jq -n --arg depth_requested "$depth_requested" --slurpfile metadata ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json --rawfile diff ~/claude-loop-pr-codex/$org-$repository-$pr_number/pr.diff '
-  def explicit_depth:
-    if $depth_requested == "" or $depth_requested == "null" then null
-    elif $depth_requested == "deep" or $depth_requested == "standard" then $depth_requested
-    else error("unsupported depth_requested: " + $depth_requested)
-    end;
+jq -n --slurpfile metadata ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json --rawfile diff ~/claude-loop-pr-codex/$org-$repository-$pr_number/pr.diff '
   def files: ($metadata[0].files // []);
   def diff_lines: ($diff | split("\n"));
   def lines_added: [diff_lines[] | select(startswith("+") and (startswith("+++") | not))] | length;
@@ -592,31 +610,24 @@ jq -n --arg depth_requested "$depth_requested" --slurpfile metadata ~/claude-loo
   def total_lines: (lines_added + lines_removed);
   def sensitive_risk_count: (risk_tags | map(select(. == "security" or . == "data_migration")) | length);
   def auto_deep: (sensitive_risk_count > 0 and files_changed <= 20 and total_lines <= 1500);
-  def depth_downgraded: (explicit_depth == "deep" and total_lines > 5000);
-  def depth_requested_out: explicit_depth;
+  def depth_downgraded: false;
+  def depth_requested_out: null;
   def depth_source:
-    if explicit_depth != null then "argument"
-    elif auto_deep then "auto"
+    if auto_deep then "auto"
     else "default"
     end;
   def depth_actual:
     if total_lines > 5000 then "standard"
-    elif explicit_depth != null then explicit_depth
     elif auto_deep then "deep"
     else "standard"
     end;
   def depth_reason:
-    if explicit_depth == "deep" and total_lines > 5000 then "requested --deep but changed lines > 5000; forced standard to preserve the 20 minute timeout"
-    elif explicit_depth == "deep" then "requested --deep"
-    elif explicit_depth == "standard" then "requested --standard"
-    elif total_lines > 5000 then "changed lines > 5000; selected standard to preserve the 20 minute timeout"
+    if total_lines > 5000 then "changed lines > 5000; selected standard to preserve the 20 minute timeout"
     elif auto_deep then "risk_tags include security or data_migration and PR size is <= 20 files / <= 1500 changed lines; selected deep"
-    else "no depth argument and no high-risk small-PR signal; selected default standard"
+    else "no high-risk small-PR signal; selected default standard"
     end;
   def depth_downgrade_reason:
-    if depth_downgraded then "requested --deep but changed lines > 5000; forced standard to preserve the 20 minute timeout"
-    else null
-    end;
+    null;
   def recommended_mode:
     if files_changed > 100 then "skip"
     elif files_changed > 50 then "focused"
@@ -732,10 +743,9 @@ Step 4a / 4b 共通のレビュー観点本文（MCP追加情報収集 / 7観点
 
 `{DEPTH_GUIDANCE}` の組み立て規則:
 
-- 先頭に `depth_actual` / `depth_source` / `depth_requested` / `depth_downgraded` / `depth_reason` を箇条書きで明記する。`depth_downgrade_reason` が非 null の場合も併記する
+- 先頭に `depth_actual` / `depth_source` / `depth_reason` を箇条書きで明記する。`depth_requested` は常に `null`、`depth_downgraded` は常に `false` として扱う
 - `depth_actual == "standard"` の場合: 変更行周辺と直接の呼び出し元 / 呼び出し先を優先し、広域探索・仮説列挙・低確度の横展開より 20 分以内完了を優先する
 - `depth_actual == "deep"` の場合: 変更行から到達する呼び出し元 / 呼び出し先、設定・スキーマ・権限境界、テスト差分を追加で確認し、反証検討を厚くする。ただしレビュー対象スコープは `pr.diff` と `metadata.json.files[]` に限定し、投稿対象の severity / post_policy は広げない
-- `depth_downgraded == true` の場合: ユーザーが `--deep` を指定していても 5000 行ガードにより standard として扱い、広域探索を増やさない
 `{BEAR_REVIEW_GUIDANCE}` の組み立て規則:
 
 - Step 3b の終了コードが 0 で、`$HOME/.claude/skills/bear-review/SKILL.md` / `$HOME/.claude/skills/BEAR.Skills/.claude/skills/bear-review/SKILL.md` / `$HOME/BEAR.Skills/.claude/skills/bear-review/SKILL.md` のいずれかを Read できる場合: `BEAR.Sunday 固有観点` として Resource 設計、DI / Provider / Module、型安全性、PHPMD 指標（CC / NPath / parameter count / field count）を追加確認する。`bear-review` の内容は追加観点であり、既存の verifier / severity classification / posting policy を通過したものだけを canonical findings に採用する
@@ -913,7 +923,7 @@ MCP について:
 8. **4軸 gate (必須)**: `must_fix` として採用する各 finding は、temp 書き出し前に `axes.real == "yes"` / `axes.triggerable == "yes"` / `axes.impactful == "yes"` / (`axes.general == "yes"` または `evidence_level in {"impact_explained", "verified"}`) / `evidence_level == "verified"` をメインコンテキストで検証する。通過しない finding は上記の降格ポリシーを適用する。`validation-report.json` を出す場合は unknown 軸数 / unknown または no を理由に降格した件数 / gate 後の Must Fix 件数 / ladder 分布 (`evidence_level_counts: {suspicion, corroborated, trigger_path_identified, impact_explained, verified}`) / `must_fix_verified_ratio` / `exception_promotion_count` を記録する。
 9. 生レビューを内部的に比較し、最終 findings へ統合する。この比較過程は `review.md` に書かない。severity が衝突した場合は **conservative min** を採用し、`severity_disputed=true`, `severity_by_source`, `merger_rule_applied="conservative_min_until_verifier_available"`, `verifier_required=true` を記録する。validation status (`metadata_files_member`, `diff_range_valid`) は canonical findings には入れず、必要なら副成果物 `validation-report.json` に分離する。
 10. `review.md` と `findings.sarif` は **`findings.verified.json` から派生生成** する。`review.md` は `must_fix` → `## 重大な問題 (Must Fix)`, `should_fix` かつ `post_policy=body_summary` → `## 改善提案 (Should Fix)`, `nit` → `## 軽微な指摘 (Nit)`, `note` や `post_policy=local_only/suppress` の項目 → `## 補足` に対応させる。`findings.sarif` は `tasks/generate_findings_sarif.py` で canonical から一方向生成し、M2 では local-only artifact として保存する（GitHub Code Scanning upload はしない）。`## 総評` と `## 良い点` は人間向け要約として記述してよいが、Must Fix / Should Fix の件数や内容が canonical findings と矛盾してはならない。
-11. `run-plan.json` で `skip_reason != null`、`recommended_mode != "standard"`、`depth_actual != "standard"`、`depth_source != "default"`、`depth_downgraded == true`、または `depth_reason` が `changed lines > 5000` で始まる場合のいずれかに該当する場合は、`review.md` の `## 補足` に preflight 情報を最低限残す。`files_changed` / `lines_added` / `lines_removed` / `depth_reason` / `risk_tags` を明記し、`routing_decision` はローカル artifact 専用であり、`review.md` や GitHub 投稿 body へコピーしない。
+11. `run-plan.json` で `skip_reason != null`、`recommended_mode != "standard"`、`depth_actual != "standard"`、`depth_source != "default"`、または `depth_reason` が `changed lines > 5000` で始まる場合のいずれかに該当する場合は、`review.md` の `## 補足` に preflight 情報を最低限残す。`files_changed` / `lines_added` / `lines_removed` / `depth_reason` / `risk_tags` を明記し、`routing_decision` はローカル artifact 専用であり、`review.md` や GitHub 投稿 body へコピーしない。
 12. **件数一致 gate (必須)**: `findings.verified.json` の `severity=must_fix` 件数と、派生生成した `review.md` の `## 重大な問題 (Must Fix)` 見出し件数、および `findings.sarif` の `level=error` result 件数は **100% 一致** させる。1 件でもずれたら Step 5 の **failed 更新** へ遷移し、completed にしてはならない。
 13. 上記 runtime gate を通過した場合のみ、`findings.candidates.json` / `findings.verified.json` / `review-rounds.json` / `review.md`（必要なら `validation-report.json` も）をまず `*.tmp` へ `Write` ツールで書き出す。`findings.sarif.tmp` は `tasks/generate_findings_sarif.py` で canonical tmp から local-only SARIF として生成する。`Write` ツールは `~` やシェル変数（`$org` 等）を展開しないため、`file_path` にはホームディレクトリを `$HOME` の実値（例: `/Users/adachi`）に展開済みの絶対パスを渡し、`$org` / `$repository` / `$pr_number` も実値に置換してから呼び出す。
 14. **同梱 validator gate (必須)**: temp file 書き出し後、final artifact へ反映する前に以下の同梱 validator を必ず順番に実行する。`$CLAUDE_PLUGIN_ROOT` が shell 環境で未設定の場合は、Step 4 前処理で解決した plugin root の絶対パスに置換してから Bash ツールへ渡す（コマンド構造は変えない）。canonical findings validator / candidates validator / status validator は stdlib-only、SARIF validator は Python package `jsonschema>=4,<5` を使って同梱 OASIS schema を検証する。いずれも成果物を書き換えず検証だけに使い、npm cache やネットワークを使わず、作業ディレクトリ外へ書き込まない。SARIF 生成/検証のコマンド契約は `generate_findings_sarif.py --findings` と `validate_findings_sarif.py --schema` で、schema 入力は `schemas/sarif-2.1.0.json` を使う。`--ranges pr.diff.ranges.txt` を指定した生成/検証では、空の `pr.diff.ranges.txt` は「コメント可能範囲なし」として扱い、非空 finding / SARIF result を PASS させてはならない（`--ranges` 未指定時だけ range gate 無効）。必須フィールド欠落、型不一致、enum 不一致、`posting` / `evidence_level` 条件違反、4軸 gate 違反、`pr.number` 非整数、RFC3339 / URI format 不正、`end_line < start_line`、`id != fingerprint`、fingerprint 再計算不一致、`metadata.json` の投稿先 repo / PR number / head/base SHA と `findings.verified.json.pr.*` の不一致、SARIF schema/side/range/post_policy/Must Fix count 不一致など 1 件でも contract に反したら Step 5 の **failed 更新** へ遷移し、final artifact を書き出してはならない。

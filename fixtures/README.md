@@ -24,9 +24,7 @@ fixtures/
   small/                    # PR #164
     diff.patch              # frozen
     metadata.json           # repo / pr_number / sha / license / frozen_patch_path
-    run-plan.expected.json  # 引数なし depth policy の expected artifact
-    run-plan.deep.expected.json      # --deep 指定時
-    run-plan.standard.expected.json  # --standard 指定時
+    run-plan.expected.json  # 自動 depth policy の expected artifact
     expected-findings.json  # oracle (expected-findings.v1)
     README.md               # PR 要約 + 仕込み意図 + 想定 oracle カテゴリ
   eval-report.example.json  # F11 eval-report.v1 の round_metrics 付き最小例

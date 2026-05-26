@@ -70,7 +70,7 @@ cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
 ```
 
 - `--permission-mode auto` — `/loop` を非対話で回すために auto mode で起動する。auto mode は分類器による安全チェックでツール実行を自動承認またはブロックするため、すべての操作が無条件に通るわけではない。本スキルはテンプレートに明示した操作だけを実行し、ローカル書き込みは `~/claude-loop-pr-codex/` 配下の成果物作成に限定する
-- `--effort max` — Claude Code 本体の推論設定。`/pr-codex:review --deep` / `--standard` の depth policy とは別軸
+- `--effort max` — Claude Code 本体の推論設定。`/pr-codex:review` の depth policy とは別軸
 - Codex CLI 側のレビューと投稿前検証は、スキル内で `-m gpt-5.5` を指定して実行する。レビュー実行では `model_reasoning_effort` をスキル側で上書きせず、ユーザー config の値を使う。投稿前検証は `--ignore-user-config` でユーザー config から切り離す
 - Codex CLI は `codex-cli 0.128.0` 以降のみ対応する。旧バージョン向けテンプレートは打ち切り、`--sandbox read-only` / `--color never` / `--ephemeral` を並べる旧形式ではなく、`-c sandbox_mode=read-only` と preflight 限定の `--ignore-user-config` を使う
 
@@ -80,11 +80,11 @@ cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
 # 手動実行でレビューする
 /pr-codex:review
 
-# 深くレビューする（高リスク・小規模PR向け）
-/pr-codex:review --deep
+# PR URLを直接指定してレビューする
+/pr-codex:review https://github.com/org/repo/pull/123
 
-# 高速 path を明示する
-/pr-codex:review --standard
+# 現在のgit repositoryのPR番号を指定してレビューする
+/pr-codex:review 123
 
 # 10分間隔で自動レビューする
 /loop 10m /pr-codex:review
@@ -92,27 +92,24 @@ cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
 
 ## Depth control
 
-`/pr-codex:review` はレビュー深度を `standard` / `deep` の 2 値で記録する。既定はコストと 20 分 timeout を優先する `standard` で、`deep` は高リスク・小規模 PR または手動指定向け。
+`/pr-codex:review` はレビュー深度を `standard` / `deep` の 2 値で記録する。depth はオプションでは受け付けず、PR のリスクとサイズから自動判定する。既定はコストと 20 分 timeout を優先する `standard` で、`deep` は高リスク・小規模 PR 向け。
 
 この 20 分は review budget / run-plan budget であり、Bash tool の foreground timeout ではない。Claude Code Bash tool の foreground timeout 上限 600000 ms を超えるため、review hunters は run_in_background: true で起動し、foreground timeout=1200000 は指定しない。
 
 | 入力 / signal | selected depth | artifact |
 | --- | --- | --- |
-| `/pr-codex:review --deep` かつ `lines_added + lines_removed <= 5000` | `deep` | `depth_source=argument`, `depth_requested=deep`, `depth_downgraded=false` |
-| `/pr-codex:review --deep` かつ `lines_added + lines_removed > 5000` | `standard` 強制 | `depth_source=argument`, `depth_requested=deep`, `depth_downgraded=true`, `depth_downgrade_reason` |
-| `/pr-codex:review --standard` | `standard` | `depth_source=argument`, `depth_requested=standard` |
-| 引数なし、`risk_tags` に `security` または `data_migration` を含み、`files_changed <= 20` かつ `lines_added + lines_removed <= 1500` | `deep` | `depth_source=auto` |
-| 引数なしで上記以外 | `standard` | `depth_source=default` |
-| 引数なし、かつ `lines_added + lines_removed > 5000` | `standard` | `depth_source=default`, `depth_downgraded=false`, `depth_reason` に大規模ガード理由を記録 |
+| `risk_tags` に `security` または `data_migration` を含み、`files_changed <= 20` かつ `lines_added + lines_removed <= 1500` | `deep` | `depth_source=auto` |
+| 上記以外 | `standard` | `depth_source=default` |
+| `lines_added + lines_removed > 5000` | `standard` | `depth_source=default`, `depth_downgraded=false`, `depth_reason` に大規模ガード理由を記録 |
 
-`run-plan.json` には `depth_actual` / `depth_source` / `depth_reason` / `depth_requested` / `depth_downgraded` / `depth_downgrade_reason` を保存するため、standard/deep の選択は deterministic に追跡できる。
+`run-plan.json` には `depth_actual` / `depth_source` / `depth_reason` / `depth_requested=null` / `depth_downgraded=false` / `depth_downgrade_reason=null` を保存するため、standard/deep の選択は deterministic に追跡できる。
 
 `recommended_mode` (`standard` / `focused` / `skip`) は depth とは直交する別軸。`recommended_mode` は「観点や対象範囲の絞り込み」、depth は「1観点あたりの掘り下げ深さ」を表す。たとえば `recommended_mode=focused` かつ `depth_actual=deep` の組み合わせは有効で、focused fallback / skip recommendation と矛盾しない。
 
 ## レビューフロー
 
-1. **PR候補の取得** — GitHub Search API で `review-requested` のPRを一覧取得
-2. **候補の選定** — 未レビュー・失敗・追加コミットありの最初の1件を選定
+1. **PR候補の取得** — 引数なしなら GitHub Search API で `review-requested` のPRを一覧取得。PR URL / PR番号指定時は対象を直接解決
+2. **候補の選定** — 引数なしなら未レビュー・失敗・追加コミットありの最初の1件を選定。直接指定時は review requested / approve 済み判定をスキップし、`status.json` と `head_sha` で冪等性を確認
 3. **作業ディレクトリの準備** — PRブランチを各ツール用に個別に shallow clone
 4. **2者レビュー実行** — Claude Code と Codex CLI が並行してレビュー
 5. **反復精緻化と結果の統合** — 両者の指摘を `refine` / `challenge` / `verify` round で精査し、halting 後に `review-rounds.json` / `findings.verified.json` / `review.md` を生成
@@ -350,8 +347,8 @@ mv ~/claude-loop-pr-codex/sent/yuki777-pr-codex-24 \
 
 - `run-plan.json` は `schemas/run-plan.schema.json` で定義し、review の depth policy と `recommended_mode` を記録する
 - `pr-classification.json` は `schemas/pr-classification.schema.json` で定義し、`docs-only` / `test-only` / `workflow-ci` / `review-skill-contract` / `python-validator-runtime` / `security-sensitive` / `mixed` の PR 種別と `selected_specialists` を記録する。hunter は read-only で、自動 exploit / network pentest は行わない
-- `depth_actual` は `standard` / `deep` の 2 値。`depth_source` は `argument` / `auto` / `default`、`depth_requested` は明示指定がない場合 `null`
-- `depth_downgraded == true` の場合は `depth_requested=deep` / `depth_actual=standard` / `depth_downgrade_reason` 非空でなければならない
+- `depth_actual` は `standard` / `deep` の 2 値。`depth_source` は `auto` / `default`、`depth_requested` は常に `null`
+- `depth_downgraded` は常に `false`、`depth_downgrade_reason` は常に `null`。大規模 PR は downgrade ではなく default standard として扱う
 - `recommended_mode == "skip"` の場合だけ `skip_reason` を非空にし、それ以外は `skip_reason=null` にする。`recommended_mode` は depth と直交し、GitHub への自動投稿範囲は depth では拡大しない
 - hunter → verifier 境界の debug artifact は `schemas/findings.candidates.v1.json` (JSON Schema Draft 2020-12) で定義する。`findings.candidates.json` は `id == fingerprint` や 4軸 / evidence / posting policy を要求せず、verifier が canonical findings へ揃える
 - canonical runtime artifact は `schemas/findings.v1.json` (JSON Schema Draft 2020-12) で定義する
