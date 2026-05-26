@@ -83,7 +83,6 @@
     "depth_source": {
       "type": "string",
       "enum": [
-        "argument",
         "auto",
         "default"
       ]
@@ -93,24 +92,16 @@
       "minLength": 1
     },
     "depth_requested": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "enum": [
-        "deep",
-        "standard",
-        null
-      ]
+      "type": "null",
+      "const": null
     },
     "depth_downgraded": {
-      "type": "boolean"
+      "type": "boolean",
+      "const": false
     },
     "depth_downgrade_reason": {
-      "type": [
-        "string",
-        "null"
-      ]
+      "type": "null",
+      "const": null
     },
     "recommended_mode": {
       "type": "string",
@@ -403,117 +394,6 @@
         "properties": {
           "skip_reason": {
             "type": "null"
-          }
-        }
-      }
-    },
-    {
-      "if": {
-        "properties": {
-          "depth_source": {
-            "const": "argument"
-          }
-        },
-        "required": [
-          "depth_source"
-        ]
-      },
-      "then": {
-        "properties": {
-          "depth_requested": {
-            "type": "string",
-            "enum": [
-              "deep",
-              "standard"
-            ]
-          }
-        }
-      },
-      "else": {
-        "properties": {
-          "depth_requested": {
-            "type": "null"
-          }
-        }
-      }
-    },
-    {
-      "if": {
-        "properties": {
-          "depth_downgraded": {
-            "const": true
-          }
-        },
-        "required": [
-          "depth_downgraded"
-        ]
-      },
-      "then": {
-        "properties": {
-          "depth_actual": {
-            "const": "standard"
-          },
-          "depth_source": {
-            "const": "argument"
-          },
-          "depth_requested": {
-            "const": "deep"
-          },
-          "depth_downgrade_reason": {
-            "type": "string",
-            "minLength": 1
-          }
-        }
-      },
-      "else": {
-        "properties": {
-          "depth_downgrade_reason": {
-            "type": "null"
-          }
-        }
-      }
-    },
-    {
-      "if": {
-        "properties": {
-          "depth_requested": {
-            "const": "standard"
-          }
-        },
-        "required": [
-          "depth_requested"
-        ]
-      },
-      "then": {
-        "properties": {
-          "depth_actual": {
-            "const": "standard"
-          },
-          "depth_downgraded": {
-            "const": false
-          }
-        }
-      }
-    },
-    {
-      "if": {
-        "properties": {
-          "depth_requested": {
-            "const": "deep"
-          },
-          "depth_downgraded": {
-            "const": false
-          }
-        },
-        "required": [
-          "depth_requested",
-          "depth_downgraded"
-        ]
-      },
-      "then": {
-        "properties": {
-          "depth_actual": {
-            "const": "deep"
           }
         }
       }

@@ -21,7 +21,7 @@ class Issue75DocsTest(unittest.TestCase):
         section = self._run_plan_section()
         self.assertIn("判定ロジックの canonical source は直後の `jq` テンプレート", section)
         self.assertIn("| 条件 | depth_actual | recommended_mode | budget_class | model_profile |", section)
-        self.assertIn("| `--deep` かつ `total_lines > 5000` | `standard`（downgrade） | file-count rules | line-count rules | mode/depth rules |", section)
+        self.assertIn("| `risk_tags` に `security` または `data_migration` を含み、`files_changed <= 20` かつ `total_lines <= 1500` | `deep`（auto） | file-count rules | line-count rules | mode/depth rules |", section)
         self.assertIn("| `files_changed > 100` | depth rules | `skip` | `large` | `focused-fallback` |", section)
 
     def test_deprecated_prose_rule_headings_are_removed(self) -> None:
@@ -29,6 +29,7 @@ class Issue75DocsTest(unittest.TestCase):
         self.assertNotIn("モード切替の暫定ルール", section)
         self.assertNotIn("予算・routing の派生ルール", section)
         self.assertNotIn("- 明示 `--deep`", section)
+        self.assertNotIn("downgrade", section)
         self.assertNotIn("- `budget_class =", section)
 
 
