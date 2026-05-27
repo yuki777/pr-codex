@@ -755,6 +755,37 @@ Step 4a / 4b 共通のレビュー観点本文（MCP追加情報収集 / 7観点
 
 - `{REVIEW_CRITERIA}` / `{RUN_PLAN_GUIDANCE}` / `{DEPTH_GUIDANCE}` / `{BEAR_REVIEW_GUIDANCE}` を bash double-quote 内へ差し込む前に、4つとも `\` → `\\`、`"` → `\"`、`$` → `\$`、`` ` `` → `\`` の順でエスケープする
 
+Episode memory (F10): `$plugin_root/tasks/episode_memory.py` と repo-local store `~/claude-loop-pr-codex/episodes/$org-$repository/episodes.jsonl` が存在する場合だけ、PR type / path / finding class の 3 条件すべてで限定検索して `episode-context.json` を生成できる。episode は hunter の追加 context にしてよいが、`use_policy == "context_only_reverify"`（stale）または根拠が現在の diff で再確認できない episode を無条件採用してはならない。fresh episode も `use_policy == "reverify_current_diff"` として現在の diff で再確認する。store が存在しない場合、または 3 条件のいずれかを構成できない場合は retrieval をスキップする。
+
+```bash
+plugin_root="${CLAUDE_PLUGIN_ROOT:-$(python3 - <<'PY'
+import os
+from pathlib import Path
+roots = []
+if os.environ.get("CLAUDE_CODE_PLUGIN_CACHE_DIR"):
+    roots.append(Path(os.environ["CLAUDE_CODE_PLUGIN_CACHE_DIR"]).expanduser())
+if os.environ.get("CLAUDE_CONFIG_DIR"):
+    roots.append(Path(os.environ["CLAUDE_CONFIG_DIR"]).expanduser() / "plugins" / "cache")
+roots.append(Path.home() / ".claude" / "plugins" / "cache")
+markers = []
+for root in roots:
+    markers.extend(root.glob("**/pr-codex/tasks/validate_findings.py"))
+if not markers:
+    raise SystemExit("CLAUDE_PLUGIN_ROOT is unset and pr-codex plugin root was not found")
+marker = max((m.resolve() for m in markers), key=lambda p: (p.stat().st_mtime_ns, str(p)))
+print(marker.parents[1])
+PY
+)}"
+python3 "$plugin_root/tasks/episode_memory.py" retrieve \
+  --store ~/claude-loop-pr-codex/episodes/$org-$repository/episodes.jsonl \
+  --pr-type "$primary_pr_type" \
+  --path "$changed_path" \
+  --finding-class "$finding_class" \
+  > ~/claude-loop-pr-codex/$org-$repository-$pr_number/episode-context.json
+```
+
+`episode-context.json` を `{RUN_PLAN_GUIDANCE}` に要約して含める場合は、episode id / signal / path / finding_class / freshness / use_policy / public-safe summary だけを使う。raw comment、raw log、secret、ローカル絶対パスを hunter prompt に戻してはいけない。
+
 さらに canonical findings の `producer.version` を埋めるため、同じ `plugin_root` を基準に `$plugin_root/.claude-plugin/plugin.json` を Read ツールで取得し、`.version` を `$plugin_version` として保持する。`findings.verified.json` の `producer.version` は空文字列不可のため、取得に失敗した場合は Step 5 の **failed 更新** へ遷移する。`schemas/findings.v1.json` も同じ基準で Read し、Step 4c の schema validation に使う。
 
 パス解決: Read ツールの `file_path` には `REVIEW_CRITERIA.md` の絶対パスを渡す。プラグイン環境では `$plugin_root/skills/review/REVIEW_CRITERIA.md` に配置される。`plugin_root` が未解決の場合はセットアップの fallback block を実行してから `skills/review/REVIEW_CRITERIA.md` を連結する。

@@ -25,6 +25,7 @@ allowed-tools: ["Bash", "Read", "Write", "Glob", "Grep"]
 - PR が merge された事実だけ
 - `<!-- hermes-auto:... -->` など bot/generated marker だけ
 - raw log、secret、ローカルパスを含む文脈
+- PR type / path / finding class で限定できない episode
 
 ## 出力
 
@@ -32,8 +33,9 @@ allowed-tools: ["Bash", "Read", "Write", "Glob", "Grep"]
 
 - `learn-result.json`: 集計、学習ポリシー、無視した thread の理由
 - `feedback-artifacts/*.json`: signal ごとの public-safe artifact
+- optional `episodes.jsonl`: `tasks/episode_memory.py write` で上記 artifact から作る repo-local episode store
 
-artifact は token らしき値とローカルパスを redaction し、コメント本文は excerpt に切り詰める。
+artifact は token らしき値とローカルパスを redaction し、コメント本文は excerpt に切り詰める。episode store へ昇格する場合も raw comment/log は入れず、PR type / path / finding class を必ず付ける。
 
 ## 使い方
 
