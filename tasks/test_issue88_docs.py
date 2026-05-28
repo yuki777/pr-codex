@@ -20,7 +20,7 @@ def section(text: str, start: str, end: str) -> str:
 class Issue88DocsTest(unittest.TestCase):
     def test_send_skill_documents_severity_option_matrix(self) -> None:
         text = SEND_SKILL.read_text(encoding="utf-8")
-        self.assertIn('argument-hint: "[--auto-submit] [--include-should-fix] [--include-nit]"', text)
+        self.assertIn('argument-hint: "[<PR URL|PR number>] [--auto-submit] [--include-should-fix] [--include-nit]"', text)
         usage = section(text, "## 使い方", "## フロー")
         for snippet in (
             "/pr-codex:send",
@@ -119,7 +119,7 @@ class Issue88DocsTest(unittest.TestCase):
             "active severity flags",
             "{INCLUDE_SHOULD_FIX}",
             "{INCLUDE_NIT}",
-            "unknown option や重複オプションは unsupported argument",
+            "unknown option、解釈できない位置引数、位置引数が2つ以上、重複オプションは unsupported argument",
         ):
             self.assertIn(snippet, text)
         self.assertNotIn("Should Fix body summary の対応関係、Nit の payload 混入", text)

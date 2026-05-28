@@ -20,7 +20,7 @@ def section(text: str, start: str, end: str) -> str:
 class Issue77DocsTest(unittest.TestCase):
     def test_send_skill_declares_auto_submit_and_severity_flags(self) -> None:
         text = SEND_SKILL.read_text(encoding="utf-8")
-        self.assertIn('argument-hint: "[--auto-submit] [--include-should-fix] [--include-nit]"', text)
+        self.assertIn('argument-hint: "[<PR URL|PR number>] [--auto-submit] [--include-should-fix] [--include-nit]"', text)
         args = section(text, "### Step 0: 引数解析", "### Step 1:")
         for snippet in (
             "$ARGUMENTS",
@@ -82,7 +82,7 @@ class Issue77DocsTest(unittest.TestCase):
             "Step 4.5 の verifier pipeline はスキップしない",
             "投稿直前に現在の PR head",
             "review-response.json",
-            "unknown option や重複オプションは unsupported argument",
+            "unknown option、解釈できない位置引数、位置引数が2つ以上、重複オプションは unsupported argument",
         ):
             self.assertIn(snippet, text)
 

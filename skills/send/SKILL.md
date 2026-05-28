@@ -2,7 +2,7 @@
 user-invocable: true
 name: pr-codex-send
 description: "/pr-codex:review で生成された統合レビュー(review.md)を GitHub PR にレビューコメントとして投稿し、処理済みディレクトリを sent/ に移動する"
-argument-hint: "[--auto-submit] [--include-should-fix] [--include-nit]"
+argument-hint: "[<PR URL|PR number>] [--auto-submit] [--include-should-fix] [--include-nit]"
 allowed-tools: ["Bash", "Read", "Write", "Glob", "Grep"]
 ---
 
@@ -21,7 +21,7 @@ allowed-tools: ["Bash", "Read", "Write", "Glob", "Grep"]
 ## 使い方
 
 ```
-# Default: 承認ストップありで、Must Fixのみを inline comment する
+# Default（自動抽出）: 承認ストップありで、Must Fixのみを inline comment する
 /pr-codex:send
 
 # 承認ストップ無しで、Must Fixのみを inline comment する
@@ -32,11 +32,20 @@ allowed-tools: ["Bash", "Read", "Write", "Glob", "Grep"]
 
 # 承認ストップ無しで、Must FixとShould FixとNitを inline comment する
 /pr-codex:send --auto-submit --include-should-fix --include-nit
+
+# 直前にレビューした特定 PR を、Must Fix のみ承認なしで投稿する
+/pr-codex:send https://github.com/org/repo/pull/123 --auto-submit
+
+# 特定 PR の Must Fix + Should Fix を承認なしで投稿する
+/pr-codex:send https://github.com/org/repo/pull/123 --auto-submit --include-should-fix
+
+# PR 番号のみ指定（~/claude-loop-pr-codex に同番号の dir が1件だけのとき有効）
+/pr-codex:send 123 --auto-submit
 ```
 
-引数なしは対話実行を前提とし、Step 5 で投稿 payload のサマリを提示してユーザーの明示的な承認を得てから Step 6 で投稿する。`--auto-submit` は Step 5 の最終投稿承認だけをスキップし、すべての validator / Step 4.5 preflight / Step 5.5 投稿直前 safety gate が成功した場合のみ Step 6 へ進む。`--include-should-fix` は投稿可能な Should Fix を inline comment に含め、`--include-nit` は投稿可能な Nit も inline comment に含める（`--include-nit` は `--include-should-fix` との併用必須）。diff 範囲外のものは body の `## 行コメント不可 (diff 範囲外)` へ退避する。unknown option、重複オプション、または無効な組み合わせは unsupported argument として中断する。
+引数なしは従来どおり `~/claude-loop-pr-codex` 直下から名前昇順の先頭 completed レビューを自動抽出し、対話実行を前提として Step 5 で投稿 payload のサマリを提示してユーザーの明示的な承認を得てから Step 6 で投稿する。PR URL または PR 番号を位置引数で 1 つ指定した場合は、その completed レビューだけを対象にする。`--auto-submit` は Step 5 の最終投稿承認だけをスキップし、すべての validator / Step 4.5 preflight / Step 5.5 投稿直前 safety gate が成功した場合のみ Step 6 へ進む。`--include-should-fix` は投稿可能な Should Fix を inline comment に含め、`--include-nit` は投稿可能な Nit も inline comment に含める（`--include-nit` は `--include-should-fix` との併用必須）。diff 範囲外のものは body の `## 行コメント不可 (diff 範囲外)` へ退避する。unknown option、解釈できない位置引数、位置引数が2つ以上、重複オプション、または無効な組み合わせは unsupported argument として中断する。
 
-1 回の実行で対象は 1 件のみ処理する。未投稿の completed レビューが複数ある場合は、`ls` の出力順（名前昇順）で最初の 1 件のみを処理し、残りは次回以降の `/pr-codex:send` 実行に委ねる。
+1 回の実行で対象は 1 件のみ処理する。位置引数なしの場合、未投稿の completed レビューが複数あっても `ls` の出力順（名前昇順）で最初の 1 件のみを処理し、残りは次回以降の `/pr-codex:send` 実行に委ねる。位置引数ありの場合、auto 選定は行わず、指定 PR に対応する review directory だけを検証する。
 
 ## フロー
 
@@ -44,21 +53,24 @@ allowed-tools: ["Bash", "Read", "Write", "Glob", "Grep"]
 
 ### Step 0: 引数解析
 
-Skill 起動直後に `$ARGUMENTS` を shell 風に空白分割して解釈し、`$send_mode = interactive | auto_submit`、`$include_should_fix = true | false`、`$include_nit = true | false` に正規化する。フラグは順不同で指定できる。
+Skill 起動直後に `$ARGUMENTS` を shell 風に空白分割して解釈し、`$send_mode = interactive | auto_submit`、`$include_should_fix = true | false`、`$include_nit = true | false`、`$target_mode = auto | direct` に正規化する。フラグと位置引数は順不同で指定できる。
 
-- `$ARGUMENTS` が空文字列または空白のみ: `$send_mode=interactive` / `$include_should_fix=false` / `$include_nit=false`
+- `$ARGUMENTS` が空文字列または空白のみ: `$send_mode=interactive` / `$include_should_fix=false` / `$include_nit=false` / `$target_mode=auto`
 - `--auto-submit` が含まれる: `$send_mode=auto_submit`。含まれない場合は `$send_mode=interactive`
 - `--include-should-fix` が含まれる: `$include_should_fix=true` とし、投稿可能な Should Fix 候補を inline comment 対象にする
 - `--include-nit` が含まれる: `$include_nit=true` とし、投稿可能な Nit 候補を inline comment 対象にする。ただし `--include-nit` は `--include-should-fix` なしでは unsupported argument として中断する（--include-nit は --include-should-fix なしでは unsupported argument）
-- 未知オプション、位置引数、重複オプション、または `--include-nit` 単独のような無効な組み合わせ: `unsupported argument` として中断し、Step 1 以降の payload 生成や GitHub write は行わない
+- 位置引数なし: `$target_mode=auto`。従来どおり Step 1 で `ls` 名前昇順の先頭 completed レビューを選定する
+- `https://github.com/<org>/<repo>/pull/<number>` 形式の位置引数 1 つ: `$target_mode=direct` とし、URL から `$org` / `$repository` / `$pr_number` を取り出す。`$target_dir_name = "<org>-<repository>-<pr_number>"` として Step 1 の direct 分岐へ進む
+- `<number>`（数字のみ）の位置引数 1 つ: `$target_mode=direct` とし、`$target_pr_number=<number>` を保持する。Step 1 で `~/claude-loop-pr-codex` 直下（`sent` 除く）の末尾セグメントが `-<number>` に一致する directory を解決する
+- 未知オプション、解釈できない位置引数、位置引数が2つ以上、重複オプション、または `--include-nit` 単独のような無効な組み合わせ: `unsupported argument` として中断し、Step 1 以降の payload 生成や GitHub write は行わない
 
 `--auto-submit` は Step 5 の最終投稿承認だけを省略するモードであり、severity inclusion (`--include-should-fix` / `--include-nit`)、canonical artifact validation、SARIF validation、Step 4.5 verifier pipeline、head SHA 再確認、二重投稿防止 gate は省略しない。
 
 ### Step 1: 対象ディレクトリの選定
 
-- いつ使うか: Skill 起動直後に必ず実行する
-- 判定条件: 標準出力に `<org>-<repository>-<pr_number>` 形式のディレクトリ名が名前昇順で列挙される（`sent` は除外される）
-- 次アクション: 出力を上から順に走査し、各行を `$candidate` として後続の判定テンプレートへ渡す
+#### common: plugin root / validator path の早期解決
+
+direct mode / auto mode のどちらでも Step 2.5 と Step 3 の validator path 解決に使うため、対象 directory の選定前に plugin root を解決する。
 
 ```bash
 plugin_root="${CLAUDE_PLUGIN_ROOT:-$(python3 - <<'PY'
@@ -81,6 +93,81 @@ PY
 )}"
 test -d "$plugin_root/tasks" && test -d "$plugin_root/schemas"
 ```
+
+#### direct mode（PR URL / PR 番号指定）
+
+`$target_mode=direct` の場合、`ls` 走査による自動選定はスキップし、指定 PR に対応する directory だけを対象にする。`$target_dir_name` が URL 指定で既に確定している場合は存在確認へ進む。PR 番号のみ指定の場合は、`~/claude-loop-pr-codex` 直下（`sent` 除く）の directory 名の末尾セグメントが `-<number>` に一致するものを解決する。repo 名にハイフンを含んでも、PR 番号は directory 名の最後の `-` 区切りセグメントとして扱う。
+
+- いつ使うか: `$target_mode=direct` かつ PR 番号のみ指定の場合
+- 判定条件: 標準出力に末尾 `-<number>` に一致する active directory が列挙される
+- 次アクション:
+  - ちょうど 1 件なら、その行を `$target_dir_name` として保持し存在確認へ進む
+  - 複数件なら曖昧として中断し、PR URL 指定を案内する
+  - 0 件なら、後続の sent 済み / 未レビュー判定へ進む
+
+```bash
+ls -1 ~/claude-loop-pr-codex | grep -v '^sent$' | grep -v 'clear.sh' | awk -F- -v pr="$target_pr_number" 'NF >= 2 && $NF == pr {print}'
+```
+
+- いつ使うか: `$target_mode=direct` で `$target_dir_name` が確定した直後
+- 判定条件: 対象 directory が存在する
+- 次アクション: 存在すれば `status.json` 確認へ進む。存在しなければ sent 済み / 未レビュー判定へ進む
+
+```bash
+test -d ~/claude-loop-pr-codex/$target_dir_name
+```
+
+- いつ使うか: URL 指定または PR 番号指定で active directory が存在しない場合
+- 判定条件: URL 指定なら `sent/$target_dir_name-*` が存在する。PR 番号指定なら `sent/*-<number>-*` が存在する
+- 次アクション: 一致があれば「指定 PR は既に send 済み（`sent/` にある）」と報告して中断する。なければ「指定 PR の completed レビューが無い。先に `/pr-codex:review <PR URL>` を実行」と案内して中断する
+
+```bash
+test -d ~/claude-loop-pr-codex/sent && ls -1 ~/claude-loop-pr-codex/sent | awk -v prefix="$target_dir_name-" 'index($0, prefix) == 1 {print}'
+```
+
+```bash
+test -d ~/claude-loop-pr-codex/sent && ls -1 ~/claude-loop-pr-codex/sent | awk -F- -v pr="$target_pr_number" 'NF >= 3 && $(NF - 1) == pr {print}'
+```
+
+- いつ使うか: `$target_mode=direct` で対象 directory が存在する場合
+- 判定条件: `status.json` が存在する
+- 次アクション: 存在すれば state 判定へ。存在しなければ「指定 PR の completed レビューが無い。先に `/pr-codex:review <PR URL>` を実行」と案内して中断する
+
+```bash
+test -f ~/claude-loop-pr-codex/$target_dir_name/status.json
+```
+
+- いつ使うか: direct mode の `status.json` が存在する場合
+- 判定条件: 出力が `completed`
+- 次アクション: `completed` なら `review.md` 存在確認へ。それ以外 (`running` / `failed`) は理由を添えて中断し、auto 選定や `review.md` parser fallback には切り替えない
+
+```bash
+jq -r '.state' ~/claude-loop-pr-codex/$target_dir_name/status.json
+```
+
+- いつ使うか: direct mode で `state == "completed"` の場合
+- 判定条件: `review.md` が存在する
+- 次アクション: 存在すれば `findings.verified.json` 存在確認へ。存在しなければ必須成果物欠落として中断する
+
+```bash
+test -f ~/claude-loop-pr-codex/$target_dir_name/review.md
+```
+
+- いつ使うか: direct mode で `review.md` が存在する場合
+- 判定条件: `findings.verified.json` が存在する
+- 次アクション: 存在すれば `$dir_name = $target_dir_name` として Step 2 へ進む。存在しなければ F13 の必須入力欠落として中断し、Markdown fallback へは切り替えない
+
+```bash
+test -f ~/claude-loop-pr-codex/$target_dir_name/findings.verified.json
+```
+
+#### auto mode（位置引数なし）
+
+`$target_mode=auto` の場合は、従来どおり `~/claude-loop-pr-codex` 直下を `ls` 名前昇順で走査し、最初の completed レビュー 1 件だけを対象にする。
+
+- いつ使うか: `$target_mode=auto` の場合のみ実行する
+- 判定条件: 標準出力に `<org>-<repository>-<pr_number>` 形式のディレクトリ名が名前昇順で列挙される（`sent` は除外される）
+- 次アクション: 出力を上から順に走査し、各行を `$candidate` として後続の判定テンプレートへ渡す
 
 ```bash
 ls -1 ~/claude-loop-pr-codex | grep -v '^sent$' | grep -v 'clear.sh'
@@ -811,7 +898,11 @@ test ! -d ~/claude-loop-pr-codex/$dir_name && test -d ~/claude-loop-pr-codex/sen
 - Step 3.5 で `pr.diff.ranges.txt` が空 → インラインコメント候補はすべて body 末尾の `## 行コメント不可 (diff 範囲外)` に移動し、`comments` 配列には含めない
 - Step 4.5 の Codex verifier が `RESULT_JSON` を出力しない、最後の `RESULT_JSON` 見出しが dangling、`RESULT_JSON` 後に追加 JSON fence / 余分な本文を出す、final `VERDICT:` line と JSON verdict が一致しない、または `tasks/validate_preflight_result.py` が `preflight-result.json` validation に失敗 → 構造化 preflight 失敗として最大 3 回まで再試行し、解消しなければ投稿を中止
 - Step 4.5 の `preflight-result.json.verdict == "FAIL"` かつ `requires_human_count > 0` → review 側の再生成が必要として即中断し、`preflight-result.json` / `preflight-codex.md` のパスと違反一覧を提示
-- Step 0 で未知オプション、位置引数、重複オプション、または `--include-nit` 単独 → `unsupported argument` として中断し、payload 生成や GitHub write は行わない
+- Step 0 で未知オプション、解釈できない位置引数、位置引数が2つ以上、重複オプション、または `--include-nit` 単独 → `unsupported argument` として中断し、payload 生成や GitHub write は行わない
+- Step 1 direct mode で PR 番号のみ指定が複数 directory に一致 → 曖昧として中断し、PR URL 指定を案内する
+- Step 1 direct mode で指定 PR の active directory がなく `sent/` に履歴がある → 「指定 PR は既に send 済み（`sent/` にある）」と報告して中断する
+- Step 1 direct mode で指定 PR の active directory も sent 履歴もない → 「指定 PR の completed レビューが無い。先に `/pr-codex:review <PR URL>` を実行」と案内して中断する
+- Step 1 direct mode で `status.json.state != completed`、`review.md` 欠落、または `findings.verified.json` 欠落 → 理由を添えて中断し、auto 選定や Markdown fallback へは切り替えない
 - Step 5.5 で `review-response.json.html_url` が既に存在 → 二重投稿防止のため中断し、`gh api` は実行しない
 - Step 5.5 で現在の PR head SHA が `metadata.json.head_sha` と一致しない → レビュー生成後に追加 commit が入ったため中断し、古い review を自動投稿しない
 - `gh api` 422/403/404 → Step 8 の失敗報告で分岐し、`sent/` 移動は行わない
@@ -831,7 +922,7 @@ test ! -d ~/claude-loop-pr-codex/$dir_name && test -d ~/claude-loop-pr-codex/sen
 6. `$()` / `for` / `while` / `xargs` / ヒアドキュメントは使わない
 7. `mv` は `sent/` への移動以外では使わない
 8. `gh` の write 系操作は `gh api --method POST .../reviews` のみとし、`gh pr review` / `gh pr comment` / `gh pr merge` などは使わない
-9. 1 回の実行で処理する対象ディレクトリは 1 件のみとする
+9. 1 回の実行で処理する対象ディレクトリは 1 件のみとする。位置引数なしでは名前昇順の auto 選定を使い、PR URL / PR 番号指定時は direct mode として指定 PR の directory だけを検証する
 10. 投稿前の Step 5 承認プロンプトは interactive mode では必須。`--auto-submit` では最終投稿承認だけをスキップできるが、Step 5.5 の二重投稿防止と head SHA 再確認は必須。Should Fix / Nit は default では含めず、`--include-should-fix` / `--include-nit` 指定時だけ全件を inline comment に含める。`--include-nit` は `--include-should-fix` との併用必須とする
 11. Step 3 の `python3 "$plugin_root/tasks/validate_findings.py" ...` を **必ず**実行する。`findings.verified.json` 欠落または validator 失敗時に payload 生成や Markdown fallback へ進んではならない
 12. Step 4.5 の verifier pipeline は **必須**。スキップしてはならない。`preflight-result.json.verdict == "PASS"` と `preflight-codex.md` の `VERDICT: PASS` を確認するまで Step 5 に進まない。schema 検証観点では `$plugin_root/schemas/findings.v1.json`、`$plugin_root/schemas/sarif-2.1.0.json`、`$plugin_root/schemas/preflight-result.v1.json` の絶対パスを prompt / 抽出コマンドに埋め込み、`--cd` 配下の相対 `schemas/` には依存しない
