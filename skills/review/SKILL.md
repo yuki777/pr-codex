@@ -1346,7 +1346,7 @@ Must Fix $count_must 件のうち inline 投稿可能なのは $count_must_inlin
 # Must Fix 全件（0 件）を承認なしで投稿する
 /pr-codex:send $pr_url --auto-submit
 
-Must Fix 0 件のため inline は投稿されず、総評＋良い点の COMMENT レビューになります。
+Must Fix 0 件のため inline は投稿されず、総評＋良い点＋確認した範囲の APPROVE レビューになります。CI が failure / pending の場合は send 側で COMMENT に抑止されます。
 
 # Must Fix 全件（0 件）と Should Fix 全件（$count_should 件）を承認なしで投稿する
 /pr-codex:send $pr_url --auto-submit --include-should-fix
@@ -1357,7 +1357,7 @@ Must Fix 0 件のため inline は投稿されず、総評＋良い点の COMMEN
 ```markdown
 次のアクション（GitHub への投稿）:
 
-投稿対象の指摘なし。要約 COMMENT を投稿する場合のみ `/pr-codex:send $pr_url --auto-submit`
+投稿対象の指摘なし。承認レビューを投稿する場合のみ `/pr-codex:send $pr_url --auto-submit`（CI が failure / pending の場合は send 側で COMMENT に抑止）
 ```
 
 ## エラーハンドリング

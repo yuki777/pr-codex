@@ -75,6 +75,7 @@ RULE_CLASSIFICATION: dict[str, tuple[str, bool, bool]] = {
     "event_mismatch": ("payload_consistency", True, False),
     "summary_body_mismatch": ("payload_consistency", True, False),
     "good_points_body_mismatch": ("payload_consistency", True, False),
+    "confirmation_scope_body_mismatch": ("payload_consistency", True, False),
     "must_fix_count_mismatch_findings_vs_md": ("payload_consistency", False, True),
 }
 
