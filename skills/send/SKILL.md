@@ -13,7 +13,7 @@ allowed-tools: ["Bash", "Read", "Write", "Glob", "Grep"]
 ## 前提
 
 - `/pr-codex:review` が先に実行されており、`~/claude-loop-pr-codex/<org>-<repository>-<pr_number>/` 配下に `status.json` (`state:completed`) / `metadata.json` / `findings.verified.json` / `review.md` が揃っている
-- `ci-status.json` / `ci-summary.md` が存在する場合は、投稿前判断の read-only CI context として参照する。`failure` / `pending` を理由に GitHub workflow の rerun / cancel / write は行わず、必要ならユーザーへ CI 状態を説明して投稿可否を確認する
+- `ci-status.json` / `ci-summary.md` が存在する場合は、投稿前判断の read-only CI context として参照する。`failure` / `pending` を理由に GitHub workflow の rerun / cancel / write は行わず、Must Fix 0 件の自動 `APPROVE` は `COMMENT` に抑止してユーザーへ CI 状態を説明する
 - `findings.verified.json` を **必須の一次入力** とする。M1 の F13 以降、`review.md` parser への Markdown fallback は使わない
 - GitHub CLI (`gh`) がログイン済みで、対象 PR にレビュー投稿権限がある (`gh auth status` で確認可能)
 - `jq` が利用可能
@@ -450,8 +450,8 @@ Step 0 で正規化した `$include_should_fix` / `$include_nit` に従い、inl
 - `commit_id`: `$head_sha`（レビュー時点の head に明示的に紐付ける）
 - `event`:
   - 範囲検証後の `$must_fix` が 1 件以上、または `$out_of_range_comments` に `Must Fix` が 1 件以上あれば `"REQUEST_CHANGES"`
-  - 0 件なら `"COMMENT"`
-  - `"APPROVE"` は自動では発行しない
+  - Must Fix が 0 件、かつ `ci-status.json.state` が `failure` / `pending` ではない場合は `"APPROVE"`。`ci-status.json` が存在しない、または `success` / `skipped` の場合もこの分岐に含める
+  - Must Fix が 0 件、かつ `ci-status.json.state` が `failure` / `pending` の場合は `"COMMENT"` に抑止する
 - `body`:
   - `$good_points` が非空の場合:
     ```
@@ -465,6 +465,15 @@ Step 0 で正規化した `$include_should_fix` / `$include_nit` に従い、inl
     ```
     <$summary>
     ```
+  - `event == "APPROVE"` の場合は、承認根拠として body 末尾に以下を追加する。`$reviewed_files` は `metadata.json.files[]` から、`$reviewed_scope` は `review.md` / `run-plan.json` / `ci-summary.md` から確認済みの観点だけを抽出し、推測した観点を混ぜない:
+    ```
+    ## 確認した範囲
+
+    - 変更ファイル: <$reviewed_files>
+    - 検証観点: <$reviewed_scope>
+    - CI 状態: <$ci_status_state または "未取得">
+    ```
+  - `event == "COMMENT"` が CI 抑止によるものの場合は、body 末尾に `## CI 状態` を追加し、`ci-status.json.state` と `ci-summary.md` の要約を短く記載する
   - Should Fix / Nit は通常 body section には追加しない。diff 範囲外の Must Fix / Should Fix / Nit がある場合だけ、`$out_of_range_comments` に退避して body 末尾の `## 行コメント不可 (diff 範囲外)` に含める
   - `$out_of_range_comments` が非空の場合は body 末尾に以下を追加する:
     ```
@@ -483,9 +492,9 @@ Step 0 で正規化した `$include_should_fix` / `$include_nit` に従い、inl
   - `body` (Step 3 の body フォーマット)
   - `start_line` / `start_side` は範囲指定の場合のみ含める
 
-範囲検証後の `$must_fix` / `$inline_should_fix` / `$inline_nit` が空だった場合でも、`event: "COMMENT"` + body (総評 + 良い点 + 必要なら行コメント不可セクション) のみで投稿する。ただし `$out_of_range_comments` に `Must Fix` が含まれる場合の `event` は上記ルールどおり `"REQUEST_CHANGES"` とする。
+範囲検証後の `$must_fix` / `$inline_should_fix` / `$inline_nit` が空だった場合、Must Fix 0 件の結論として `event: "APPROVE"` + body (総評 + 良い点 + 確認した範囲) で投稿する。ただし `$out_of_range_comments` に `Must Fix` が含まれる場合の `event` は上記ルールどおり `"REQUEST_CHANGES"` とし、`ci-status.json.state` が `failure` / `pending` の場合は `event: "COMMENT"` に抑止して CI 状態を body と Step 5 に表示する。
 
-body のセクション順は必ず `総評` → `## 良い点`（存在する場合）→ `## 行コメント不可 (diff 範囲外)`（存在する場合）とする。diff 範囲内の Should Fix / Nit は body section ではなく `comments[]` の inline comment とする。diff 範囲外の Must Fix / Should Fix / Nit は body の `## 行コメント不可 (diff 範囲外)` へ退避する。
+body のセクション順は必ず `総評` → `## 良い点`（存在する場合）→ `## 確認した範囲`（`APPROVE` の場合）→ `## CI 状態`（CI 抑止 `COMMENT` の場合）→ `## 行コメント不可 (diff 範囲外)`（存在する場合）とする。diff 範囲内の Should Fix / Nit は body section ではなく `comments[]` の inline comment とする。diff 範囲外の Must Fix / Should Fix / Nit は body の `## 行コメント不可 (diff 範囲外)` へ退避する。
 
 payload は Write ツールで `~/claude-loop-pr-codex/$dir_name/review-payload.json` に書き出す。`file_path` には `~` を実値に展開した絶対パスを渡し、`$dir_name` も実値に置換する。整形された JSON（インデント 2）で書き出して後から人間が読めるようにする。
 
@@ -505,7 +514,7 @@ Codex は以下の 4 stage を順に判定する。各 stage は前段の結論�
 | 1. `schema_validation` | `findings.verified.json` の `schema_version == "findings.v1"`、同梱 validator validation、top-level `pr.*` と `metadata.json` の一致、全 finding の `id == fingerprint` と正準 fingerprint 再計算一致、`findings.sarif` の schema validation、`canonical_must_fix == markdown_must_fix == sarif_must_fix`、および payload 側は cluster representative 集約後の Must Fix posting count と一致 |
 | 2. `range_validation` | `payload.comments[]` の `path` が `metadata.json.files[]` に含まれること、`line` / `start_line` が `pr.diff.ranges.txt` の同一 hunk 範囲内にあること |
 | 3. `semantic_preflight` | `payload.comments[]` が `severity == "must_fix"` または明示オプションで許可された `should_fix` / `nit` finding だけに対応すること、未指定の Should Fix / Nit / Note の inline 混入がないこと、指定されていない Should Fix / Nit が payload に混入していないこと、diff 範囲外または LEFT-side 非対応として body 退避された opted-in finding を valid exclusion として扱うこと、4 軸 + `evidence_level` gate、反証 prompt |
-| 4. `payload_consistency` | `event` 判定、`body` 冒頭の `## 総評` 一致、`## 良い点` 一致、Must Fix count 整合性（cluster なし: `findings.verified.json` ↔ `review.md` ↔ `review-payload.json` ↔ `findings.sarif` が完全一致。cluster あり: canonical / review.md / SARIF は full count、`review-payload.json` と out-of-range Must Fix payload は representative expected payload count と一致）、Should Fix / Nit inline comment の 1:1 対応・全件 inclusion・範囲外退避 |
+| 4. `payload_consistency` | `event` 判定、`body` 冒頭の `## 総評` 一致、`## 良い点` 一致、`APPROVE` body の `## 確認した範囲` 有無、Must Fix count 整合性（cluster なし: `findings.verified.json` ↔ `review.md` ↔ `review-payload.json` ↔ `findings.sarif` が完全一致。cluster あり: canonical / review.md / SARIF は full count、`review-payload.json` と out-of-range Must Fix payload は representative expected payload count と一致）、Should Fix / Nit inline comment の 1:1 対応・全件 inclusion・範囲外退避 |
 
 semantic preflight の反証 prompt は Must Fix finding のみに適用する。Codex は各 Must Fix finding について「この指摘が誤りである可能性」を 1 つだけ、1〜2 文で探索する。`pr.diff` / `pr.diff.ranges.txt` / `metadata.json` / 当該 finding 抜粋だけを根拠にし、反証を挙げられない場合のみ採用する。反証を挙げられた場合は `counterargument_succeeded` violation として `requires_review_regeneration=true` で報告する（反証成功 = 不採用 / FAIL）。
 
@@ -620,10 +629,11 @@ Codex は `preflight-codex.md` の末尾付近に `### RESULT_JSON` 見出しと
 
 ## STAGE 4: payload_consistency
 以下を確認し、STAGE 4: PASS または STAGE 4: FAIL を出力してください。
-1. payload.event が 'Must Fix が1件以上（body 末尾へ退避した範囲外 Must Fix も含む）→ REQUEST_CHANGES / 0件 → COMMENT' のルールに従うこと
+1. payload.event が 'Must Fix が1件以上（body 末尾へ退避した範囲外 Must Fix も含む）→ REQUEST_CHANGES / Must Fix 0件かつ ci-status.json.state が failure または pending → COMMENT / Must Fix 0件かつ ci-status.json.state が success・skipped・未取得 → APPROVE' のルールに従うこと
 2. payload.body の冒頭が review.md の '## 総評' セクション本文と一致すること（先頭・末尾の空白を除く）
 3. payload.body 中の '## 良い点' セクションがある場合、review.md の '## 良い点' 本文と一致すること
-4. findings.verified.json にある Must Fix 件数、review.md の Must Fix 見出し件数、payload.comments[] と body 末尾へ退避した Must Fix の合計件数、findings.sarif の `level=error` result 件数がすべて整合すること
+4. payload.event が APPROVE の場合、payload.body に '## 確認した範囲' があり、metadata.json.files[] 由来の変更ファイルと review.md / run-plan.json / ci-summary.md 由来の検証観点だけを含むこと
+5. findings.verified.json にある Must Fix 件数、review.md の Must Fix 見出し件数、payload.comments[] と body 末尾へ退避した Must Fix の合計件数、findings.sarif の `level=error` result 件数がすべて整合すること
 
 ## violation 分類表
 - schema_version_mismatch: stage=schema_validation, auto_fixable=false, requires_review_regeneration=true
@@ -643,6 +653,7 @@ Codex は `preflight-codex.md` の末尾付近に `### RESULT_JSON` 見出しと
 - event_mismatch: stage=payload_consistency, auto_fixable=true, requires_review_regeneration=false
 - summary_body_mismatch: stage=payload_consistency, auto_fixable=true, requires_review_regeneration=false
 - good_points_body_mismatch: stage=payload_consistency, auto_fixable=true, requires_review_regeneration=false
+- confirmation_scope_body_mismatch: stage=payload_consistency, auto_fixable=true, requires_review_regeneration=false
 - must_fix_count_mismatch_findings_vs_md: stage=payload_consistency, auto_fixable=false, requires_review_regeneration=true
 
 ## 出力フォーマット
@@ -720,7 +731,7 @@ python3 $preflight_validator_path --schema $preflight_schema_path --from-markdow
    - `path_not_in_files` / `line_out_of_hunk` / `multi_hunk_span`: 該当 comment を `comments[]` から除外し、Must Fix は body 末尾の `## 行コメント不可 (diff 範囲外)` へ退避する
    - `severity_misclassification` / `non_must_fix_inline_inclusion`: 該当 comment を `comments[]` から除外する
    - `event_mismatch`: Step 4 の event ルールで再計算する
-   - `summary_body_mismatch` / `good_points_body_mismatch`: `review.md` の `## 総評` / `## 良い点` を再 parse し body を再生成する
+   - `summary_body_mismatch` / `good_points_body_mismatch` / `confirmation_scope_body_mismatch`: `review.md` の `## 総評` / `## 良い点`、および `metadata.json.files[]` / `run-plan.json` / `ci-summary.md` 由来の確認範囲を再 parse し body を再生成する
 3. 3 回連続 FAIL、または auto-fix 後も FAIL が解消しない場合は自動投稿を中止する
 
 #### 3 回連続 FAIL 時の処理
@@ -737,7 +748,8 @@ Step 3.75 の severity inclusion option 適用と Step 4.5 の Codex セルフ�
 
 ```
 対象 PR: <$pr_url> (<$title>)
-event: <REQUEST_CHANGES | COMMENT>
+event: <REQUEST_CHANGES | APPROVE | COMMENT>
+CI gate: <success|failure|pending|skipped|未取得>（failure/pending の場合は APPROVE 抑止）
 findings source: ~/claude-loop-pr-codex/<$dir_name>/findings.verified.json
 review file: ~/claude-loop-pr-codex/<$dir_name>/review.md
 SARIF artifact: ~/claude-loop-pr-codex/<$dir_name>/findings.sarif (local-only, Code Scanning upload なし)
@@ -893,7 +905,7 @@ test ! -d ~/claude-loop-pr-codex/$dir_name && test -d ~/claude-loop-pr-codex/sen
 - `findings.sarif` が存在しない、または `tasks/validate_findings_sarif.py --schema $sarif_schema_path --data findings.sarif --findings findings.verified.json --ranges pr.diff.ranges.txt --markdown review.md --payload review-payload.json` に失敗 → schema_validation FAIL として投稿を中断する。`findings.sarif` は local-only artifact であり、M2 では upload しない
 - `findings.verified.json` の Must Fix に `location.side != RIGHT` が含まれる → ユーザーに通知して処理中断（M1 では old-side 投稿を扱わない）
 - `findings.verified.json` の Must Fix に `posting.post_policy != inline` または `explanation_postable != true` が含まれる → ユーザーに通知して処理中断（M1 では安全に自動投稿しない）
-- `review.md` に Must Fix が一件も無い → Should Fix / Nit の明示指定があれば inline comment として投稿し、すべて空なら `event: COMMENT` + body (総評 + 良い点) のみで投稿する
+- `review.md` に Must Fix が一件も無い → Should Fix / Nit の明示指定があれば inline comment として投稿し、Must Fix 0 件の結論として `event: APPROVE` + body (総評 + 良い点 + 確認した範囲) で投稿する。ただし `ci-status.json.state` が `failure` / `pending` の場合は `event: COMMENT` に抑止し、CI 状態を body と Step 5 に表示する
 - `review.md` の `## 総評` セクションが空 or 見つからない → ユーザーに通知して処理中断。`sent/` 移動は行わない
 - Step 3.5 で `pr.diff.ranges.txt` が空 → インラインコメント候補はすべて body 末尾の `## 行コメント不可 (diff 範囲外)` に移動し、`comments` 配列には含めない
 - Step 4.5 の Codex verifier が `RESULT_JSON` を出力しない、最後の `RESULT_JSON` 見出しが dangling、`RESULT_JSON` 後に追加 JSON fence / 余分な本文を出す、final `VERDICT:` line と JSON verdict が一致しない、または `tasks/validate_preflight_result.py` が `preflight-result.json` validation に失敗 → 構造化 preflight 失敗として最大 3 回まで再試行し、解消しなければ投稿を中止
