@@ -144,7 +144,7 @@ Stage ごとの責務、input/output artifact、halting 条件は [`skills/revie
 
 ## 投稿後フィードバックの学習
 
-`/pr-codex:learn` は投稿後に GitHub から返ってきた明示 signal だけを、次回レビュー改善用のローカル artifact として保存する。生成物は `learn-result.json` と `feedback-artifacts/*.json` で、secret/token/ローカルパスは scrub される。
+`/pr-codex:learn` は投稿後に GitHub から返ってきた明示 signal だけを、次回レビュー改善用のローカル artifact として保存する。生成物は `learn-result.json` と `feedback-artifacts/*.json` で、secret/token/ローカルパスは scrub される。F10 以降は、その public-safe artifact から repo-local な `episodes.jsonl` を任意生成し、次回レビュー時に限定検索できる。
 
 学習対象:
 
@@ -183,6 +183,41 @@ print(marker.parents[1])
 PY
 )}"
 python3 "$plugin_root/tasks/learn_feedback.py" --input feedback-snapshot.json --output-dir ~/claude-loop-pr-codex/learn/yuki777-pr-codex-60-103766c
+```
+
+### Episode memory (F10)
+
+`tasks/episode_memory.py` は `feedback-artifacts/*.json` から `episode.v1` JSONL を作る repo-local helper である。episode は **public-safe な短い summary のみ**を持ち、raw log / raw comment payload / secret / token / ローカル絶対パスは保存しない。
+
+保存対象:
+
+- `/pr-codex:learn` が作った `addressed` / `superseded` / `false_positive` artifact
+- PR type (`pr_classification.primary_type` または `all_types`)、対象 path、finding class が明示できるもの
+- 次回レビューで「参考にして再検証する」価値がある設計判断・false positive・対応済み指摘
+
+禁止対象:
+
+- raw GitHub log、CI raw log、credential file contents、API key / token / cookie / private key
+- `/Users/...`、`/home/...`、`/tmp/...` などのローカル絶対パス
+- author 無反応、merge された事実だけ、pr-codex 以外の review thread
+- unrelated PR へ広く適用できない文脈を、PR type / path / finding class なしで保存すること
+
+```bash
+python3 $CLAUDE_PLUGIN_ROOT/tasks/episode_memory.py write \
+  --feedback-artifact ~/claude-loop-pr-codex/learn/yuki777-pr-codex-60-103766c/feedback-artifacts/false_positive-PRRT_1.json \
+  --store ~/claude-loop-pr-codex/episodes/yuki777-pr-codex/episodes.jsonl \
+  --pr-type python-validator-runtime \
+  --finding-class secret-handling
+```
+
+次回レビューでは、PR type / path / finding class の **3 条件すべて**で限定検索する。stale episode は `use_policy: context_only_reverify` として返り、無条件採用してはいけない。fresh episode も `use_policy: reverify_current_diff` として扱い、現在の diff で再確認する。
+
+```bash
+python3 $CLAUDE_PLUGIN_ROOT/tasks/episode_memory.py retrieve \
+  --store ~/claude-loop-pr-codex/episodes/yuki777-pr-codex/episodes.jsonl \
+  --pr-type python-validator-runtime \
+  --path tasks/validate_run_plan.py \
+  --finding-class secret-handling
 ```
 
 `/pr-codex:send` の挙動:
