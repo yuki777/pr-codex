@@ -1286,17 +1286,79 @@ jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" --arg head
 
 ### Step 6: 結果報告
 
-レビュー結果の要約をユーザーに報告する。報告内容:
+レビュー結果の要約をユーザーに報告する。`status.json.state == "completed"` の場合だけ、報告末尾に次アクションとして `/pr-codex:send` のコマンド例を対象 PR URL と件数つきで必ず出力する。failed 終了時は send 案内を出さない。報告内容:
 
 - 対象PR（リンク付き）
 - レビュー結果のサマリ（総評 / 重大な問題 / 改善提案 から要約）
 - 結果ファイルのパス
 - いつ使うか: Step 5 の status 更新後
-- 次アクション: `review.md` を Read ツールで読み、以下の内容をユーザーにテキストで報告して終了する
+- 次アクション: completed の場合は `review.md` / `metadata.json` / `findings.verified.json` を Read ツールで読み、failed の場合は `status.json` と失敗 stage を確認し、以下の内容をユーザーにテキストで報告して終了する
   - 対象PR（`$pr_url` のリンク付き）
   - レビュー結果の要約（総評 + 重大な問題の件数と代表例、改善提案の件数を含める）
   - 結果ファイルのパス（`~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.verified.json`、`~/claude-loop-pr-codex/$org-$repository-$pr_number/review-rounds.json`、`~/claude-loop-pr-codex/$org-$repository-$pr_number/review.md`）
   - 結果ファイルのパス（`~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.candidates.json` / `findings.verified.json` / `review.md`）
+
+#### completed 報告の `/pr-codex:send` 案内
+
+completed 報告では、`metadata.json.pr_url` を `$pr_url` として使い、`findings.verified.json` と `pr.diff.ranges.txt` から以下の件数を算出する。
+
+- `$count_must` = `findings[] | select(.severity == "must_fix")` の件数
+- `$count_must_inline` = `findings[] | select(.severity == "must_fix" and .posting.post_policy == "inline" and .posting.explanation_postable == true and .location.side == "RIGHT")` のうち、`pr.diff.ranges.txt` の同一 path / 同一 hunk 範囲内に `location.start_line` から `location.end_line`（なければ `start_line`）が収まる件数。`$count_must_inline != $count_must` の場合は、send 側の primary guard が中断する非inline Must Fix が含まれるため、auto-submit コマンド例を成功可能な次アクションとして案内してはならない
+- `$count_should` = `findings[] | select(.severity == "should_fix" and .posting.post_policy == "body_summary" and .posting.explanation_postable == true and .location.side == "RIGHT")` のうち、`pr.diff.ranges.txt` の同一 path / 同一 hunk 範囲内に `location.start_line` から `location.end_line`（なければ `start_line`）が収まる件数。単純な Should Fix 総数ではなく、`/pr-codex:send --include-should-fix` で実際に inline 投稿可能な件数を使う。LEFT-side / diff 範囲外 / range 不明の Should Fix は send 側で body 退避または除外されるため、この件数には含めない
+
+completed 報告の末尾に、件数に応じて以下を追記する。
+
+`$count_must_inline != $count_must`:
+
+```markdown
+次のアクション（GitHub への投稿）:
+
+Must Fix $count_must 件のうち inline 投稿可能なのは $count_must_inline 件です。非inline Must Fix があるため `/pr-codex:send $pr_url --auto-submit` は投稿前 guard で中断します。
+`~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.verified.json` を確認し、security / public-safe 方針または posting policy を整理して `/pr-codex:review $pr_url` を再実行してください。
+```
+
+`$count_must_inline == $count_must` かつ `$count_must > 0` かつ `$count_should > 0`:
+
+```markdown
+次のアクション（GitHub への投稿）:
+
+# Must Fix 全件（$count_must 件）を承認なしで投稿する
+/pr-codex:send $pr_url --auto-submit
+
+# Must Fix 全件（$count_must 件）と Should Fix 全件（$count_should 件）を承認なしで投稿する
+/pr-codex:send $pr_url --auto-submit --include-should-fix
+```
+
+`$count_must_inline == $count_must` かつ `$count_must > 0` かつ `$count_should == 0`:
+
+```markdown
+次のアクション（GitHub への投稿）:
+
+# Must Fix 全件（$count_must 件）を承認なしで投稿する
+/pr-codex:send $pr_url --auto-submit
+```
+
+`$count_must_inline == $count_must` かつ `$count_must == 0` かつ `$count_should > 0`:
+
+```markdown
+次のアクション（GitHub への投稿）:
+
+# Must Fix 全件（0 件）を承認なしで投稿する
+/pr-codex:send $pr_url --auto-submit
+
+Must Fix 0 件のため inline は投稿されず、総評＋良い点の COMMENT レビューになります。
+
+# Must Fix 全件（0 件）と Should Fix 全件（$count_should 件）を承認なしで投稿する
+/pr-codex:send $pr_url --auto-submit --include-should-fix
+```
+
+`$count_must_inline == $count_must` かつ `$count_must == 0` かつ `$count_should == 0`:
+
+```markdown
+次のアクション（GitHub への投稿）:
+
+投稿対象の指摘なし。要約 COMMENT を投稿する場合のみ `/pr-codex:send $pr_url --auto-submit`
+```
 
 ## エラーハンドリング
 

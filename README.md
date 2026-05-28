@@ -132,14 +132,19 @@ Stage ごとの責務、input/output artifact、halting 条件は [`skills/revie
 /pr-codex:send --auto-submit
 /pr-codex:send --include-should-fix
 /pr-codex:send --auto-submit --include-should-fix --include-nit
+/pr-codex:send https://github.com/org/repo/pull/123 --auto-submit
+/pr-codex:send https://github.com/org/repo/pull/123 --auto-submit --include-should-fix
+/pr-codex:send 123 --auto-submit
 ```
 
 - `/pr-codex:send`: 従来どおり GitHub Reviews API の payload サマリを表示し、最終承認 prompt でユーザーの明示承認を得てから、Must Fix 全件のみ投稿する
 - `/pr-codex:send --auto-submit`: Step 4.5 の verifier pipeline が PASS した後、最終承認 prompt なしで Must Fix 全件のみ投稿へ進む
+- `/pr-codex:send <PR URL> --auto-submit`: URL に対応する completed レビューだけを対象にし、名前昇順の auto 選定は行わない
+- `/pr-codex:send <PR number> --auto-submit`: `~/claude-loop-pr-codex` に同番号の active directory が 1 件だけある場合に限り対象を解決する。複数一致時は曖昧として中断し、PR URL 指定を案内する
 - `--include-should-fix` は Must Fix + Should Fix を inline comment として投稿する
 - `--include-nit` は `--include-should-fix` と併用し、Must Fix + 投稿可能な Should Fix + 投稿可能な Nit を inline comment として投稿する。diff 範囲外のものは body の `## 行コメント不可 (diff 範囲外)` へ退避する
 - `--auto-submit` でも Step 4.5 の verifier pipeline はスキップしない。canonical artifact validation、Must Fix 件数整合、diff range、`findings.sarif`、`preflight-result.json.verdict == PASS` と `preflight-codex.md` の `VERDICT: PASS` は必須
-- unknown option や重複オプションは unsupported argument として中断する。`--include-nit` 単独も unsupported argument として扱う
+- unknown option、解釈できない位置引数、位置引数が2つ以上、重複オプションは unsupported argument として中断する。`--include-nit` 単独も unsupported argument として扱う
 - 投稿直前に現在の PR head を再取得して `metadata.json.head_sha` と比較し、不一致なら古い review を自動投稿しない。`review-response.json` に `.html_url` が既にある場合も二重投稿防止のため中断する
 
 ## 投稿後フィードバックの学習
@@ -222,7 +227,7 @@ python3 $CLAUDE_PLUGIN_ROOT/tasks/episode_memory.py retrieve \
 
 `/pr-codex:send` の挙動:
 
-1. `~/claude-loop-pr-codex/` 配下から `status.json` が `state:completed` でかつ `findings.verified.json` / `review.md` が存在するディレクトリを1件選定する（名前昇順の先頭1件）
+1. 位置引数なしの場合は `~/claude-loop-pr-codex/` 配下から `status.json` が `state:completed` でかつ `findings.verified.json` / `review.md` が存在するディレクトリを1件選定する（名前昇順の先頭1件）。PR URL / PR 番号が指定された場合は、その PR に対応する completed レビューだけを対象にし、auto 選定は行わない。PR 番号のみ指定が複数 directory に一致した場合は中断して PR URL 指定を案内し、指定 PR が `sent/` にしか無い場合は既に send 済みとして中断する
 2. `findings.verified.json` を必須の一次入力として `Must Fix` / `Should Fix` / `Nit` の投稿方針を抽出し、`review.md` から `## 総評` / `## 良い点` を body に使う（F13 以降は Markdown parser fallback へ切り替えず、欠落・schema 不整合なら中断する。root-cause cluster がない場合は Must Fix 件数も完全一致を要求し、cluster がある場合は canonical / Markdown / SARIF は全 finding 件数、`review-payload.json` は representative comment 件数として検証する）
 3. `--include-should-fix` 指定時は `Should Fix` のうち `post_policy: body_summary` かつ `explanation_postable: true` の候補を inline comment に含める。未指定なら含めない
 4. `--include-nit` 指定時は `Nit` のうち `post_policy: body_summary` かつ `explanation_postable: true` の候補を inline comment に含める。`local_only` / `suppress` / `explanation_postable: false` の Nit は投稿しない。`nits.md` は Nit がある場合のみ local artifact として残す。diff 範囲外のものは body の `## 行コメント不可 (diff 範囲外)` へ退避する
@@ -232,7 +237,7 @@ python3 $CLAUDE_PLUGIN_ROOT/tasks/episode_memory.py retrieve \
 8. 承認後または `--auto-submit` の safety gate 通過後、`gh api --method POST .../reviews` で投稿（`event` は Must Fix ありなら `REQUEST_CHANGES`、なければ `COMMENT`。`APPROVE` は自動では出さない）
 9. 投稿成功後、対象ディレクトリを `~/claude-loop-pr-codex/sent/$org-$repo-$pr-$head_sha_short/` に移動する（同一 PR でも HEAD 更新後の再投稿履歴が衝突しないよう、`head_sha` の先頭 7 文字を suffix に付ける）
 
-対話実行では `/pr-codex:send` を使う。scheduler / `/loop` からレビュー生成後の投稿まで進めたい場合だけ `/pr-codex:send --auto-submit` を使う。1回の実行で1件のみ処理する。
+対話実行では `/pr-codex:send` を使う。scheduler / `/loop` からレビュー生成後の投稿まで進めたい場合だけ `/pr-codex:send --auto-submit` を使う。`/pr-codex:review` の completed 報告末尾には、対象 PR URL と Must Fix / inline 投稿可能な Should Fix 件数入りの `/pr-codex:send <PR URL> --auto-submit` 例が表示される。1回の実行で1件のみ処理する。
 
 ### Should Fix / Nit の取り扱い
 
