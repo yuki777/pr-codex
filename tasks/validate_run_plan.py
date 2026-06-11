@@ -886,9 +886,12 @@ def validate_step2b_jq_allowlist_docs() -> None:
 def validate_review_argument_docs() -> None:
     text = SKILL_PATH.read_text()
     required_snippets = [
-        'argument-hint: "[<PR URL|PR number>]"',
+        'argument-hint: "[<PR URL|PR number>] [--auto-send]"',
         "The user invoked this with: `$ARGUMENTS`",
         "$review_target",
+        "$auto_send = true | false",
+        "--auto-send",
+        "重複 `--auto-send`",
         "https://github.com/<org>/<repo>/pull/<number>",
         "PR 番号",
         "depth は自動判定します",
@@ -916,13 +919,16 @@ def validate_review_argument_docs() -> None:
     readme_snippets = [
         "## Depth control",
         "/pr-codex:review https://github.com/org/repo/pull/123",
+        "/pr-codex:review https://github.com/org/repo/pull/123 --auto-send",
         "/pr-codex:review 123",
+        "/pr-codex:review 123 --auto-send",
         "`depth_source=auto`",
         "`depth_requested=null`",
         "`depth_downgraded=false`",
         "`depth_source=default`, `depth_downgraded=false`, `depth_reason` に大規模ガード理由を記録",
         "`recommended_mode` (`standard` / `focused` / `skip`) は depth とは直交する別軸",
         "GitHub への自動投稿範囲は depth では拡大しない",
+        "`--auto-send` でも default の投稿対象は Must Fix のみ",
     ]
     for snippet in readme_snippets:
         if snippet not in readme:
