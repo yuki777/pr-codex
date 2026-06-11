@@ -2,7 +2,7 @@
 user-invocable: true
 name: pr-codex
 description: "GitHub PRを Claude Code と Codex CLI の2者レビュー方式で自動レビューする"
-argument-hint: "[<PR URL|PR number>]"
+argument-hint: "[<PR URL|PR number>] [--auto-send]"
 allowed-tools: ["Bash", "Read", "Write", "Glob", "Grep"]
 ---
 
@@ -14,13 +14,16 @@ GitHubのレビュー依頼PRを自動レビューするコマンド。Claude Co
 
 The user invoked this with: `$ARGUMENTS`
 
-起動直後に Claude 側で `$ARGUMENTS` を解析し、レビュー対象の直接指定を `$review_target` として保持する。レビュー深度 (`standard` / `deep`) は引数では受け付けず、Step 3 の `run-plan.json` で常に自動判定する。
+起動直後に Claude 側で `$ARGUMENTS` を解析し、レビュー対象の直接指定を `$review_target`、投稿連携フラグを `$auto_send = true | false` として保持する。レビュー深度 (`standard` / `deep`) は引数では受け付けず、Step 3 の `run-plan.json` で常に自動判定する。
 
-- 引数なし: `$review_target = ""`。従来どおり Search API でレビュー依頼 PR を自動検索・選定する
+- 引数なし: `$review_target = ""` / `$auto_send=false`。従来どおり Search API でレビュー依頼 PR を自動検索・選定する
+- `--auto-send`: `$review_target = ""` / `$auto_send=true`。Search API で選定した 1 件をレビューし、completed 後に `/pr-codex:send <PR URL> --auto-submit` 相当の auto-send phase へ進む
 - `https://github.com/<org>/<repo>/pull/<number>`: 指定された PR を直接レビューする
+- `https://github.com/<org>/<repo>/pull/<number> --auto-send`: 指定された PR を直接レビューし、completed 後に同じ PR URL を対象に auto-send phase へ進む
 - `<number>`: 現在の git repository の `origin` を対象 repo として、指定された PR 番号を直接レビューする
+- `<number> --auto-send`: 現在の git repository の `origin` を対象 repo として直接レビューし、completed 後に `metadata.json.pr_url` から解決した canonical PR URL を対象に auto-send phase へ進む
 
-上記以外の引数、複数引数、または `--deep` / `--standard` などのオプションが含まれる場合は、ユーザーに `unsupported argument: <value>。使える引数は PR URL または PR 番号のみです。depth は自動判定します。` と報告して **処理を中断** する。未知の引数を silent ignore してレビューを続行してはならない。
+フラグと位置引数は順不同で指定できる。上記以外の引数、複数引数（位置引数が2つ以上）、重複 `--auto-send`、または `--deep` / `--standard` などの未対応オプションが含まれる場合は、ユーザーに `unsupported argument: <value>。使える引数は PR URL、PR 番号、--auto-send のみです。depth は自動判定します。` と報告して **処理を中断** する。未知の引数を silent ignore してレビューを続行してはならない。
 
 PR 番号のみの指定は、現在の working directory が対象 repository の git checkout であり `gh repo view --json nameWithOwner --jq .nameWithOwner` で `owner/repo` を解決できる場合だけ有効とする。`~/claude-loop-pr-codex` など repository context がない場所で PR 番号のみが指定された場合は、推測せず PR URL 指定を案内して中断する。
 
@@ -61,6 +64,7 @@ Codex CLI 側のレビュー実行は、本スキル内で `-m gpt-5.5` を指�
 ```
 /loop 10m /pr-codex:review
 /pr-codex:review https://github.com/org/repo/pull/123
+/pr-codex:review https://github.com/org/repo/pull/123 --auto-send
 /pr-codex:review 123
 ```
 
@@ -70,13 +74,18 @@ Codex CLI 側のレビュー実行は、本スキル内で `-m gpt-5.5` を指�
 
 ### Step 0: 引数解析と直接指定の解決
 
-`$ARGUMENTS` は Claude が解釈済みの文字列として扱い、shell で再分割しない。空文字列、PR URL 1 個、PR 番号 1 個だけを受け付ける。
+`$ARGUMENTS` は Claude が解釈済みの文字列として扱う。Claude 側で shell 風に空白分割して解釈し、空文字列、PR URL 1 個、PR 番号 1 個、および任意の位置に 1 回だけ現れる `--auto-send` だけを受け付ける。`--auto-send` は depth / target selection / review findings の生成には影響せず、Step 6.5 の auto-send phase だけを有効にする。
 
-- 引数なしの場合: `$target_mode = "auto"` とし、Step 1 の Search API に進む
+- 引数なしの場合: `$target_mode = "auto"` / `$auto_send=false` とし、Step 1 の Search API に進む
+- `--auto-send` だけの場合: `$target_mode = "auto"` / `$auto_send=true` とし、Step 1 の Search API に進む
 - PR URL の場合: URL から `$org` / `$repository` / `$pr_number` を取り出し、`$target_mode = "direct"` として Step 2 の自動選定をスキップする。URL は `https://github.com/<org>/<repo>/pull/<number>` だけを受け付ける
+- PR URL + `--auto-send` の場合: 上記の direct mode に加えて `$auto_send=true` とする
 - PR 番号の場合: `gh repo view --json nameWithOwner --jq .nameWithOwner` で現在の repository を解決し、その `owner/repo` と PR 番号から `$org` / `$repository` / `$pr_number` を設定する。repository を解決できない場合は、PR URL 指定を案内して中断する
+- PR 番号 + `--auto-send` の場合: 上記の direct mode に加えて `$auto_send=true` とする。auto-send phase では PR 番号ではなく Step 2b で取得した `metadata.json.pr_url` を使う
 
 直接指定時は、`$pr_url = "https://github.com/$org/$repository/pull/$pr_number"` として保持する。`$title` と canonical な `$pr_url` は Step 2b の `gh api repos/$org/$repository/pulls/$pr_number --jq ...` で取得した値を優先する。
+
+未知オプション、解釈できない位置引数、位置引数が2つ以上、重複 `--auto-send`、または `--deep` / `--standard` は `unsupported argument` として中断し、Step 1 以降の GitHub API access や local artifact 作成へ進まない。
 
 ### Step 1: レビュー対象PR候補の取得
 
@@ -1286,7 +1295,7 @@ jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" --arg head
 
 ### Step 6: 結果報告
 
-レビュー結果の要約をユーザーに報告する。`status.json.state == "completed"` の場合だけ、報告末尾に次アクションとして `/pr-codex:send` のコマンド例を対象 PR URL と件数つきで必ず出力する。failed 終了時は send 案内を出さない。報告内容:
+レビュー結果の要約をユーザーに報告する。`status.json.state == "completed"` の場合、`$auto_send=false` なら報告末尾に次アクションとして `/pr-codex:send` のコマンド例を対象 PR URL と件数つきで必ず出力する。`$auto_send=true` なら send コマンド例を案内だけで終えず、Step 6.5 の auto-send phase へ進む。failed 終了時は send 案内を出さない。また failed 終了時は auto-send も行わない。報告内容:
 
 - 対象PR（リンク付き）
 - レビュー結果のサマリ（総評 / 重大な問題 / 改善提案 から要約）
@@ -1298,7 +1307,7 @@ jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" --arg head
   - 結果ファイルのパス（`~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.verified.json`、`~/claude-loop-pr-codex/$org-$repository-$pr_number/review-rounds.json`、`~/claude-loop-pr-codex/$org-$repository-$pr_number/review.md`）
   - 結果ファイルのパス（`~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.candidates.json` / `findings.verified.json` / `review.md`）
 
-#### completed 報告の `/pr-codex:send` 案内
+#### completed 報告の `/pr-codex:send` 案内と auto-send 判定
 
 completed 報告では、`metadata.json.pr_url` を `$pr_url` として使い、`findings.verified.json` と `pr.diff.ranges.txt` から以下の件数を算出する。
 
@@ -1306,7 +1315,7 @@ completed 報告では、`metadata.json.pr_url` を `$pr_url` として使い、
 - `$count_must_inline` = `findings[] | select(.severity == "must_fix" and .posting.post_policy == "inline" and .posting.explanation_postable == true and .location.side == "RIGHT")` のうち、`pr.diff.ranges.txt` の同一 path / 同一 hunk 範囲内に `location.start_line` から `location.end_line`（なければ `start_line`）が収まる件数。`$count_must_inline != $count_must` の場合は、send 側の primary guard が中断する非inline Must Fix が含まれるため、auto-submit コマンド例を成功可能な次アクションとして案内してはならない
 - `$count_should` = `findings[] | select(.severity == "should_fix" and .posting.post_policy == "body_summary" and .posting.explanation_postable == true and .location.side == "RIGHT")` のうち、`pr.diff.ranges.txt` の同一 path / 同一 hunk 範囲内に `location.start_line` から `location.end_line`（なければ `start_line`）が収まる件数。単純な Should Fix 総数ではなく、`/pr-codex:send --include-should-fix` で実際に inline 投稿可能な件数を使う。LEFT-side / diff 範囲外 / range 不明の Should Fix は send 側で body 退避または除外されるため、この件数には含めない
 
-completed 報告の末尾に、件数に応じて以下を追記する。
+completed 報告の末尾に、件数に応じて以下を追記する。`$auto_send=true` の場合、`$count_must_inline == $count_must` のときだけ Step 6.5 へ進む。`$count_must_inline != $count_must` の場合は `/pr-codex:send $pr_url --auto-submit` が投稿前 guard で中断する状態なので、auto-send phase へ進まず以下の非inline Must Fix 報告だけを行う。
 
 `$count_must_inline != $count_must`:
 
@@ -1359,6 +1368,35 @@ Must Fix 0 件のため inline は投稿されず、総評＋良い点＋確認�
 
 投稿対象の指摘なし。承認レビューを投稿する場合のみ `/pr-codex:send $pr_url --auto-submit`（CI が failure / pending の場合は send 側で COMMENT に抑止）
 ```
+
+### Step 6.5: `--auto-send` phase
+
+`$auto_send=true` かつ `status.json.state == "completed"` かつ `$count_must_inline == $count_must` の場合だけ実行する。`$auto_send=false`、failed 終了、または `$count_must_inline != $count_must` の場合は実行しない。
+
+auto-send phase は slash command `/pr-codex:send ...` を再帰的に呼び出すのではなく、`skills/send/SKILL.md` の契約を Read ツールで読み、同じターンの後続手順として実行する。Step 6.5 開始時に `$plugin_root/skills/send/SKILL.md` を Read し、以下の正規化済み引数として `send` の Step 0 以降を適用する:
+
+- `$ARGUMENTS = "$pr_url --auto-submit"`
+- `$send_mode=auto_submit`
+- `$target_mode=direct`
+- `$include_should_fix=false`
+- `$include_nit=false`
+
+auto-send phase の投稿対象は Must Fix のみであり、`$count_should > 0` でも `--include-should-fix` は付けない。Nit も投稿しない。Should Fix / Nit を含めたい場合は、auto-send ではなく手動で `/pr-codex:send $pr_url --auto-submit --include-should-fix` または `/pr-codex:send $pr_url --auto-submit --include-should-fix --include-nit` を実行する。
+
+auto-send phase では、`metadata.json.pr_url` から得た canonical な `$pr_url` を direct target として使う。ユーザーが PR 番号だけで `/pr-codex:review 123 --auto-send` を実行した場合も、send 側には PR 番号ではなく `$pr_url` を渡す。これにより `~/claude-loop-pr-codex` 配下に同じ PR 番号の directory が複数ある場合でも、send 側の名前昇順 auto 選定や番号曖昧性に依存しない。
+
+auto-send phase は `/pr-codex:send $pr_url --auto-submit` と同じ safety gate をすべて維持する。特に以下はスキップしない:
+
+- `findings.verified.json` の同梱 validator
+- `review-payload.json` 生成
+- Step 4.5 verifier pipeline (`preflight-result.json.verdict == "PASS"` と `preflight-codex.md` の `VERDICT: PASS`)
+- Step 5.5 の `review-response.json.html_url` 二重投稿防止
+- 投稿直前の現在 PR head SHA と `metadata.json.head_sha` の一致確認
+- GitHub Reviews API 投稿後の `sent/$dir_name-$head_sha_short/` への移動
+
+auto-send phase が成功した場合は、send 側 Step 8 と同じ内容に加えて、`--auto-send` による投稿であることを報告する。GitHub review URL、event、Must Fix inline comment 件数、Should Fix / Nit は未投稿であること、`preflight-result.json`、移動先 `sent/` path を含める。
+
+auto-send phase が失敗した場合は、review 自体は completed のまま保持し、send 側の失敗 stage / artifact path を報告して終了する。review を同一ターンで自動再生成してはならない。`review-response.json.html_url` が既にある、PR head SHA が変わった、Step 4.5 verifier pipeline が FAIL、`gh api` が 422/403/404、または `sent/` 移動が失敗した場合は、`skills/send/SKILL.md` のエラーハンドリングに従う。
 
 ## エラーハンドリング
 
@@ -1441,7 +1479,7 @@ $CLAUDE_PLUGIN_ROOT/schemas/
 
 本スキルは Claude Code を `--permission-mode auto` で起動することを前提とする（README の「使い方」参照）。auto mode でも、許可済みツールやコマンドの内容によっては分類器の判断で承認が必要になり得るため、本スキルではテンプレートに明示された操作だけを実行する。
 
-ローカルの書き込みは作業ディレクトリ `~/claude-loop-pr-codex/` 配下に限り、`clone-claude/` / `clone-codex/` の作成と更新、`status.json` / `metadata.json` / `run-plan.json` / `pr.diff` / `pr.diff.ranges.txt` / `claude.log` / `codex.log` / `codex-review.md` / `claude-review.md` / `findings.candidates.json` / `findings.verified.json` / `findings.sarif` / `validation-report.json` / `review-rounds.json` / `review.md` と、それらの `*.tmp` 一時ファイル作成のみ許可する。schema / fingerprint / status / SARIF validation のために `python3 "$plugin_root/tasks/validate_candidates.py" ...`、`python3 "$plugin_root/tasks/validate_findings.py" ...`、`python3 "$plugin_root/tasks/generate_findings_sarif.py" ...`、`python3 "$plugin_root/tasks/validate_findings_sarif.py" ...`、`python3 "$plugin_root/tasks/validate_status.py" ...` を実行してよいが、validator は成果物を書き換えず検証だけに使う。
+ローカルの書き込みは作業ディレクトリ `~/claude-loop-pr-codex/` 配下に限り、`clone-claude/` / `clone-codex/` の作成と更新、`status.json` / `metadata.json` / `run-plan.json` / `pr.diff` / `pr.diff.ranges.txt` / `claude.log` / `codex.log` / `codex-review.md` / `claude-review.md` / `findings.candidates.json` / `findings.verified.json` / `findings.sarif` / `validation-report.json` / `review-rounds.json` / `review.md` と、それらの `*.tmp` 一時ファイル作成のみ許可する。`$auto_send=true` の Step 6.5 だけは、`skills/send/SKILL.md` の契約に従う範囲で `review-payload.json` / `preflight-prompt.md` / `preflight-codex.md` / `preflight-result.json` / `preflight-codex.log` / `review-response.json` / `nits.md` の作成、および `sent/$dir_name-$head_sha_short/` への移動を許可する。schema / fingerprint / status / SARIF validation のために `python3 "$plugin_root/tasks/validate_candidates.py" ...`、`python3 "$plugin_root/tasks/validate_findings.py" ...`、`python3 "$plugin_root/tasks/generate_findings_sarif.py" ...`、`python3 "$plugin_root/tasks/validate_findings_sarif.py" ...`、`python3 "$plugin_root/tasks/validate_status.py" ...` を実行してよいが、validator は成果物を書き換えず検証だけに使う。
 
 F11 の regression eval (`score_fixture.py` / `m1_m2_gate.py`) は通常の `/pr-codex:review` 実行フローには組み込まない。手動 deep eval で `findings.verified.json` を採点する場合のみ、README / `fixtures/README.md` の手順に従って `artifacts/` 配下へ `score-report.v1` / `m1-m2-gate.v1` を出力する。CI では固定 stub の deterministic test だけを実行し、LLM や GitHub write/API 投稿は必須経路に入れない。
 
@@ -1460,7 +1498,7 @@ F11 の regression eval (`score_fixture.py` / `m1_m2_gate.py`) は通常の `/pr
    - `pr.diff.ranges.txt` は Step 3 の `awk` の標準出力を `>` でリダイレクトして作成する
    - `claude-review.md` / `codex-review.md` / `claude.log` / `codex.log` は Step 4a / 4b の標準出力・標準エラーを `>` / `2>` でリダイレクトして作成する
 7. Step 4a / 4b は `run_in_background: true` で起動し、foreground timeout 引数を `1200000` に固定してはならない。Claude Code Bash tool の foreground timeout 上限 600000 ms を超える実行予算は `run-plan.json.estimated_timeout_ms` / `review_loop.time_budget_ms` として扱い、完了通知待ちで管理する
-8. テンプレートに明示された `git fetch` / `git checkout FETCH_HEAD` / `jq -e '.require | has("bear/sunday")' ...` / `python3 "$plugin_root/tasks/validate_candidates.py" ...` / `python3 "$plugin_root/tasks/validate_findings.py" ...` / `python3 "$plugin_root/tasks/generate_findings_sarif.py" ...` / `python3 "$plugin_root/tasks/validate_findings_sarif.py" ...` / `python3 "$plugin_root/tasks/validate_status.py" ...` / temp file から final artifact への `mv` / 成果物ファイル作成以外の状態変更操作は実行しない。禁止例: `git push` / `git merge` / `git reset --*` / `git clean -fd[x]` / `git stash` / `git commit` / `git tag` / `git branch -D`、`rm -rf` 系、`gh pr` / `gh issue` の write 操作、および GitHub / Backlog / DocBase の write 系 MCP ツール
+8. テンプレートに明示された `git fetch` / `git checkout FETCH_HEAD` / `jq -e '.require | has("bear/sunday")' ...` / `python3 "$plugin_root/tasks/validate_candidates.py" ...` / `python3 "$plugin_root/tasks/validate_findings.py" ...` / `python3 "$plugin_root/tasks/generate_findings_sarif.py" ...` / `python3 "$plugin_root/tasks/validate_findings_sarif.py" ...` / `python3 "$plugin_root/tasks/validate_status.py" ...` / temp file から final artifact への `mv` / 成果物ファイル作成以外の状態変更操作は実行しない。`$auto_send=true` の Step 6.5 だけは、send 側 Step 6 の `gh api --method POST "/repos/$org/$repository/pulls/$pr_number/reviews"` と Step 7 の `sent/` 移動を許可する。禁止例: `git push` / `git merge` / `git reset --*` / `git clean -fd[x]` / `git stash` / `git commit` / `git tag` / `git branch -D`、`rm -rf` 系、`gh pr review` / `gh pr comment` / `gh pr merge` / `gh issue` の write 操作、および GitHub / Backlog / DocBase の write 系 MCP ツール
 9. 1回の実行で選定・処理する PR は 1 件のみとする
 10. Step 4a / 4b のプロンプト中に含まれる `{REVIEW_CRITERIA}` / `{RUN_PLAN_GUIDANCE}` / `{DEPTH_GUIDANCE}` / `{BEAR_REVIEW_GUIDANCE}` プレースホルダは、Step 4 前処理で Read した `REVIEW_CRITERIA.md`、`run-plan.json`、Step 3b の BEAR.Sunday 判定結果を元に Claude 側で置換したうえで、Bash ツールに渡す完全体のコマンド文字列として使う。`{REVIEW_CRITERIA}` / `{RUN_PLAN_GUIDANCE}` / `{DEPTH_GUIDANCE}` / `{BEAR_REVIEW_GUIDANCE}` のいずれも bash double-quote 内で安全になるよう、差し込み前に **`\` → `\\`、`"` → `\"`、`$` → `\$`、`` ` `` → `\``** の順でエスケープする。シェルでのコマンド置換 (`$()`) やヒアドキュメントは使わない
 

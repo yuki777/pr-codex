@@ -7,8 +7,8 @@ GitHub PRを **Claude Code** と **Codex CLI** の2者レビュー方式で自�
 - **2者レビュー**: Claude Code と Codex CLI が独立してPRをレビューし、結果を統合
 - **自動巡回**: `/loop` と組み合わせて定期的にレビュー依頼PRを検出・処理
 - **冪等実行**: status.json による状態管理で、完了済みPRのスキップや失敗時の再実行に対応
-- **最小権限**: 各レビューツールは読み取り専用で動作し、PRへのコメント投稿時はユーザー承認を得てから行う
-- **生成と投稿を分離**: レビュー生成 (`/pr-codex:review`) と投稿 (`/pr-codex:send`) を別スキルに分け、投稿前にユーザーが内容を承認する
+- **最小権限**: 各レビューツールは読み取り専用で動作し、PRへのコメント投稿時はユーザー承認または明示的な `--auto-send` / `--auto-submit` 指定後の safety gate 通過を必要とする
+- **生成と投稿を分離**: レビュー生成 (`/pr-codex:review`) と投稿 (`/pr-codex:send`) を別スキルに分け、通常は投稿前にユーザーが内容を承認する。`/pr-codex:review --auto-send` を明示した場合だけ、レビュー completed 後に `/pr-codex:send <PR URL> --auto-submit` 相当の auto-send phase へ進む
 - **反復精緻化 + halting**: `refine` / `challenge` / `verify` を round 管理し、`max_rounds` / `time_budget_ms` / `no_new_evidence` / `repeated_contradiction` で停止する
 
 ## 必要なもの
@@ -83,11 +83,20 @@ cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
 # PR URLを直接指定してレビューする
 /pr-codex:review https://github.com/org/repo/pull/123
 
+# PR URLを直接指定してレビューし、completed 後に Must Fix のみ自動投稿する
+/pr-codex:review https://github.com/org/repo/pull/123 --auto-send
+
 # 現在のgit repositoryのPR番号を指定してレビューする
 /pr-codex:review 123
 
+# 現在のgit repositoryのPR番号を指定してレビューし、completed 後に Must Fix のみ自動投稿する
+/pr-codex:review 123 --auto-send
+
 # 10分間隔で自動レビューする
 /loop 10m /pr-codex:review
+
+# 10分間隔で自動レビューし、completed 後に Must Fix のみ自動投稿する
+/loop 10m /pr-codex:review --auto-send
 ```
 
 ## Depth control
@@ -113,21 +122,23 @@ cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
 3. **作業ディレクトリの準備** — PRブランチを各ツール用に個別に shallow clone
 4. **2者レビュー実行** — Claude Code と Codex CLI が並行してレビュー
 5. **反復精緻化と結果の統合** — 両者の指摘を `refine` / `challenge` / `verify` round で精査し、halting 後に `review-rounds.json` / `findings.verified.json` / `review.md` を生成
-6. **結果報告** — レビュー結果の要約をユーザーに報告
+6. **結果報告** — レビュー結果の要約をユーザーに報告。`--auto-send` 指定時は completed 後に `/pr-codex:send <PR URL> --auto-submit` 相当の auto-send phase へ進む
 4. **stage 化されたレビュー実行** — 既存 Step を logical stage として扱う（ranker / hunter / verifier / explainer）
    - ranker: `run-plan.json` で PR risk/area と実行方針を分類
    - hunter: Claude Code と Codex CLI が並行して広めに候補を集め、`findings.candidates.json` を残す
    - verifier: 4軸 + evidence ladder + counterexample で絞り込み、`findings.verified.json` を canonical artifact にする
    - explainer: verified findings から `review.md` と local-only `findings.sarif` を派生生成する
-5. **結果報告** — レビュー結果の要約をユーザーに報告
+5. **結果報告** — レビュー結果の要約をユーザーに報告。`--auto-send` 指定時は Must Fix のみを対象に send 側の verifier pipeline / head SHA gate / 二重投稿防止 gate を通して投稿する
 
 Stage ごとの責務、input/output artifact、halting 条件は [`skills/review/STAGES.md`](skills/review/STAGES.md) を参照してください。
 
 ## レビューの投稿
 
-`/pr-codex:review` は `review.md` をローカル生成するのみで、PRへの投稿は行わない。投稿は別スキル `/pr-codex:send` で実行する。
+通常の `/pr-codex:review` は `review.md` をローカル生成するのみで、PRへの投稿は行わない。投稿は別スキル `/pr-codex:send` で実行する。レビュー完了後に Must Fix のみ自動投稿したい場合は、`/pr-codex:review <PR URL|PR number> --auto-send` を使う。この場合も slash command を再帰実行するのではなく、completed 後に `skills/send/SKILL.md` の direct mode を `$ARGUMENTS = "$pr_url --auto-submit"` として同じ safety gate 付きで実行する。
 
 ```
+/pr-codex:review https://github.com/org/repo/pull/123 --auto-send
+/pr-codex:review 123 --auto-send
 /pr-codex:send
 /pr-codex:send --auto-submit
 /pr-codex:send --include-should-fix
@@ -141,6 +152,7 @@ Stage ごとの責務、input/output artifact、halting 条件は [`skills/revie
 - `/pr-codex:send --auto-submit`: Step 4.5 の verifier pipeline が PASS した後、最終承認 prompt なしで Must Fix 全件のみ投稿へ進む
 - `/pr-codex:send <PR URL> --auto-submit`: URL に対応する completed レビューだけを対象にし、名前昇順の auto 選定は行わない
 - `/pr-codex:send <PR number> --auto-submit`: `~/claude-loop-pr-codex` に同番号の active directory が 1 件だけある場合に限り対象を解決する。複数一致時は曖昧として中断し、PR URL 指定を案内する
+- `/pr-codex:review <PR URL|PR number> --auto-send`: レビューが completed になった後、canonical な `metadata.json.pr_url` を対象に `/pr-codex:send <PR URL> --auto-submit` 相当の direct mode を続けて実行する。投稿対象は Must Fix のみで、Should Fix / Nit は含めない
 - `--include-should-fix` は Must Fix + Should Fix を inline comment として投稿する
 - `--include-nit` は `--include-should-fix` と併用し、Must Fix + 投稿可能な Should Fix + 投稿可能な Nit を inline comment として投稿する。diff 範囲外のものは body の `## 行コメント不可 (diff 範囲外)` へ退避する
 - `--auto-submit` でも Step 4.5 の verifier pipeline はスキップしない。canonical artifact validation、Must Fix 件数整合、diff range、`findings.sarif`、`preflight-result.json.verdict == PASS` と `preflight-codex.md` の `VERDICT: PASS` は必須
@@ -237,7 +249,7 @@ python3 $CLAUDE_PLUGIN_ROOT/tasks/episode_memory.py retrieve \
 8. 承認後または `--auto-submit` の safety gate 通過後、`gh api --method POST .../reviews` で投稿（`event` は Must Fix ありなら `REQUEST_CHANGES`、Must Fix 0 件なら `APPROVE`。ただし `ci-status.json.state` が `failure` / `pending` の場合は自動 `APPROVE` を抑止して `COMMENT` に落とし、CI 状態を body と Step 5 に表示する）
 9. 投稿成功後、対象ディレクトリを `~/claude-loop-pr-codex/sent/$org-$repo-$pr-$head_sha_short/` に移動する（同一 PR でも HEAD 更新後の再投稿履歴が衝突しないよう、`head_sha` の先頭 7 文字を suffix に付ける）
 
-対話実行では `/pr-codex:send` を使う。scheduler / `/loop` からレビュー生成後の投稿まで進めたい場合だけ `/pr-codex:send --auto-submit` を使う。`/pr-codex:review` の completed 報告末尾には、対象 PR URL と Must Fix / inline 投稿可能な Should Fix 件数入りの `/pr-codex:send <PR URL> --auto-submit` 例が表示される。1回の実行で1件のみ処理する。
+対話実行では `/pr-codex:send` を使う。scheduler / `/loop` からレビュー生成後の投稿まで1コマンドで進めたい場合は `/pr-codex:review --auto-send` を使う。既に completed の review artifact を投稿するだけなら `/pr-codex:send <PR URL> --auto-submit` を使う。`/pr-codex:review` の completed 報告末尾には、対象 PR URL と Must Fix / inline 投稿可能な Should Fix 件数入りの `/pr-codex:send <PR URL> --auto-submit` 例が表示される。`--auto-send` 指定時は、`$count_must_inline == $count_must` の場合だけ Must Fix のみを対象に auto-send phase へ進み、Should Fix / Nit は自動投稿しない。1回の実行で1件のみ処理する。
 
 ### Should Fix / Nit の取り扱い
 
@@ -389,7 +401,7 @@ mv ~/claude-loop-pr-codex/sent/yuki777-pr-codex-24 \
 - `pr-classification.json` は `schemas/pr-classification.schema.json` で定義し、`docs-only` / `test-only` / `workflow-ci` / `review-skill-contract` / `python-validator-runtime` / `security-sensitive` / `mixed` の PR 種別と `selected_specialists` を記録する。hunter は read-only で、自動 exploit / network pentest は行わない
 - `depth_actual` は `standard` / `deep` の 2 値。`depth_source` は `auto` / `default`、`depth_requested` は常に `null`
 - `depth_downgraded` は常に `false`、`depth_downgrade_reason` は常に `null`。大規模 PR は downgrade ではなく default standard として扱う
-- `recommended_mode == "skip"` の場合だけ `skip_reason` を非空にし、それ以外は `skip_reason=null` にする。`recommended_mode` は depth と直交し、GitHub への自動投稿範囲は depth では拡大しない
+- `recommended_mode == "skip"` の場合だけ `skip_reason` を非空にし、それ以外は `skip_reason=null` にする。`recommended_mode` は depth と直交し、GitHub への自動投稿範囲は depth では拡大しない。`--auto-send` でも default の投稿対象は Must Fix のみで、Should Fix / Nit は含めない
 - hunter → verifier 境界の debug artifact は `schemas/findings.candidates.v1.json` (JSON Schema Draft 2020-12) で定義する。`findings.candidates.json` は `id == fingerprint` や 4軸 / evidence / posting policy を要求せず、verifier が canonical findings へ揃える
 - canonical runtime artifact は `schemas/findings.v1.json` (JSON Schema Draft 2020-12) で定義する
 - F5 の round artifact は `schemas/review-rounds.v1.json` で定義し、`review-rounds.json` に `max_rounds` / `time_budget_ms` / `no_new_evidence_rounds` / `repeated_contradiction_limit` と round metrics を保存する
