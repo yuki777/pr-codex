@@ -69,6 +69,19 @@ class Issue21DocsTest(unittest.TestCase):
         self.assertIn("nits.md", step8)
         self.assertIn("Nit 件数", step8)
 
+    def test_step8_clears_context_only_after_successful_send(self) -> None:
+        text = SEND_SKILL.read_text(encoding="utf-8")
+        step8 = section(text, "### Step 8: 結果報告", "## エラーハンドリング")
+        required_snippets = [
+            "成功報告を出した直後に slash command として `/clear` を単独で実行",
+            "GitHub 投稿と `sent/` 移動が両方成功した後だけ実行",
+            "失敗時、承認拒否時、Step 4.5 verifier FAIL、Step 5.5 safety gate 中断、または Step 7 失敗時には実行しない",
+            "`/clear` に `/pr-codex:review` など後続コマンドを同じ行で連結してはならない",
+            "context reset: 成功報告後に `/clear` を実行",
+        ]
+        for snippet in required_snippets:
+            self.assertIn(snippet, step8)
+
     def test_review_criteria_defines_capped_should_fix_body_summary_format(self) -> None:
         text = REVIEW_CRITERIA.read_text(encoding="utf-8")
         required_snippets = [
@@ -91,6 +104,15 @@ class Issue21DocsTest(unittest.TestCase):
             "`Nit` は default では投稿せず",
             "`local_only` / `suppress` / `explanation_postable: false` の Nit は投稿せず",
             "`nits.md`",
+        ]
+        for snippet in required_snippets:
+            self.assertIn(snippet, text)
+
+    def test_readme_documents_post_send_clear_policy(self) -> None:
+        text = README.read_text(encoding="utf-8")
+        required_snippets = [
+            "成功報告後に `/clear` を単独で実行して新しい conversation へ移る",
+            "失敗時、承認拒否時、verifier FAIL、safety gate 中断、または `sent/` 移動失敗時には `/clear` しない",
         ]
         for snippet in required_snippets:
             self.assertIn(snippet, text)

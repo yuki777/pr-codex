@@ -65,6 +65,7 @@ class ReviewAutoSendDocsTest(unittest.TestCase):
             "二重投稿防止",
             "現在 PR head SHA",
             "sent/$dir_name-$head_sha_short",
+            "成功報告後の `/clear` も send 側 Step 8 の契約に従って実行",
         ):
             self.assertIn(snippet, step65)
 

@@ -248,6 +248,7 @@ python3 $CLAUDE_PLUGIN_ROOT/tasks/episode_memory.py retrieve \
 7. 投稿直前に `review-response.json` の `.html_url` が未設定であることを確認し、現在の PR head を再取得して `metadata.json.head_sha` と一致することを確認する
 8. 承認後または `--auto-submit` の safety gate 通過後、`gh api --method POST .../reviews` で投稿（`event` は Must Fix ありなら `REQUEST_CHANGES`、Must Fix 0 件なら `APPROVE`。ただし `ci-status.json.state` が `failure` / `pending` の場合は自動 `APPROVE` を抑止して `COMMENT` に落とし、CI 状態を body と Step 5 に表示する）
 9. 投稿成功後、対象ディレクトリを `~/claude-loop-pr-codex/sent/$org-$repo-$pr-$head_sha_short/` に移動する（同一 PR でも HEAD 更新後の再投稿履歴が衝突しないよう、`head_sha` の先頭 7 文字を suffix に付ける）
+10. GitHub 投稿と `sent/` 移動が両方成功した場合だけ、成功報告後に `/clear` を単独で実行して新しい conversation へ移る。失敗時、承認拒否時、verifier FAIL、safety gate 中断、または `sent/` 移動失敗時には `/clear` しない
 
 対話実行では `/pr-codex:send` を使う。scheduler / `/loop` からレビュー生成後の投稿まで1コマンドで進めたい場合は `/pr-codex:review --auto-send` を使う。既に completed の review artifact を投稿するだけなら `/pr-codex:send <PR URL> --auto-submit` を使う。`/pr-codex:review` の completed 報告末尾には、対象 PR URL と Must Fix / inline 投稿可能な Should Fix 件数入りの `/pr-codex:send <PR URL> --auto-submit` 例が表示される。`--auto-send` 指定時は、`$count_must_inline == $count_must` の場合だけ Must Fix のみを対象に auto-send phase へ進み、Should Fix / Nit は自動投稿しない。1回の実行で1件のみ処理する。
 
