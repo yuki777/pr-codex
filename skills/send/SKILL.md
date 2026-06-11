@@ -866,7 +866,7 @@ test ! -d ~/claude-loop-pr-codex/$dir_name && test -d ~/claude-loop-pr-codex/sen
 
 ### Step 8: 結果報告
 
-ユーザーに以下をテキストで報告して終了する:
+ユーザーに以下をテキストで報告して終了する。成功時は、成功報告を出した直後に slash command として `/clear` を単独で実行し、新しい conversation へ移る。`/clear` は GitHub 投稿と `sent/` 移動が両方成功した後だけ実行し、失敗時、承認拒否時、Step 4.5 verifier FAIL、Step 5.5 safety gate 中断、または Step 7 失敗時には実行しない。`/clear` に `/pr-codex:review` など後続コマンドを同じ行で連結してはならない。
 
 成功時:
 
@@ -880,6 +880,7 @@ test ! -d ~/claude-loop-pr-codex/$dir_name && test -d ~/claude-loop-pr-codex/sen
 - 行範囲外で除外したインラインコメント件数
 - preflight result: `~/claude-loop-pr-codex/sent/$dir_name-$head_sha_short/preflight-result.json`
 - 移動先: `~/claude-loop-pr-codex/sent/$dir_name-$head_sha_short`
+- context reset: 成功報告後に `/clear` を実行
 
 失敗時（Step 6 が非ゼロ終了、Step 7 の移動先衝突、または Step 7 の移動完了検証が失敗した場合）:
 

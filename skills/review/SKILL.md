@@ -1443,7 +1443,7 @@ auto-send phase は `/pr-codex:send $pr_url --auto-submit` と同じ safety gate
 - 投稿直前の現在 PR head SHA と `metadata.json.head_sha` の一致確認
 - GitHub Reviews API 投稿後の `sent/$dir_name-$head_sha_short/` への移動
 
-auto-send phase が成功した場合は、send 側 Step 8 と同じ内容に加えて、`--auto-send` による投稿であることを報告する。GitHub review URL、event、Must Fix inline comment 件数、Should Fix / Nit は未投稿であること、`preflight-result.json`、移動先 `sent/` path を含める。
+auto-send phase が成功した場合は、send 側 Step 8 と同じ内容に加えて、`--auto-send` による投稿であることを報告する。GitHub review URL、event、Must Fix inline comment 件数、Should Fix / Nit は未投稿であること、`preflight-result.json`、移動先 `sent/` path を含める。成功報告後の `/clear` も send 側 Step 8 の契約に従って実行する。
 
 auto-send phase が失敗した場合は、review 自体は completed のまま保持し、send 側の失敗 stage / artifact path を報告して終了する。review を同一ターンで自動再生成してはならない。`review-response.json.html_url` が既にある、PR head SHA が変わった、Step 4.5 verifier pipeline が FAIL、`gh api` が 422/403/404、または `sent/` 移動が失敗した場合は、`skills/send/SKILL.md` のエラーハンドリングに従う。
 
