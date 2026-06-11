@@ -117,8 +117,8 @@ cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
 
 ## レビューフロー
 
-1. **PR候補の取得** — 引数なしなら GitHub Search API で `review-requested` のPRを一覧取得。PR URL / PR番号指定時は対象を直接解決
-2. **候補の選定** — 引数なしなら未レビュー・失敗・追加コミットありの最初の1件を選定。直接指定時は review requested / approve 済み判定をスキップし、`status.json` と `head_sha` で冪等性を確認
+1. **PR候補の取得** — 引数なしなら GitHub Search API で `review-requested` かつ `status:success` のPRを一覧取得。PR URL / PR番号指定時は対象を直接解決
+2. **候補の選定** — 引数なしなら未レビュー・失敗・追加コミットありで、current head の `ci-status.json.state == "success"` を満たす最初の1件だけを選定。CI が `failure` / `pending` / `skipped` / 未取得の候補はスキップする。直接指定時は review requested / approve 済み判定 / CI success gate をスキップし、`status.json` と `head_sha` で冪等性を確認
 3. **作業ディレクトリの準備** — PRブランチを各ツール用に個別に shallow clone
 4. **2者レビュー実行** — Claude Code と Codex CLI が並行してレビュー
 5. **反復精緻化と結果の統合** — 両者の指摘を `refine` / `challenge` / `verify` round で精査し、halting 後に `review-rounds.json` / `findings.verified.json` / `review.md` を生成
@@ -418,7 +418,7 @@ mv ~/claude-loop-pr-codex/sent/yuki777-pr-codex-24 \
 - JSON Schema Draft 2020-12 単体では sibling equality (`id == fingerprint`) を標準機能だけで強制しにくいため、この等値は **review/send workflow の必須 runtime gate** として扱う
 - review 側は `findings.candidates.json` を completed 前に `tasks/validate_candidates.py` で、`findings.verified.json` を completed 前に同梱 validator `tasks/validate_findings.py` で検証し、send 側も `findings.verified.json` の validator に失敗したら Markdown fallback せず中断する
 - `status.json` は `stage` / `failed_stage` を optional に持ち、F4 以降の新規実行では failed 時に ranker / hunter / verifier / explainer のどこで停止したかを残す。review 側は status 更新直後に `status.json` を `tasks/validate_status.py` で検証する
-- `ci-status.json` は `tasks/ci_status.py` が生成する `ci-status.v1` artifact で、GitHub Actions / status checks を `success` / `failure` / `pending` / `skipped` に正規化する。生成時は read-only endpoint だけを使い、rerun / cancel / write は行わない
+- `ci-status.json` は `tasks/ci_status.py` が生成する `ci-status.v1` artifact で、GitHub Actions / status checks を `success` / `failure` / `pending` / `skipped` に正規化する。生成時は read-only endpoint だけを使い、rerun / cancel / write は行わない。`/pr-codex:review` の自動選定では current head の `ci-status.json.state == "success"` の PR だけをピックアップし、`failure` / `pending` / `skipped` / 未取得は次候補へスキップする。PR URL / PR番号で直接指定した場合は CI success gate を適用せず、CI 状態をレビュー context として記録する
 - `ci-summary.md` は `ci-status.json` から派生する public-safe 要約で、failed log は secret-like text とローカルパスを scrub した短い要約だけを残し、raw log は保存しない
 - schema 自体は `location.side` に `LEFT` も残すが、M1 の send workflow は `RIGHT` のみ受け付ける
 - `tasks/validate_findings.py` は JSON shape / enum / conditional rule / RFC3339 date-time / URI / `end_line >= start_line` / `id == fingerprint` / fingerprint 再計算 / `metadata.json` との PR context 一致を stdlib-only で検証する

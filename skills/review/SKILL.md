@@ -91,7 +91,7 @@ Codex CLI 側のレビュー実行は、本スキル内で `-m gpt-5.5` を指�
 
 `$target_mode == "direct"` の場合、Step 1 は実行しない。指定された `$org` / `$repository` / `$pr_number` を使い、Step 2 の requested reviewers / approve 済み判定もスキップして、直接指定 PR の status 判定へ進む。
 
-GitHub Search API でレビュー依頼されている Open PR を取得する。
+GitHub Search API でレビュー依頼されている Open PR を取得する。自動選定では CI が pass している PR だけをピックアップしたいため、Search API では `status:success` で粗く絞る。Search API はインデックスベースなので、この条件は最終判断ではなく、Step 2b の current head CI success gate を authoritative な判定として扱う。
 Notifications API と異なり、リポジトリの Watch 設定に依存しない。
 
 各テンプレートはコードブロックの内容をそのまま1回のシェル実行単位として使うこと。変数（`$MY_LOGIN`, `$org`, `$repository`, `$pr_number`, `$title`, `$pr_url`, `$branch`, `$base_branch`, `$head_sha`, `$files_json`, `$started_at`, `$finished_at`, `$exit_code`, `$failed_stage` など）の置換以外の改変は不可。
@@ -114,7 +114,7 @@ gh api user | jq -r '.login'
 
 ```bash
 gh api -H "Accept: application/vnd.github+json" \
-  "/search/issues?q=is:pr+state:open+draft:false+review-requested:$MY_LOGIN&sort=updated&order=desc&per_page=100" \
+  "/search/issues?q=is:pr+state:open+draft:false+review-requested:$MY_LOGIN+status:success&sort=updated&order=desc&per_page=100" \
   | jq -c '.items[] | {
     org: (.repository_url | split("/")[-2]),
     repository: (.repository_url | split("/")[-1]),
@@ -130,20 +130,22 @@ gh api -H "Accept: application/vnd.github+json" \
 - `state:open` - Open な PR のみ
 - `draft:false` - Draft PR を除外
 - `review-requested:$MY_LOGIN` - 自分がレビュー依頼されている PR（チームレビュー依頼も含む）
+- `status:success` - commit status / checks が success の PR だけを粗く絞る
 - `sort=updated&order=desc` - 更新日時の降順（最新を優先。best match のデフォルトだと古い PR が漏れる）
 - `per_page=100` - 最大 100 件取得
 
 **注意事項:**
 
 - Search API はインデックスベースのため、レビュー依頼から数分の遅延が発生し得る（10分ポーリングなら許容範囲）
+- `status:success` も Search index の状態なので、古い結果や head 更新直後のズレがあり得る。候補確定前に Step 2b で current head の CI status を必ず再取得し、`success` 以外ならスキップする
 - レスポンスに `head_sha` と `branch` は含まれない（Step 2b で選定PRに対して必ず取得する）
 - `review-requested:USERNAME` は GitHub docs 上、ユーザー直接指定とチーム経由の両方を含むと明記されている
 
 ### Step 2: 候補PRの選定
 
-`$target_mode == "direct"` の場合、この自動選定は実行しない。指定 PR はレビュー依頼の有無や approve 済み状態に関係なく対象にできるため、requested reviewers / approve 済み判定をスキップする。ただし `status.json` による冪等性チェックは維持する。
+`$target_mode == "direct"` の場合、この自動選定は実行しない。指定 PR はレビュー依頼の有無、approve 済み状態、CI 状態に関係なく対象にできるため、requested reviewers / approve 済み判定 / CI success gate をスキップする。ただし `status.json` による冪等性チェックは維持し、CI 状態は Step 3a で read-only context として記録する。
 
-取得した候補（`$org`, `$repository`, `$pr_number`, `$title`, `$pr_url`）を上から順に走査し、以下の条件で最初の1件を選定する:
+取得した候補（`$org`, `$repository`, `$pr_number`, `$title`, `$pr_url`）を上から順に走査し、以下の条件を満たし、Step 2b の CI success gate を通過した最初の1件を選定する:
 
 1. 自分が実際にレビュー対象かチェック
 
@@ -199,17 +201,17 @@ jq -r '.state' ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json
 jq -r '.started_at' ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json
 ```
 
-4. `state == "completed"` の場合は Step 2b で現在の `head_sha` だけを先に取得し、保存済み `head_sha` と比較するため、**ここでは選定を確定せずに必ず Step 2b に進む**。同一 `head_sha` なら PR 変更ファイル一覧の取得は行わずスキップする。
+4. `state == "completed"` の場合は Step 2b で現在の `head_sha` だけを先に取得し、保存済み `head_sha` と比較するため、**ここでは選定を確定せずに必ず Step 2b に進む**。同一 `head_sha` なら PR 変更ファイル一覧の取得は行わずスキップする。未レビュー / failed / stale / completed だが head が変わっている候補も、Step 2b の CI success gate で `ci-status.json.state == "success"` を確認するまでは選定確定にしてはならない。
 
-全候補がスキップなら何もせず終了。
+全候補がスキップ、または CI が `success` の候補がない場合は何もせず終了。
 
 #### 直接指定 PR の status 判定
 
-`$target_mode == "direct"` の場合は、Search API の候補走査ではなく、指定された `$org` / `$repository` / `$pr_number` の `status.json` だけを確認する。`status.json` が存在しない、`state == "failed"`、または `state == "running"` だが 30 分超過で stale の場合は Step 2b へ進む。`state == "running"` かつ 30 分以内ならスキップする。`state == "completed"` の場合は Step 2b で現在の `head_sha` を取得し、保存済み `head_sha` と一致すればスキップ、異なれば追加コミットありとしてレビューを再実行する。
+`$target_mode == "direct"` の場合は、Search API の候補走査ではなく、指定された `$org` / `$repository` / `$pr_number` の `status.json` だけを確認する。`status.json` が存在しない、`state == "failed"`、または `state == "running"` だが 30 分超過で stale の場合は Step 2b へ進む。`state == "running"` かつ 30 分以内ならスキップする。`state == "completed"` の場合は Step 2b で現在の `head_sha` を取得し、保存済み `head_sha` と一致すればスキップ、異なれば追加コミットありとしてレビューを再実行する。直接指定では CI success gate を適用せず、CI が `failure` / `pending` / `skipped` / 未取得でも Step 3a で状態を記録してレビューを続行できる。
 
 ### Step 2b: 選定PRの `repository_full_name` / `head_sha` / `base_sha` / `branch` / `base_branch` / `merge_commit_sha` / `title` / `pr_url` / `files` を取得
 
-Step 2 で対象PRを1件選定した直後、または Step 0 で直接指定 PR を解決した直後、未レビュー / failed / stale / completed のどの経路でもまず `repository_full_name` / `head_sha` / `base_sha` / `branch` / `base_branch` / `merge_commit_sha` / `title` / `pr_url` を取得する。`repository_full_name` は fork head repo ではなく、GitHub review の投稿先と同じ **base repo** (`.base.repo.full_name`) とする。`state == "completed"` の場合はこの時点で保存済み `head_sha` と比較し、同一ならスキップして PR 変更ファイル一覧は取得しない。未レビュー / failed / stale、または completed だが `head_sha` が変わっている場合だけ、完全な `files[]` を REST API paginate で取得して Step 3 へ進む。Step 3 の clone と `metadata.json` / `run-plan.json` 作成・Step 4 の PR 差分スコープ制御・Step 4c の canonical findings 生成は `$repository_full_name` / `$head_sha` / `$base_sha` / `$branch` / `$base_branch` / `$merge_commit_sha` / `$title` / `$pr_url` / `$files_json` に依存するため、選定後に欠落すると後続が破綻する。
+Step 2 で対象PRを1件選定候補にした直後、または Step 0 で直接指定 PR を解決した直後、未レビュー / failed / stale / completed のどの経路でもまず `repository_full_name` / `head_sha` / `base_sha` / `branch` / `base_branch` / `merge_commit_sha` / `title` / `pr_url` を取得する。`repository_full_name` は fork head repo ではなく、GitHub review の投稿先と同じ **base repo** (`.base.repo.full_name`) とする。`state == "completed"` の場合はこの時点で保存済み `head_sha` と比較し、同一ならスキップして PR 変更ファイル一覧は取得しない。`$target_mode == "auto"` では、未レビュー / failed / stale、または completed だが `head_sha` が変わっている候補に対して、PR 変更ファイル一覧を取得する前に current head の CI success gate を通す。`ci-status.json.state != "success"`、CI 未取得、または取得結果の `head_sha` が current `$head_sha` と一致しない場合は、この PR を選定せず Step 2 の次候補に戻る。CI success gate を通過した場合、または `$target_mode == "direct"` の場合だけ、完全な `files[]` を REST API paginate で取得して Step 3 へ進む。Step 3 の clone と `metadata.json` / `run-plan.json` 作成・Step 4 の PR 差分スコープ制御・Step 4c の canonical findings 生成は `$repository_full_name` / `$head_sha` / `$base_sha` / `$branch` / `$base_branch` / `$merge_commit_sha` / `$title` / `$pr_url` / `$files_json` に依存するため、選定後に欠落すると後続が破綻する。
 
 まず `repository_full_name` / `head_sha` / `base_sha` / `branch` / `base_branch` / `merge_commit_sha` / `title` / `pr_url` を取得する。
 
@@ -249,6 +251,53 @@ gh api repos/$org/$repository/pulls/$pr_number --jq '
 ```bash
 jq -r '.head_sha' ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json
 ```
+
+#### 自動選定時の CI success gate
+
+`$target_mode == "auto"` の場合、保存済み `head_sha` 比較でスキップされなかった候補に対して、PR 変更ファイル一覧を取得する前に current head の CI status を read-only で再取得する。この gate は `status:success` Search qualifier よりも強い最終判定であり、`ci-status.json.state == "success"` かつ `ci-status.json.head_sha == $head_sha` の場合だけ選定を確定する。`failure` / `pending` / `skipped` / CI 未取得 / head SHA 不一致 / API 取得失敗はいずれもレビュー失敗ではなく、この候補のスキップとして扱い、Step 2 の次候補へ戻る。`$target_mode == "direct"` ではこの gate を実行しない。
+
+- いつ使うか: `$target_mode == "auto"` で、未レビュー / failed / stale、または completed だが保存済み `head_sha` と現在の `$head_sha` が異なる候補に対して、PR 変更ファイル一覧の取得前に必ず実行する
+- 判定条件: `ci-status.json` と `ci-summary.md` が生成され、`read_only == true`、`policy.github_writes == false`、`policy.rerun == false`、`policy.cancel == false`、`head_sha == $head_sha`、`state == "success"` を満たす
+- 次アクション: 判定条件を満たすならこの候補の選定を確定し、PR 変更ファイル一覧の取得へ進む。満たさない場合は `status.json` を更新せず、この候補をスキップして Step 2 の次候補へ戻る
+
+```bash
+plugin_root="${CLAUDE_PLUGIN_ROOT:-$(python3 - <<'PY'
+import os
+from pathlib import Path
+roots = []
+if os.environ.get("CLAUDE_CODE_PLUGIN_CACHE_DIR"):
+    roots.append(Path(os.environ["CLAUDE_CODE_PLUGIN_CACHE_DIR"]).expanduser())
+if os.environ.get("CLAUDE_CONFIG_DIR"):
+    roots.append(Path(os.environ["CLAUDE_CONFIG_DIR"]).expanduser() / "plugins" / "cache")
+roots.append(Path.home() / ".claude" / "plugins" / "cache")
+markers = []
+for root in roots:
+    markers.extend(root.glob("**/pr-codex/tasks/validate_findings.py"))
+if not markers:
+    raise SystemExit("CLAUDE_PLUGIN_ROOT is unset and pr-codex plugin root was not found")
+marker = max((m.resolve() for m in markers), key=lambda p: (p.stat().st_mtime_ns, str(p)))
+print(marker.parents[1])
+PY
+)}"
+install -d ~/claude-loop-pr-codex/$org-$repository-$pr_number && \
+gh api repos/$org/$repository/pulls/$pr_number > ~/claude-loop-pr-codex/$org-$repository-$pr_number/ci-pull.json && \
+gh pr view $pr_number --repo $org/$repository --json statusCheckRollup --jq '.statusCheckRollup' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/ci-status-rollup.json && \
+python3 "$plugin_root/tasks/ci_status.py" \
+  --pull-json ~/claude-loop-pr-codex/$org-$repository-$pr_number/ci-pull.json \
+  --status-check-rollup-json ~/claude-loop-pr-codex/$org-$repository-$pr_number/ci-status-rollup.json \
+  --out-json ~/claude-loop-pr-codex/$org-$repository-$pr_number/ci-status.json \
+  --out-md ~/claude-loop-pr-codex/$org-$repository-$pr_number/ci-summary.md && \
+jq -e --arg head_sha "$head_sha" '
+  .read_only == true
+  and .policy.github_writes == false
+  and .policy.rerun == false
+  and .policy.cancel == false
+  and .head_sha == $head_sha
+  and .state == "success"
+' ~/claude-loop-pr-codex/$org-$repository-$pr_number/ci-status.json >/dev/null
+```
+
+`gh pr view --json statusCheckRollup` が使えない古い `gh` 環境では、Step 3a の旧 `gh` fallback と同じく `gh api --paginate "repos/$org/$repository/commits/$head_sha/check-runs?per_page=100"` または combined status を `--status-check-rollup-json` に渡して `tasks/ci_status.py` で正規化する。その場合も `ci-status.json.state == "success"` と `head_sha == $head_sha` の両方を満たす場合だけ選定を確定し、それ以外はスキップする。check-runs API はページング対象なので、pagination なしで最初のページだけを gate 入力にしてはならない。
 
 #### PR 変更ファイル一覧の取得
 
@@ -292,11 +341,11 @@ install -d ~/claude-loop-pr-codex/$org-$repository-$pr_number
 
 ### Step 3a: CI read-only gate artifact の生成
 
-対象 PR の GitHub Actions / status checks を read-only で取得し、`ci-status.json` と `ci-summary.md` を生成する。ここでは GitHub への write、workflow rerun、cancel は行わない。`statusCheckRollup` が使えない古い `gh` 環境では、同じ `ci_status.py` に REST の `pulls/{number}` と checks/status endpoint の JSON を渡す fallback を使う。
+対象 PR の GitHub Actions / status checks を read-only で取得し、`ci-status.json` と `ci-summary.md` を生成する。ここでは GitHub への write、workflow rerun、cancel は行わない。`$target_mode == "auto"` では Step 2b の CI success gate で既に生成済みでも、review hunter を起動する直前に再取得して current head の状態を確認する。再取得した `ci-status.json.state` が `success` ではなくなっていた場合、この PR のレビューは開始せず、`status.json` を `running` に更新しないまま Step 2 の次候補へ戻る。`$target_mode == "direct"` では CI success gate としては扱わず、`failure` / `pending` も reviewer へ渡す context として記録してレビューを継続できる。`statusCheckRollup` が使えない古い `gh` 環境では、同じ `ci_status.py` に REST の `pulls/{number}` と checks/status endpoint の JSON を渡す fallback を使う。
 
 - いつ使うか: 作業ディレクトリ作成後、review hunter を起動する前に必ず実行する
 - 判定条件: `ci-status.json` と `ci-summary.md` が生成され、`ci-status.json.policy.github_writes == false` / `rerun == false` / `cancel == false` である
-- 次アクション: `ci-status.json.state` を review/send/developer bridge の判断材料として保持する。`failure` / `pending` は reviewer へコンテキストとして渡すが、この step 自体で投稿や rerun はしない
+- 次アクション: `ci-status.json.state` を review/send/developer bridge の判断材料として保持する。`$target_mode == "auto"` で `success` 以外なら候補スキップとして Step 2 へ戻り、`$target_mode == "direct"` なら `failure` / `pending` を reviewer へコンテキストとして渡す。この step 自体で投稿や rerun はしない
 
 ```bash
 plugin_root="${CLAUDE_PLUGIN_ROOT:-$(python3 - <<'PY'
