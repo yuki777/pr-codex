@@ -36,6 +36,11 @@ SARIF_SCHEMA_TITLE = "Static Analysis Results Format (SARIF) Version 2.1.0 JSON 
 FINGERPRINT_RE = re.compile(r"^[0-9a-f]{64}$")
 GUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$")
 SECTION_HEADING_RE = re.compile(r"^##\s+", re.MULTILINE)
+OUT_OF_RANGE_ENTRY_RE = re.compile(r"^###\s+`(?P<path>.+):L(?P<start>\d+)(?:-L?(?P<end>\d+))?`")
+PAYLOAD_SEVERITY_RE = re.compile(
+    r"^\s*(?:[^\w*#\n]+\s*)?\*\*(?P<severity>Must Fix|Should Fix|Nit|Note)\*\*",
+    re.IGNORECASE,
+)
 MUST_FIX_HEADING = "## 重大な問題 (Must Fix)"
 OUT_OF_RANGE_HEADING = "## 行コメント不可 (diff 範囲外)"
 
@@ -75,34 +80,77 @@ def markdown_must_fix_count(path: Path) -> int:
     return sum(1 for line in body.splitlines() if line.startswith("### "))
 
 
-def payload_must_fix_count(path: Path) -> int:
-    data = load_json(path)
-    if not isinstance(data, dict):
-        raise ValueError(f"{path}: payload must be an object")
-    comments = data.get("comments", [])
-    if not isinstance(comments, list):
-        raise ValueError(f"{path}: payload.comments must be an array")
-    body = data.get("body")
-    out_of_range_count = 0
-    if isinstance(body, str):
-        out_of_range = section(body, OUT_OF_RANGE_HEADING)
-        out_of_range_count = sum(1 for line in out_of_range.splitlines() if line.startswith("### "))
-    return len(comments) + out_of_range_count
+PayloadKey = tuple[str, int | None, int, str]
+PayloadLineKey = tuple[str, int | None, int]
 
 
-def canonical_must_fix_count(findings: Any) -> int:
+def normalize_text(value: str) -> str:
+    return " ".join(value.split())
+
+
+def payload_severity_marker(body: Any) -> str | None:
+    if not isinstance(body, str):
+        return None
+    match = PAYLOAD_SEVERITY_RE.match(body)
+    if not match:
+        return None
+    return match.group("severity").lower().replace(" ", "_")
+
+
+def finding_payload_keys(finding: dict[str, Any]) -> set[PayloadKey]:
+    location = finding.get("location")
+    if not isinstance(location, dict):
+        return set()
+    path = location.get("path")
+    start_line = location.get("start_line")
+    end_line = location.get("end_line")
+    side = location.get("side")
+    if not isinstance(path, str) or not is_positive_int(start_line) or not isinstance(side, str):
+        return set()
+    line = end_line if is_positive_int(end_line) else start_line
+    keys = {(path, start_line if is_positive_int(end_line) else None, line, side)}
+    if is_positive_int(end_line) and start_line == line:
+        keys.add((path, None, line, side))
+    return keys
+
+
+def payload_comment_key(comment: Any) -> PayloadKey | None:
+    if not isinstance(comment, dict):
+        return None
+    path = comment.get("path")
+    line = comment.get("line")
+    side = comment.get("side")
+    start_line = comment.get("start_line")
+    if not isinstance(path, str) or not is_positive_int(line) or not isinstance(side, str):
+        return None
+    return (path, start_line if is_positive_int(start_line) else None, line, side)
+
+
+def out_of_range_entry_key(heading: str) -> PayloadLineKey | None:
+    match = OUT_OF_RANGE_ENTRY_RE.match(heading)
+    if not match:
+        return None
+    start_line = int(match.group("start"))
+    end_line = int(match.group("end")) if match.group("end") else start_line
+    return (match.group("path"), start_line if match.group("end") else None, end_line)
+
+
+def finding_body_fragments(finding: dict[str, Any]) -> list[str]:
+    fragments = []
+    for key in ("problem", "reason", "suggestion"):
+        value = finding.get(key)
+        if isinstance(value, str) and value.strip():
+            fragments.append(normalize_text(value))
+    return fragments
+
+
+def payload_expected_must_fix_findings(findings: Any) -> list[dict[str, Any]]:
     if not isinstance(findings, dict) or not isinstance(findings.get("findings"), list):
-        return -1
-    return sum(1 for finding in findings["findings"] if isinstance(finding, dict) and finding.get("severity") == "must_fix")
-
-
-def payload_expected_must_fix_count(findings: Any) -> int:
-    if not isinstance(findings, dict) or not isinstance(findings.get("findings"), list):
-        return -1
+        return []
     canonical_findings = [finding for finding in findings["findings"] if isinstance(finding, dict)]
     clusters = findings.get("root_cause_clusters")
     if not isinstance(clusters, list):
-        return canonical_must_fix_count(findings)
+        return [finding for finding in canonical_findings if finding.get("severity") == "must_fix"]
 
     findings_by_id = {finding.get("id"): finding for finding in canonical_findings if isinstance(finding.get("id"), str)}
     clustered_member_ids: set[str] = set()
@@ -119,17 +167,171 @@ def payload_expected_must_fix_count(findings: Any) -> int:
             clustered_member_ids.update(members)
             representative_ids.add(representative)
 
-    unclustered_must_fix = sum(
-        1
+    return [
+        finding
         for finding in canonical_findings
-        if finding.get("severity") == "must_fix" and finding.get("id") not in clustered_member_ids
-    )
-    representative_must_fix = sum(
-        1
-        for identifier in representative_ids
-        if findings_by_id.get(identifier, {}).get("severity") == "must_fix"
-    )
-    return unclustered_must_fix + representative_must_fix
+        if finding.get("severity") == "must_fix"
+        and (finding.get("id") not in clustered_member_ids or finding.get("id") in representative_ids)
+    ]
+
+
+def payload_must_fix_target_keys(findings: Any) -> tuple[set[PayloadKey], set[PayloadLineKey]]:
+    comment_keys: set[PayloadKey] = set()
+    line_keys: set[PayloadLineKey] = set()
+    for finding in payload_expected_must_fix_findings(findings):
+        for key in finding_payload_keys(finding):
+            comment_keys.add(key)
+            path, start_line, line, _side = key
+            line_keys.add((path, start_line, line))
+    return comment_keys, line_keys
+
+
+def payload_must_fix_fragments_by_key(findings: Any) -> tuple[dict[PayloadKey, list[str]], dict[PayloadLineKey, list[str]]]:
+    comment_fragments: dict[PayloadKey, list[str]] = {}
+    line_fragments: dict[PayloadLineKey, list[str]] = {}
+    for finding in payload_expected_must_fix_findings(findings):
+        fragments = finding_body_fragments(finding)
+        for key in finding_payload_keys(finding):
+            comment_fragments.setdefault(key, []).extend(fragments)
+            path, start_line, line, _side = key
+            line_fragments.setdefault((path, start_line, line), []).extend(fragments)
+    return comment_fragments, line_fragments
+
+
+def payload_non_must_target_keys(findings: Any) -> tuple[set[PayloadKey], set[PayloadLineKey]]:
+    comment_keys: set[PayloadKey] = set()
+    line_keys: set[PayloadLineKey] = set()
+    if not isinstance(findings, dict) or not isinstance(findings.get("findings"), list):
+        return comment_keys, line_keys
+    for finding in findings["findings"]:
+        if not isinstance(finding, dict) or finding.get("severity") == "must_fix":
+            continue
+        for key in finding_payload_keys(finding):
+            comment_keys.add(key)
+            path, start_line, line, _side = key
+            line_keys.add((path, start_line, line))
+    return comment_keys, line_keys
+
+
+def marked_must_fix_matches_target(
+    body: Any,
+    key: PayloadKey | None,
+    target_keys: set[PayloadKey],
+    ambiguous_keys: set[PayloadKey],
+    fragments_by_key: dict[PayloadKey, list[str]],
+) -> bool:
+    if key is None or key not in target_keys:
+        return False
+    if key not in ambiguous_keys:
+        return True
+    if not isinstance(body, str):
+        return False
+    normalized_body = normalize_text(body)
+    return any(fragment in normalized_body for fragment in fragments_by_key.get(key, []))
+
+
+def marked_must_fix_body_matches_target(
+    body: Any,
+    key: PayloadLineKey | None,
+    target_keys: set[PayloadLineKey],
+    ambiguous_keys: set[PayloadLineKey],
+    fragments_by_key: dict[PayloadLineKey, list[str]],
+) -> bool:
+    if key is None or key not in target_keys:
+        return False
+    if key not in ambiguous_keys:
+        return True
+    if not isinstance(body, str):
+        return False
+    normalized_body = normalize_text(body)
+    return any(fragment in normalized_body for fragment in fragments_by_key.get(key, []))
+
+
+def count_payload_comments_as_must_fix(comments: list[Any], findings: Any | None) -> int:
+    if findings is None:
+        return len(comments)
+    target_keys, _ = payload_must_fix_target_keys(findings)
+    ambiguous_keys, _ = payload_non_must_target_keys(findings)
+    fragments_by_key, _ = payload_must_fix_fragments_by_key(findings)
+    count = 0
+    for comment in comments:
+        body = comment.get("body") if isinstance(comment, dict) else None
+        marker = payload_severity_marker(body)
+        key = payload_comment_key(comment)
+        if marker == "must_fix":
+            if marked_must_fix_matches_target(body, key, target_keys, ambiguous_keys, fragments_by_key):
+                count += 1
+            continue
+        if marker is not None:
+            continue
+        if key is not None and key in target_keys and key not in ambiguous_keys:
+            count += 1
+    return count
+
+
+def count_out_of_range_as_must_fix(body: Any, findings: Any | None) -> int:
+    if not isinstance(body, str):
+        return 0
+    out_of_range = section(body, OUT_OF_RANGE_HEADING)
+    if not out_of_range:
+        return 0
+    if findings is None:
+        return sum(1 for line in out_of_range.splitlines() if line.startswith("### "))
+
+    _, target_line_keys = payload_must_fix_target_keys(findings)
+    _, ambiguous_line_keys = payload_non_must_target_keys(findings)
+    _, fragments_by_line_key = payload_must_fix_fragments_by_key(findings)
+    count = 0
+    current_heading = ""
+    current_body: list[str] = []
+
+    def flush() -> None:
+        nonlocal count
+        if not current_heading:
+            return
+        body = "\n".join(current_body).lstrip()
+        marker = payload_severity_marker(body)
+        key = out_of_range_entry_key(current_heading)
+        if marker == "must_fix":
+            if marked_must_fix_body_matches_target(body, key, target_line_keys, ambiguous_line_keys, fragments_by_line_key):
+                count += 1
+            return
+        if marker is not None:
+            return
+        if key is not None and key in target_line_keys and key not in ambiguous_line_keys:
+            count += 1
+
+    for line in out_of_range.splitlines():
+        if line.startswith("### "):
+            flush()
+            current_heading = line
+            current_body = []
+        else:
+            current_body.append(line)
+    flush()
+    return count
+
+
+def payload_must_fix_count(path: Path, findings: Any | None = None) -> int:
+    data = load_json(path)
+    if not isinstance(data, dict):
+        raise ValueError(f"{path}: payload must be an object")
+    comments = data.get("comments", [])
+    if not isinstance(comments, list):
+        raise ValueError(f"{path}: payload.comments must be an array")
+    return count_payload_comments_as_must_fix(comments, findings) + count_out_of_range_as_must_fix(data.get("body"), findings)
+
+
+def canonical_must_fix_count(findings: Any) -> int:
+    if not isinstance(findings, dict) or not isinstance(findings.get("findings"), list):
+        return -1
+    return sum(1 for finding in findings["findings"] if isinstance(finding, dict) and finding.get("severity") == "must_fix")
+
+
+def payload_expected_must_fix_count(findings: Any) -> int:
+    if not isinstance(findings, dict) or not isinstance(findings.get("findings"), list):
+        return -1
+    return len(payload_expected_must_fix_findings(findings))
 
 
 def sarif_must_fix_count(sarif: Any) -> int:
@@ -465,7 +667,7 @@ def validate_count_consistency(sarif: dict[str, Any], findings: Any | None, mark
     if markdown is not None:
         counts["markdown_must_fix"] = markdown_must_fix_count(markdown)
     if payload is not None:
-        counts["payload_must_fix"] = payload_must_fix_count(payload)
+        counts["payload_must_fix"] = payload_must_fix_count(payload, findings)
 
     full_counts = {key: value for key, value in counts.items() if key != "payload_must_fix"}
     if any(value < 0 for value in counts.values()) or len(set(full_counts.values())) != 1:
@@ -546,7 +748,7 @@ def main() -> int:
         if args.markdown:
             counts["markdown_must_fix"] = markdown_must_fix_count(args.markdown)
         if args.payload:
-            counts["payload_must_fix"] = payload_must_fix_count(args.payload)
+            counts["payload_must_fix"] = payload_must_fix_count(args.payload, findings)
         print(json.dumps(counts, ensure_ascii=False, sort_keys=True))
     else:
         print("VALID findings SARIF artifact")

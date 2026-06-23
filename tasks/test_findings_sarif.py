@@ -415,6 +415,249 @@ class FindingsSarifTest(unittest.TestCase):
         self.assertEqual(validated.returncode, 0, validated.stderr)
         self.assertEqual(json.loads(validated.stdout), {"canonical_must_fix": 1, "markdown_must_fix": 1, "payload_must_fix": 1, "sarif_must_fix": 1})
 
+    def test_payload_count_ignores_opted_in_non_must_inline_comments(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            findings_path = tmp_path / "findings.verified.json"
+            metadata_path = tmp_path / "metadata.json"
+            ranges_path = tmp_path / "pr.diff.ranges.txt"
+            sarif_path = tmp_path / "findings.sarif"
+            review_path = tmp_path / "review.md"
+            payload_path = tmp_path / "review-payload.json"
+            findings_path.write_text(json.dumps(canonical_artifact(), ensure_ascii=True), encoding="utf-8")
+            metadata_path.write_text(json.dumps(metadata(), ensure_ascii=True), encoding="utf-8")
+            ranges_path.write_text(range_text(), encoding="utf-8")
+            review_path.write_text("## 総評\n\nok\n\n## 重大な問題 (Must Fix)\n\n### `src/App.php:L10`\n", encoding="utf-8")
+            payload_path.write_text(
+                json.dumps(
+                    {
+                        "comments": [
+                            {"path": "src/App.php", "line": 10, "side": "RIGHT", "body": "🚨 **Must Fix**\n\n- 問題: x"},
+                            {"path": "src/App.php", "line": 12, "side": "RIGHT", "body": "- 内容: should fix"},
+                            {"path": "src/App.php", "line": 14, "side": "RIGHT", "body": "💬 **Nit**\n\n- 内容: nit"},
+                        ]
+                    },
+                    ensure_ascii=True,
+                ),
+                encoding="utf-8",
+            )
+            generated = subprocess.run(
+                [sys.executable, str(GENERATOR_PATH), "--findings", str(findings_path), "--metadata", str(metadata_path), "--ranges", str(ranges_path), "--output", str(sarif_path)],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(generated.returncode, 0, generated.stderr)
+            validated = subprocess.run(
+                [
+                    sys.executable,
+                    str(VALIDATOR_PATH),
+                    "--schema",
+                    str(SCHEMA_PATH),
+                    "--data",
+                    str(sarif_path),
+                    "--findings",
+                    str(findings_path),
+                    "--ranges",
+                    str(ranges_path),
+                    "--markdown",
+                    str(review_path),
+                    "--payload",
+                    str(payload_path),
+                    "--emit-counts",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assertEqual(validated.returncode, 0, validated.stderr)
+        self.assertEqual(json.loads(validated.stdout)["payload_must_fix"], 1)
+
+    def test_same_location_non_must_without_marker_does_not_satisfy_must_fix_payload_count(self) -> None:
+        must_fix = make_finding(
+            severity="must_fix",
+            category="bug",
+            title="`guard` must reject null input",
+            path="src/App.php",
+            line=10,
+            post_policy="inline",
+        )
+        should_fix = make_finding(
+            severity="should_fix",
+            category="bug",
+            title="`guard` should use clearer error text",
+            path="src/App.php",
+            line=10,
+            post_policy="body_summary",
+        )
+        artifact = canonical_artifact([must_fix, should_fix])
+        sarif = build_sarif(artifact, metadata=metadata(), ranges={"src/App.php": [(1, 20)]})
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            sarif_path = tmp_path / "findings.sarif"
+            findings_path = tmp_path / "findings.verified.json"
+            review_path = tmp_path / "review.md"
+            payload_path = tmp_path / "review-payload.json"
+            sarif_path.write_text(json.dumps(sarif), encoding="utf-8")
+            findings_path.write_text(json.dumps(artifact), encoding="utf-8")
+            review_path.write_text("## 重大な問題 (Must Fix)\n\n### `src/App.php:L10`\n", encoding="utf-8")
+            payload_path.write_text(
+                json.dumps(
+                    {
+                        "comments": [
+                            {
+                                "path": "src/App.php",
+                                "line": 10,
+                                "side": "RIGHT",
+                                "body": "- 内容: should fix at the same location",
+                            }
+                        ]
+                    },
+                    ensure_ascii=True,
+                ),
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(VALIDATOR_PATH),
+                    "--schema",
+                    str(SCHEMA_PATH),
+                    "--data",
+                    str(sarif_path),
+                    "--findings",
+                    str(findings_path),
+                    "--markdown",
+                    str(review_path),
+                    "--payload",
+                    str(payload_path),
+                    "--emit-counts",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assert_cli_invalid(completed, "must_fix_count_mismatch")
+        self.assertIn("payload_must_fix=0", completed.stderr)
+
+    def test_same_location_non_must_with_must_marker_does_not_satisfy_must_fix_payload_count(self) -> None:
+        must_fix = make_finding(
+            severity="must_fix",
+            category="bug",
+            title="`guard` must reject null input",
+            path="src/App.php",
+            line=10,
+            post_policy="inline",
+        )
+        should_fix = make_finding(
+            severity="should_fix",
+            category="bug",
+            title="`guard` should use clearer error text",
+            path="src/App.php",
+            line=10,
+            post_policy="body_summary",
+        )
+        artifact = canonical_artifact([must_fix, should_fix])
+        sarif = build_sarif(artifact, metadata=metadata(), ranges={"src/App.php": [(1, 20)]})
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            sarif_path = tmp_path / "findings.sarif"
+            findings_path = tmp_path / "findings.verified.json"
+            review_path = tmp_path / "review.md"
+            payload_path = tmp_path / "review-payload.json"
+            sarif_path.write_text(json.dumps(sarif), encoding="utf-8")
+            findings_path.write_text(json.dumps(artifact), encoding="utf-8")
+            review_path.write_text("## 重大な問題 (Must Fix)\n\n### `src/App.php:L10`\n", encoding="utf-8")
+            payload_path.write_text(
+                json.dumps(
+                    {
+                        "comments": [
+                            {
+                                "path": "src/App.php",
+                                "line": 10,
+                                "side": "RIGHT",
+                                "body": "🚨 **Must Fix**\n\n- 内容: should fix at the same location",
+                            }
+                        ]
+                    },
+                    ensure_ascii=True,
+                ),
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(VALIDATOR_PATH),
+                    "--schema",
+                    str(SCHEMA_PATH),
+                    "--data",
+                    str(sarif_path),
+                    "--findings",
+                    str(findings_path),
+                    "--markdown",
+                    str(review_path),
+                    "--payload",
+                    str(payload_path),
+                    "--emit-counts",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assert_cli_invalid(completed, "must_fix_count_mismatch")
+        self.assertIn("payload_must_fix=0", completed.stderr)
+
+    def test_marked_must_fix_comment_must_match_canonical_target_location(self) -> None:
+        artifact = canonical_artifact()
+        sarif = build_sarif(artifact, metadata=metadata(), ranges={"src/App.php": [(1, 20)]})
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            sarif_path = tmp_path / "findings.sarif"
+            findings_path = tmp_path / "findings.verified.json"
+            review_path = tmp_path / "review.md"
+            payload_path = tmp_path / "review-payload.json"
+            sarif_path.write_text(json.dumps(sarif), encoding="utf-8")
+            findings_path.write_text(json.dumps(artifact), encoding="utf-8")
+            review_path.write_text("## 重大な問題 (Must Fix)\n\n### `src/App.php:L10`\n", encoding="utf-8")
+            payload_path.write_text(
+                json.dumps(
+                    {
+                        "comments": [
+                            {
+                                "path": "src/App.php",
+                                "line": 12,
+                                "side": "RIGHT",
+                                "body": "🚨 **Must Fix**\n\n- 問題: wrong target",
+                            }
+                        ]
+                    },
+                    ensure_ascii=True,
+                ),
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(VALIDATOR_PATH),
+                    "--schema",
+                    str(SCHEMA_PATH),
+                    "--data",
+                    str(sarif_path),
+                    "--findings",
+                    str(findings_path),
+                    "--markdown",
+                    str(review_path),
+                    "--payload",
+                    str(payload_path),
+                    "--emit-counts",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assert_cli_invalid(completed, "must_fix_count_mismatch")
+        self.assertIn("payload_must_fix=0", completed.stderr)
+
     def test_count_consistency_allows_cluster_representative_payload(self) -> None:
         representative = make_finding(
             severity="must_fix",
@@ -481,6 +724,62 @@ class FindingsSarifTest(unittest.TestCase):
                         "comments": [],
                         "body": "ok\n\n## 行コメント不可 (diff 範囲外)\n\n### `src/App.php:L10`\n\n- 問題: x\n",
                     }
+                ),
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(VALIDATOR_PATH),
+                    "--schema",
+                    str(SCHEMA_PATH),
+                    "--data",
+                    str(sarif_path),
+                    "--findings",
+                    str(findings_path),
+                    "--markdown",
+                    str(review_path),
+                    "--payload",
+                    str(payload_path),
+                    "--emit-counts",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(json.loads(completed.stdout)["payload_must_fix"], 1)
+
+    def test_payload_count_ignores_out_of_range_non_must_body_entries(self) -> None:
+        artifact = canonical_artifact()
+        sarif = build_sarif(artifact, metadata=metadata(), ranges={"src/App.php": [(1, 20)]})
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            sarif_path = tmp_path / "findings.sarif"
+            findings_path = tmp_path / "findings.verified.json"
+            review_path = tmp_path / "review.md"
+            payload_path = tmp_path / "review-payload.json"
+            sarif_path.write_text(json.dumps(sarif), encoding="utf-8")
+            findings_path.write_text(json.dumps(artifact), encoding="utf-8")
+            review_path.write_text("## 重大な問題 (Must Fix)\n\n### `src/App.php:L10`\n", encoding="utf-8")
+            payload_path.write_text(
+                json.dumps(
+                    {
+                        "comments": [],
+                        "body": (
+                            "ok\n\n"
+                            "## 行コメント不可 (diff 範囲外)\n\n"
+                            "### `src/App.php:L10`\n\n"
+                            "🚨 **Must Fix**\n\n"
+                            "- 問題: x\n\n"
+                            "### `src/App.php:L12`\n\n"
+                            "- 内容: should fix\n\n"
+                            "### `src/App.php:L14`\n\n"
+                            "💬 **Nit**\n\n"
+                            "- 内容: nit\n"
+                        ),
+                    },
+                    ensure_ascii=True,
                 ),
                 encoding="utf-8",
             )
