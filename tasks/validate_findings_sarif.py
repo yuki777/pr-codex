@@ -173,10 +173,26 @@ def payload_must_fix_target_keys(findings: Any) -> tuple[set[PayloadKey], set[Pa
     return comment_keys, line_keys
 
 
+def payload_non_must_target_keys(findings: Any) -> tuple[set[PayloadKey], set[PayloadLineKey]]:
+    comment_keys: set[PayloadKey] = set()
+    line_keys: set[PayloadLineKey] = set()
+    if not isinstance(findings, dict) or not isinstance(findings.get("findings"), list):
+        return comment_keys, line_keys
+    for finding in findings["findings"]:
+        if not isinstance(finding, dict) or finding.get("severity") == "must_fix":
+            continue
+        for key in finding_payload_keys(finding):
+            comment_keys.add(key)
+            path, start_line, line, _side = key
+            line_keys.add((path, start_line, line))
+    return comment_keys, line_keys
+
+
 def count_payload_comments_as_must_fix(comments: list[Any], findings: Any | None) -> int:
     if findings is None:
         return len(comments)
     target_keys, _ = payload_must_fix_target_keys(findings)
+    ambiguous_keys, _ = payload_non_must_target_keys(findings)
     count = 0
     for comment in comments:
         marker = payload_severity_marker(comment.get("body") if isinstance(comment, dict) else None)
@@ -186,7 +202,7 @@ def count_payload_comments_as_must_fix(comments: list[Any], findings: Any | None
         if marker is not None:
             continue
         key = payload_comment_key(comment)
-        if key is not None and key in target_keys:
+        if key is not None and key in target_keys and key not in ambiguous_keys:
             count += 1
     return count
 
@@ -201,6 +217,7 @@ def count_out_of_range_as_must_fix(body: Any, findings: Any | None) -> int:
         return sum(1 for line in out_of_range.splitlines() if line.startswith("### "))
 
     _, target_line_keys = payload_must_fix_target_keys(findings)
+    _, ambiguous_line_keys = payload_non_must_target_keys(findings)
     count = 0
     current_heading = ""
     current_body: list[str] = []
@@ -216,7 +233,7 @@ def count_out_of_range_as_must_fix(body: Any, findings: Any | None) -> int:
         if marker is not None:
             return
         key = out_of_range_entry_key(current_heading)
-        if key is not None and key in target_line_keys:
+        if key is not None and key in target_line_keys and key not in ambiguous_line_keys:
             count += 1
 
     for line in out_of_range.splitlines():

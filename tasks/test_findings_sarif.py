@@ -473,6 +473,73 @@ class FindingsSarifTest(unittest.TestCase):
         self.assertEqual(validated.returncode, 0, validated.stderr)
         self.assertEqual(json.loads(validated.stdout)["payload_must_fix"], 1)
 
+    def test_same_location_non_must_without_marker_does_not_satisfy_must_fix_payload_count(self) -> None:
+        must_fix = make_finding(
+            severity="must_fix",
+            category="bug",
+            title="`guard` must reject null input",
+            path="src/App.php",
+            line=10,
+            post_policy="inline",
+        )
+        should_fix = make_finding(
+            severity="should_fix",
+            category="bug",
+            title="`guard` should use clearer error text",
+            path="src/App.php",
+            line=10,
+            post_policy="body_summary",
+        )
+        artifact = canonical_artifact([must_fix, should_fix])
+        sarif = build_sarif(artifact, metadata=metadata(), ranges={"src/App.php": [(1, 20)]})
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            sarif_path = tmp_path / "findings.sarif"
+            findings_path = tmp_path / "findings.verified.json"
+            review_path = tmp_path / "review.md"
+            payload_path = tmp_path / "review-payload.json"
+            sarif_path.write_text(json.dumps(sarif), encoding="utf-8")
+            findings_path.write_text(json.dumps(artifact), encoding="utf-8")
+            review_path.write_text("## 重大な問題 (Must Fix)\n\n### `src/App.php:L10`\n", encoding="utf-8")
+            payload_path.write_text(
+                json.dumps(
+                    {
+                        "comments": [
+                            {
+                                "path": "src/App.php",
+                                "line": 10,
+                                "side": "RIGHT",
+                                "body": "- 内容: should fix at the same location",
+                            }
+                        ]
+                    },
+                    ensure_ascii=True,
+                ),
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(VALIDATOR_PATH),
+                    "--schema",
+                    str(SCHEMA_PATH),
+                    "--data",
+                    str(sarif_path),
+                    "--findings",
+                    str(findings_path),
+                    "--markdown",
+                    str(review_path),
+                    "--payload",
+                    str(payload_path),
+                    "--emit-counts",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assert_cli_invalid(completed, "must_fix_count_mismatch")
+        self.assertIn("payload_must_fix=0", completed.stderr)
+
     def test_count_consistency_allows_cluster_representative_payload(self) -> None:
         representative = make_finding(
             severity="must_fix",
