@@ -84,6 +84,10 @@ PayloadKey = tuple[str, int | None, int, str]
 PayloadLineKey = tuple[str, int | None, int]
 
 
+def normalize_text(value: str) -> str:
+    return " ".join(value.split())
+
+
 def payload_severity_marker(body: Any) -> str | None:
     if not isinstance(body, str):
         return None
@@ -131,6 +135,15 @@ def out_of_range_entry_key(heading: str) -> PayloadLineKey | None:
     return (match.group("path"), start_line if match.group("end") else None, end_line)
 
 
+def finding_body_fragments(finding: dict[str, Any]) -> list[str]:
+    fragments = []
+    for key in ("problem", "reason", "suggestion"):
+        value = finding.get(key)
+        if isinstance(value, str) and value.strip():
+            fragments.append(normalize_text(value))
+    return fragments
+
+
 def payload_expected_must_fix_findings(findings: Any) -> list[dict[str, Any]]:
     if not isinstance(findings, dict) or not isinstance(findings.get("findings"), list):
         return []
@@ -173,6 +186,18 @@ def payload_must_fix_target_keys(findings: Any) -> tuple[set[PayloadKey], set[Pa
     return comment_keys, line_keys
 
 
+def payload_must_fix_fragments_by_key(findings: Any) -> tuple[dict[PayloadKey, list[str]], dict[PayloadLineKey, list[str]]]:
+    comment_fragments: dict[PayloadKey, list[str]] = {}
+    line_fragments: dict[PayloadLineKey, list[str]] = {}
+    for finding in payload_expected_must_fix_findings(findings):
+        fragments = finding_body_fragments(finding)
+        for key in finding_payload_keys(finding):
+            comment_fragments.setdefault(key, []).extend(fragments)
+            path, start_line, line, _side = key
+            line_fragments.setdefault((path, start_line, line), []).extend(fragments)
+    return comment_fragments, line_fragments
+
+
 def payload_non_must_target_keys(findings: Any) -> tuple[set[PayloadKey], set[PayloadLineKey]]:
     comment_keys: set[PayloadKey] = set()
     line_keys: set[PayloadLineKey] = set()
@@ -188,20 +213,57 @@ def payload_non_must_target_keys(findings: Any) -> tuple[set[PayloadKey], set[Pa
     return comment_keys, line_keys
 
 
+def marked_must_fix_matches_target(
+    body: Any,
+    key: PayloadKey | None,
+    target_keys: set[PayloadKey],
+    ambiguous_keys: set[PayloadKey],
+    fragments_by_key: dict[PayloadKey, list[str]],
+) -> bool:
+    if key is None or key not in target_keys:
+        return False
+    if key not in ambiguous_keys:
+        return True
+    if not isinstance(body, str):
+        return False
+    normalized_body = normalize_text(body)
+    return any(fragment in normalized_body for fragment in fragments_by_key.get(key, []))
+
+
+def marked_must_fix_body_matches_target(
+    body: Any,
+    key: PayloadLineKey | None,
+    target_keys: set[PayloadLineKey],
+    ambiguous_keys: set[PayloadLineKey],
+    fragments_by_key: dict[PayloadLineKey, list[str]],
+) -> bool:
+    if key is None or key not in target_keys:
+        return False
+    if key not in ambiguous_keys:
+        return True
+    if not isinstance(body, str):
+        return False
+    normalized_body = normalize_text(body)
+    return any(fragment in normalized_body for fragment in fragments_by_key.get(key, []))
+
+
 def count_payload_comments_as_must_fix(comments: list[Any], findings: Any | None) -> int:
     if findings is None:
         return len(comments)
     target_keys, _ = payload_must_fix_target_keys(findings)
     ambiguous_keys, _ = payload_non_must_target_keys(findings)
+    fragments_by_key, _ = payload_must_fix_fragments_by_key(findings)
     count = 0
     for comment in comments:
-        marker = payload_severity_marker(comment.get("body") if isinstance(comment, dict) else None)
+        body = comment.get("body") if isinstance(comment, dict) else None
+        marker = payload_severity_marker(body)
+        key = payload_comment_key(comment)
         if marker == "must_fix":
-            count += 1
+            if marked_must_fix_matches_target(body, key, target_keys, ambiguous_keys, fragments_by_key):
+                count += 1
             continue
         if marker is not None:
             continue
-        key = payload_comment_key(comment)
         if key is not None and key in target_keys and key not in ambiguous_keys:
             count += 1
     return count
@@ -218,6 +280,7 @@ def count_out_of_range_as_must_fix(body: Any, findings: Any | None) -> int:
 
     _, target_line_keys = payload_must_fix_target_keys(findings)
     _, ambiguous_line_keys = payload_non_must_target_keys(findings)
+    _, fragments_by_line_key = payload_must_fix_fragments_by_key(findings)
     count = 0
     current_heading = ""
     current_body: list[str] = []
@@ -226,13 +289,15 @@ def count_out_of_range_as_must_fix(body: Any, findings: Any | None) -> int:
         nonlocal count
         if not current_heading:
             return
-        marker = payload_severity_marker("\n".join(current_body).lstrip())
+        body = "\n".join(current_body).lstrip()
+        marker = payload_severity_marker(body)
+        key = out_of_range_entry_key(current_heading)
         if marker == "must_fix":
-            count += 1
+            if marked_must_fix_body_matches_target(body, key, target_line_keys, ambiguous_line_keys, fragments_by_line_key):
+                count += 1
             return
         if marker is not None:
             return
-        key = out_of_range_entry_key(current_heading)
         if key is not None and key in target_line_keys and key not in ambiguous_line_keys:
             count += 1
 
