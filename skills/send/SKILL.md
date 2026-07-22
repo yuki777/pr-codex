@@ -517,7 +517,7 @@ builder は `--include-should-fix` / `--include-nit` の active severity flags �
 
 ### Step 4.5: 投稿前 verifier pipeline (static Python + Codex semantic)
 
-投稿直前の検証を **4 stage verifier pipeline** として実行する。`--auto-submit` でもスキップしない。Step 5 第2ステップ（interactive の最終承認プロンプト、または auto_submit の自動続行判断）の直前で必ず実行する。`findings.verified.json` は必須入力であり、Markdown fallback は使わない。担当は二層に分かれる: `schema_validation` / `range_validation` / `payload_consistency` の 3 つの static stage は決定論的な Python validator / builder が担い、意味判断が必要な `semantic_preflight` だけを Codex CLI (GPT-5.5) が担う。**static stage が 1 つでも FAIL の場合は Codex を呼ばず fail-closed で中断する。** semantic 判定は Codex の structured output（`--output-schema` / `--output-last-message`、`schemas/preflight-semantic.v1.json`）で per-finding decisions として直接受け、`validate_preflight_result.py --from-semantic` が static 結果と合成して `preflight-result.json` を生成する（top-level verdict / stage status / counts は host 算出）。人間可読の `preflight-codex.md` は validated JSON から `--emit-markdown` で派生生成する。Markdown からの `RESULT_JSON` 抽出や final `VERDICT:` line との整合検証は行わない。
+投稿直前の検証を **4 stage verifier pipeline** として実行する。`--auto-submit` でもスキップしない。Step 5 第2ステップ（interactive の最終承認プロンプト、または auto_submit の自動続行判断）の直前で必ず実行する。`findings.verified.json` は必須入力であり、Markdown fallback は使わない。担当は二層に分かれる: `schema_validation` / `range_validation` / `payload_consistency` の 3 つの static stage は決定論的な Python validator / builder が担い、意味判断が必要な `semantic_preflight` だけを Codex CLI (GPT-5.6) が担う。**static stage が 1 つでも FAIL の場合は Codex を呼ばず fail-closed で中断する。** semantic 判定は Codex の structured output（`--output-schema` / `--output-last-message`、`schemas/preflight-semantic.v1.json`）で per-finding decisions として直接受け、`validate_preflight_result.py --from-semantic` が static 結果と合成して `preflight-result.json` を生成する（top-level verdict / stage status / counts は host 算出）。人間可読の `preflight-codex.md` は validated JSON から `--emit-markdown` で派生生成する。Markdown からの `RESULT_JSON` 抽出や final `VERDICT:` line との整合検証は行わない。
 
 #### 4 stage と担当
 
@@ -525,7 +525,7 @@ builder は `--include-should-fix` / `--include-nit` の active severity flags �
 | --- | --- | --- |
 | 1. `schema_validation` | Python (`validate_findings.py` / `validate_findings_sarif.py`) | `findings.verified.json` の schema / fingerprint 再計算 / `metadata.json` との PR context 一致（Step 3 で実行済み）、`findings.sarif` の schema validation、canonical ↔ `review.md` ↔ `review-payload.json` ↔ SARIF の Must Fix count 整合 |
 | 2. `range_validation` | Python (`build_review_payload.py`) | `payload.comments[]` の `path` / `line` が `metadata.json.files[]` と `pr.diff.ranges.txt` の hunk 範囲内にあること。builder が構築時に enforcement し、`--verify` の manifest digest 再確認で構築後の改竄・手編集を検出する |
-| 3. `semantic_preflight` | Codex (GPT-5.5) | payload 投稿対象の各 Must Fix finding の実在性判定（confirmed / refuted / insufficient_evidence の 3 値） |
+| 3. `semantic_preflight` | Codex (GPT-5.6) | payload 投稿対象の各 Must Fix finding の実在性判定（confirmed / refuted / insufficient_evidence の 3 値） |
 | 4. `payload_consistency` | Python (`build_review_payload.py`) | event 判定（'Must Fix が1件以上（body 末尾へ退避した範囲外 Must Fix も含む）→ REQUEST_CHANGES / Must Fix 0件かつ ci-status.json.state が failure または pending → COMMENT / Must Fix 0件かつ ci-status.json.state が success・skipped・未取得 → APPROVE'）、body セクション順（payload.event が APPROVE の場合は payload.body に '## 確認した範囲' を含む）、counts。builder が生成時に決定論的に保証し、`--verify` で再確認する |
 
 semantic preflight は payload 投稿対象（inline + body 退避）の Must Fix finding のみに適用する。Codex は各 Must Fix finding について「この指摘が誤りである可能性」を 1 つだけ探索し、3 値で判定する。「反証あり」と「調査不足」を区別する:
@@ -631,7 +631,7 @@ static stage の rule 語彙（`schema_validation`: `schema_version_mismatch` / 
 ```bash
 codex \
   --ask-for-approval never \
-  -m gpt-5.5 \
+  -m gpt-5.6-sol \
   -c sandbox_mode=read-only \
   exec \
   --ignore-user-config \
@@ -647,7 +647,8 @@ codex \
 
 フラグの説明:
 
-- `--ask-for-approval never` / `-m gpt-5.5` / `-c ...` は global flag のため、すべて `exec` の前に置く
+- `--ask-for-approval never` / `-m gpt-5.6-sol` / `-c ...` は global flag のため、すべて `exec` の前に置く
+- `-m gpt-5.6-sol` — semantic preflight の実行モデルを GPT-5.6 に固定する（#110 の担当替え。hunter の `-m gpt-5.5` とは独立）。素の `gpt-5.6` slug は ChatGPT アカウントの Codex では 400 で拒否されるため、動作確認済みの `gpt-5.6-sol` を使う
 - `-c sandbox_mode=read-only` — シェル実行を read-only サンドボックスに固定する。`--sandbox read-only` と等価だが、config override として明示するため `-c` に統一する
 - `--ignore-user-config` — 投稿前検証中のみ `$CODEX_HOME/config.toml` / `~/.codex/config.toml` を読み込まない。auth は引き続き `CODEX_HOME` を使うため、古い MCP 設定や無効な `model_reasoning_effort` による config 検証エラーから Step 4.5 preflight を切り離せる
 - `--skip-git-repo-check` / `-C, --cd` は `exec` サブコマンド側の option のため、`exec` の後ろ、かつ prompt の前に置く
