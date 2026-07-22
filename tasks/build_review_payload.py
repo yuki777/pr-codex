@@ -29,6 +29,16 @@ MANIFEST_COUNT_KEYS = (
 )
 MANIFEST_EVENTS = {"REQUEST_CHANGES", "COMMENT", "APPROVE"}
 GENERATED_AT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+00:00$")
+REPLAY_BYTE_ROLES = {
+    "findings",
+    "review",
+    "metadata",
+    "ranges",
+    "payload",
+    "ci_status",
+    "run_plan",
+    "ci_summary",
+}
 
 
 
@@ -497,32 +507,25 @@ def write_bytes(path: Path, data: bytes, label: str) -> None:
         raise BuildError(f"{label}: cannot write {path}: {exc}") from exc
 
 
-def build(args: argparse.Namespace) -> tuple[str, int, dict[str, int], int]:
-    snapshots: dict[str, str] = {}
-    findings_bytes = read_required(args.findings, "findings", snapshots)
-    review_bytes = read_required(args.review, "review", snapshots)
-    metadata_bytes = read_required(args.metadata, "metadata", snapshots)
-    ranges_bytes = read_required(args.ranges, "ranges", snapshots)
+def compose_payload(
+    findings_data: Any,
+    metadata_data: Any,
+    review_text: str,
+    ranges: dict[str, list[tuple[int, int]]],
+    ci_data: Any,
+    run_plan: Any,
+    ci_summary: str | None,
+    diff_available: bool,
+    include_should_fix: bool,
+    include_nit: bool,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, int], int]:
+    """Compose payload and semantic manifest fields without reading or writing files."""
 
-    findings_data = parse_required_json(findings_bytes, args.findings, "findings")
-    metadata_data = parse_required_json(metadata_bytes, args.metadata, "metadata")
-    review_text = decode_required(review_bytes, args.review, "review")
-    ranges_text = decode_required(ranges_bytes, args.ranges, "ranges")
     canonical_findings, must_fix_total = validate_build_inputs(findings_data, metadata_data, review_text)
     summary = markdown_section(review_text, "## 総評")
     if not summary:
         raise BuildError("review.md summary is empty or missing")
     good_points = markdown_section(review_text, "## 良い点")
-    ranges = parse_ranges(ranges_text, args.ranges)
-
-    ci_bytes = read_optional(args.ci_status, snapshots)
-    run_plan_bytes = read_optional(args.run_plan, snapshots)
-    ci_summary_bytes = read_optional(args.ci_summary, snapshots)
-    hash_optional(args.sarif, snapshots)
-    diff_available = hash_optional(args.diff, snapshots)
-    ci_data = parse_optional_json(ci_bytes)
-    run_plan = parse_optional_json(run_plan_bytes)
-    ci_summary = decode_optional(ci_summary_bytes)
     ci_state_value = ci_data.get("state") if isinstance(ci_data, dict) else None
     ci_state = ci_state_value if ci_state_value in {"success", "failure", "pending", "skipped"} else None
 
@@ -533,9 +536,9 @@ def build(args: argparse.Namespace) -> tuple[str, int, dict[str, int], int]:
         else set()
     )
     active_severities = {"must_fix"}
-    if args.include_should_fix:
+    if include_should_fix:
         active_severities.add("should_fix")
-    if args.include_nit:
+    if include_nit:
         active_severities.add("nit")
 
     non_representatives, members_by_representative = cluster_maps(findings_data, canonical_findings)
@@ -552,13 +555,13 @@ def build(args: argparse.Namespace) -> tuple[str, int, dict[str, int], int]:
         selected = severity == "must_fix"
         if severity == "should_fix":
             selected = (
-                args.include_should_fix
+                include_should_fix
                 and posting.get("post_policy") == "body_summary"
                 and posting.get("explanation_postable") is True
             )
         elif severity == "nit":
             selected = (
-                args.include_nit
+                include_nit
                 and posting.get("post_policy") == "body_summary"
                 and posting.get("explanation_postable") is True
             )
@@ -611,10 +614,6 @@ def build(args: argparse.Namespace) -> tuple[str, int, dict[str, int], int]:
         out_of_range,
     )
     payload = {"commit_id": metadata_data.get("head_sha"), "event": event, "body": body, "comments": comments}
-    payload_bytes = json_bytes(payload)
-    write_bytes(args.output, payload_bytes, "output")
-    snapshots[resolved(args.output)] = sha256_bytes(payload_bytes)
-
     comment_map = [
         {"comment_index": index, "finding_id": item.get("id"), "severity": item.get("severity")}
         for index, item in enumerate(ordered_inline)
@@ -640,6 +639,56 @@ def build(args: argparse.Namespace) -> tuple[str, int, dict[str, int], int]:
         "should_fix_inline": len(inline_by_severity["should_fix"]),
         "nit_inline": len(inline_by_severity["nit"]),
     }
+    manifest_core = {
+        "schema_version": "payload-manifest.v1",
+        "event": event,
+        "comment_map": comment_map,
+        "out_of_range": manifest_out_of_range,
+        "withheld": manifest_withheld,
+        "semantic_targets": semantic_targets,
+        "counts": counts,
+        "flags": {
+            "include_should_fix": include_should_fix,
+            "include_nit": include_nit,
+        },
+    }
+    return payload, manifest_core, counts, len(out_of_range)
+
+
+def build(args: argparse.Namespace) -> tuple[str, int, dict[str, int], int]:
+    snapshots: dict[str, str] = {}
+    findings_bytes = read_required(args.findings, "findings", snapshots)
+    review_bytes = read_required(args.review, "review", snapshots)
+    metadata_bytes = read_required(args.metadata, "metadata", snapshots)
+    ranges_bytes = read_required(args.ranges, "ranges", snapshots)
+
+    findings_data = parse_required_json(findings_bytes, args.findings, "findings")
+    metadata_data = parse_required_json(metadata_bytes, args.metadata, "metadata")
+    review_text = decode_required(review_bytes, args.review, "review")
+    ranges_text = decode_required(ranges_bytes, args.ranges, "ranges")
+    ranges = parse_ranges(ranges_text, args.ranges)
+
+    ci_bytes = read_optional(args.ci_status, snapshots)
+    run_plan_bytes = read_optional(args.run_plan, snapshots)
+    ci_summary_bytes = read_optional(args.ci_summary, snapshots)
+    hash_optional(args.sarif, snapshots)
+    diff_available = hash_optional(args.diff, snapshots)
+    payload, manifest_core, counts, out_of_range_count = compose_payload(
+        findings_data,
+        metadata_data,
+        review_text,
+        ranges,
+        parse_optional_json(ci_bytes),
+        parse_optional_json(run_plan_bytes),
+        decode_optional(ci_summary_bytes),
+        diff_available,
+        args.include_should_fix,
+        args.include_nit,
+    )
+
+    payload_bytes = json_bytes(payload)
+    write_bytes(args.output, payload_bytes, "output")
+    snapshots[resolved(args.output)] = sha256_bytes(payload_bytes)
 
     required_paths = {
         "findings": args.findings,
@@ -667,18 +716,19 @@ def build(args: argparse.Namespace) -> tuple[str, int, dict[str, int], int]:
             manifest_files[role] = {"path": artifact_key, "sha256": snapshots[artifact_key]}
 
     manifest = {
-        "schema_version": "payload-manifest.v1",
+        "schema_version": manifest_core["schema_version"],
         "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
-        "event": event,
-        "comment_map": comment_map,
-        "out_of_range": manifest_out_of_range,
-        "withheld": manifest_withheld,
-        "semantic_targets": semantic_targets,
-        "counts": counts,
+        "event": manifest_core["event"],
+        "comment_map": manifest_core["comment_map"],
+        "out_of_range": manifest_core["out_of_range"],
+        "withheld": manifest_core["withheld"],
+        "semantic_targets": manifest_core["semantic_targets"],
+        "counts": manifest_core["counts"],
+        "flags": manifest_core["flags"],
         "files": manifest_files,
     }
     write_bytes(args.manifest, json_bytes(manifest), "manifest")
-    return event, len(comments), counts, len(out_of_range)
+    return payload["event"], len(payload["comments"]), counts, out_of_range_count
 
 
 def verify_manifest(path: Path) -> list[str]:
@@ -700,6 +750,7 @@ def verify_manifest(path: Path) -> list[str]:
         "withheld": list,
         "semantic_targets": list,
         "counts": dict,
+        "flags": dict,
         "files": dict,
     }
     for key, expected_type in required_types.items():
@@ -786,9 +837,22 @@ def verify_manifest(path: Path) -> list[str]:
                 errors.append(f"{manifest_path}: counts.{key}: must be an integer >= 0")
             else:
                 valid_counts[key] = value
+    flags = manifest.get("flags")
+    valid_flags: dict[str, bool] = {}
+    if isinstance(flags, dict):
+        for key in ("include_should_fix", "include_nit"):
+            value = flags.get(key)
+            if not isinstance(value, bool):
+                errors.append(f"{manifest_path}: flags.{key}: must be a boolean")
+            else:
+                valid_flags[key] = value
+
 
     files = manifest.get("files")
-    verified_json_bytes: dict[str, bytes] = {}
+    verified_file_bytes: dict[str, bytes] = {}
+    verified_roles: set[str] = set()
+    verified_nonempty: dict[str, bool] = {}
+    verified_paths: dict[str, Path] = {}
     if isinstance(files, dict):
         for role in MANIFEST_REQUIRED_ROLES:
             if role not in files:
@@ -813,12 +877,14 @@ def verify_manifest(path: Path) -> list[str]:
                 continue
             target = Path(raw_path)
             try:
-                if role in {"findings", "payload"}:
+                if role in REPLAY_BYTE_ROLES:
                     target_bytes = target.read_bytes()
                     actual_digest = sha256_bytes(target_bytes)
+                    has_content = bool(target_bytes)
                 else:
                     target_bytes = None
                     actual_digest = sha256_file(target)
+                    has_content = target.stat().st_size > 0
             except FileNotFoundError:
                 errors.append(f"{raw_path}: missing")
             except Exception as exc:  # noqa: BLE001 - verification lists every unreadable artifact
@@ -826,11 +892,15 @@ def verify_manifest(path: Path) -> list[str]:
             else:
                 if actual_digest != expected_digest:
                     errors.append(f"{raw_path}: sha256 mismatch")
-                elif target_bytes is not None:
-                    verified_json_bytes[role] = target_bytes
+                    continue
+                verified_roles.add(role)
+                verified_nonempty[role] = has_content
+                verified_paths[role] = target
+                if target_bytes is not None:
+                    verified_file_bytes[role] = target_bytes
 
     payload_data: Any = None
-    payload_bytes = verified_json_bytes.get("payload")
+    payload_bytes = verified_file_bytes.get("payload")
     if payload_bytes is not None:
         try:
             payload_data = json.loads(payload_bytes.decode("utf-8"))
@@ -857,7 +927,7 @@ def verify_manifest(path: Path) -> list[str]:
             )
 
     findings_data: Any = None
-    findings_bytes = verified_json_bytes.get("findings")
+    findings_bytes = verified_file_bytes.get("findings")
     if findings_bytes is not None:
         try:
             findings_data = json.loads(findings_bytes.decode("utf-8"))
@@ -939,6 +1009,112 @@ def verify_manifest(path: Path) -> list[str]:
 
     if valid_counts.get("must_fix_total", 0) >= 1 and event != "REQUEST_CHANGES":
         errors.append(f"{manifest_path}: event must be REQUEST_CHANGES when must_fix_total is at least 1")
+    replay_ready = (
+        isinstance(files, dict)
+        and set(files) == verified_roles
+        and set(MANIFEST_REQUIRED_ROLES).issubset(verified_roles)
+        and len(valid_flags) == 2
+        and isinstance(payload_data, dict)
+    )
+    if replay_ready:
+        try:
+            replay_findings = parse_required_json(
+                verified_file_bytes["findings"],
+                verified_paths["findings"],
+                "findings",
+            )
+            replay_metadata = parse_required_json(
+                verified_file_bytes["metadata"],
+                verified_paths["metadata"],
+                "metadata",
+            )
+            replay_review = decode_required(
+                verified_file_bytes["review"],
+                verified_paths["review"],
+                "review",
+            )
+            replay_ranges_text = decode_required(
+                verified_file_bytes["ranges"],
+                verified_paths["ranges"],
+                "ranges",
+            )
+            replay_ranges = parse_ranges(replay_ranges_text, verified_paths["ranges"])
+            expected_payload, expected_manifest_core, _expected_counts, _expected_out_of_range = compose_payload(
+                replay_findings,
+                replay_metadata,
+                replay_review,
+                replay_ranges,
+                parse_optional_json(verified_file_bytes.get("ci_status")),
+                parse_optional_json(verified_file_bytes.get("run_plan")),
+                decode_optional(verified_file_bytes.get("ci_summary")),
+                verified_nonempty.get("diff", False),
+                valid_flags["include_should_fix"],
+                valid_flags["include_nit"],
+            )
+        except BuildError as exc:
+            for error in exc.errors:
+                errors.append(f"{manifest_path}: regeneration failed: {error}")
+        else:
+            if expected_payload != payload_data:
+                missing = object()
+                payload_keys = (set(expected_payload) | set(payload_data)) - {"comments"}
+                for key in sorted(payload_keys):
+                    expected_value = expected_payload.get(key, missing)
+                    actual_value = payload_data.get(key, missing)
+                    if expected_value != actual_value:
+                        errors.append(f"{manifest_path}: payload.{key} does not match regenerated payload")
+
+                expected_comments = expected_payload.get("comments")
+                actual_comments = payload_data.get("comments")
+                if isinstance(expected_comments, list) and isinstance(actual_comments, list):
+                    if len(expected_comments) != len(actual_comments):
+                        errors.append(
+                            f"{manifest_path}: payload.comments length ({len(actual_comments)}) "
+                            f"does not match regenerated payload ({len(expected_comments)})"
+                        )
+                    for index, (expected_comment, actual_comment) in enumerate(
+                        zip(expected_comments, actual_comments)
+                    ):
+                        if expected_comment == actual_comment:
+                            continue
+                        if not isinstance(expected_comment, dict) or not isinstance(actual_comment, dict):
+                            errors.append(
+                                f"{manifest_path}: payload.comments[{index}] "
+                                "does not match regenerated payload"
+                            )
+                            continue
+                        comment_fields = set(expected_comment) | set(actual_comment)
+                        for field in sorted(comment_fields):
+                            expected_value = expected_comment.get(field, missing)
+                            actual_value = actual_comment.get(field, missing)
+                            if expected_value != actual_value:
+                                errors.append(
+                                    f"{manifest_path}: payload.comments[{index}].{field} "
+                                    "does not match regenerated payload"
+                                )
+                else:
+                    errors.append(f"{manifest_path}: payload.comments does not match regenerated payload")
+
+            # File records were already checked role-by-role against their digests above.
+            for key, expected_value in expected_manifest_core.items():
+                actual_value = manifest.get(key)
+                if actual_value == expected_value:
+                    continue
+                if key == "comment_map" and isinstance(expected_value, list) and isinstance(actual_value, list):
+                    if len(expected_value) != len(actual_value):
+                        errors.append(
+                            f"{manifest_path}: comment_map length ({len(actual_value)}) "
+                            f"does not match regenerated manifest ({len(expected_value)})"
+                        )
+                    for index, (expected_entry, actual_entry) in enumerate(zip(expected_value, actual_value)):
+                        if expected_entry != actual_entry:
+                            errors.append(
+                                f"{manifest_path}: comment_map[{index}] "
+                                "does not match regenerated manifest"
+                            )
+                    continue
+                errors.append(f"{manifest_path}: {key} does not match regenerated manifest")
+
     return errors
 
 

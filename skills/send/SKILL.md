@@ -510,7 +510,7 @@ builder は以下のルールを実装している:
 
 body のセクション順は必ず `総評` → `## 良い点`（存在する場合）→ `## 確認した範囲`（`APPROVE` の場合）→ `## CI 状態`（CI 抑止 `COMMENT` の場合）→ `## 行コメント不可 (diff 範囲外)`（存在する場合）とする。diff 範囲内の Should Fix / Nit は body section ではなく `comments[]` の inline comment とする。diff 範囲外の Must Fix / Should Fix / Nit は body の `## 行コメント不可 (diff 範囲外)` へ退避する。
 
-payload は builder が `--output` で `~/claude-loop-pr-codex/$dir_name/review-payload.json` に整形 JSON（インデント 2）として書き出す。同時に `--manifest` で `payload-manifest.json`（`payload-manifest.v1`）を書き出し、`comment_index → finding_id` の対応表（`comment_map`）、body 退避一覧（`out_of_range`）、非公開一覧（`withheld`。local_only / suppress の Must Fix で、body にも載せない）、semantic 対象の全 Must Fix finding id（`semantic_targets`。cluster 非代表 member を含む）、件数（`counts`）、event、および role 付きの sha256 digest（`files`。required: findings / review / metadata / ranges / payload、optional: sarif / diff / ci_status / run_plan / ci_summary）を記録する。以降の工程は location 文字列による曖昧照合ではなく `comment_map` を使って finding と comment を対応付ける。`--verify` は digest 照合に加えて manifest 自体の構造・required role の存在・`comment_map` / `event` / `counts` / `semantic_targets` と payload / findings の再突き合わせを行い、manifest 改竄も検出する。
+payload は builder が `--output` で `~/claude-loop-pr-codex/$dir_name/review-payload.json` に整形 JSON（インデント 2）として書き出す。同時に `--manifest` で `payload-manifest.json`（`payload-manifest.v1`）を書き出し、`comment_index → finding_id` の対応表（`comment_map`）、body 退避一覧（`out_of_range`）、非公開一覧（`withheld`。local_only / suppress の Must Fix で、body にも載せない）、semantic 対象の全 Must Fix finding id（`semantic_targets`。cluster 非代表 member を含む）、active severity flags（`flags`）、件数（`counts`）、event、および role 付きの sha256 digest（`files`。required: findings / review / metadata / ranges / payload、optional: sarif / diff / ci_status / run_plan / ci_summary）を記録する。以降の工程は location 文字列による曖昧照合ではなく `comment_map` を使って finding と comment を対応付ける。`--verify` は manifest 構造・required role の存在・全 role の digest 照合に加えて、digest 検証済みの入力と `flags` から payload / manifest をドライラン再生成して現物と完全一致比較し（`generated_at` を除く）、payload と manifest の協調改竄も検出する。
 
 #### 許可 severity (active severity flags)
 
@@ -726,7 +726,7 @@ interactive mode では、ユーザーの応答が `yes` / `y` / `はい` 等の
 Step 6 の GitHub write の直前に、interactive / auto_submit のどちらでも以下を必ず実行する。これにより `--auto-submit` でも古い review を自動投稿せず、preflight 後にローカル artifact が書き換わった場合（HEAD SHA gate では検出できないローカル TOCTOU）も投稿しない。
 
 - いつ使うか: Step 5 で interactive の承認を得た直後、または auto_submit で最終投稿承認だけをスキップした直後
-- 判定条件: `build_review_payload.py --verify` が終了コード 0（`payload-manifest.json` の構造と required role の存在を検証し、記録された payload / findings / review.md / metadata / ranges / SARIF / diff の sha256 digest がすべて現物と一致し、`comment_map` / `event` / `counts` / `semantic_targets` が payload / findings と再突き合わせで整合する）
+- 判定条件: `build_review_payload.py --verify` が終了コード 0（`payload-manifest.json` の構造と required role の存在を検証し、記録された payload / findings / review.md / metadata / ranges / SARIF / diff の sha256 digest がすべて現物と一致し、digest 検証済みの入力から payload / manifest をドライラン再生成して `comment_map` / `event` / `counts` / `semantic_targets` / `withheld` / comments 内容が現物と完全一致する）
 - 次アクション: 成功なら二重投稿防止 gate へ。不一致なら preflight 後にローカル artifact が変更されたため中断し、Step 6 は実行しない
 
 ```bash

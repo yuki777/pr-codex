@@ -234,6 +234,7 @@ class BuildReviewPayloadTest(unittest.TestCase):
         )
         self.assertEqual(manifest["withheld"], [])
         self.assertEqual(manifest["semantic_targets"], ["must-1"])
+        self.assertEqual(manifest["flags"], {"include_should_fix": False, "include_nit": False})
         self.assertIn("built payload: event=REQUEST_CHANGES comments=1 (must_fix=1 should_fix=0 nit=0) out_of_range=0", completed.stdout)
 
     def test_builds_approve_body_with_deterministic_review_scope(self) -> None:
@@ -669,9 +670,16 @@ class BuildReviewPayloadTest(unittest.TestCase):
             self.assertIn("missing", tampered.stderr)
             self.assertNotIn("Traceback", tampered.stderr)
     def test_verify_rejects_manifest_semantic_tampering(self) -> None:
+        findings_data = artifact(
+            [
+                finding("must-1", start_line=10),
+                finding("must-2", start_line=20),
+                finding("body-only", start_line=200),
+            ]
+        )
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp)
-            completed, _, manifest_path, _ = self.run_build(directory, artifact([finding("must-1")]))
+            completed, payload_path, manifest_path, _ = self.run_build(directory, findings_data)
             self.assertEqual(completed.returncode, 0, completed.stderr)
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             verified = self.run_verify(manifest_path)
@@ -685,11 +693,32 @@ class BuildReviewPayloadTest(unittest.TestCase):
             changed_event["event"] = "APPROVE"
             changed_targets = copy.deepcopy(manifest)
             changed_targets["semantic_targets"] = []
+            changed_comment_id = copy.deepcopy(manifest)
+            changed_comment_id["comment_map"][0]["finding_id"] = "must-2"
+            changed_out_of_range_id = copy.deepcopy(manifest)
+            changed_out_of_range_id["out_of_range"][0]["finding_id"] = "not-canonical"
+            missing_flags = copy.deepcopy(manifest)
+            del missing_flags["flags"]
+
+            tampered_payload = json.loads(payload_path.read_text(encoding="utf-8"))
+            tampered_payload["comments"][0]["body"] = "coordinated payload tampering"
+            tampered_payload_path = directory / "tampered-payload.json"
+            write_json(tampered_payload_path, tampered_payload)
+            changed_payload = copy.deepcopy(manifest)
+            changed_payload["files"]["payload"] = {
+                "path": str(tampered_payload_path.resolve()),
+                "sha256": hashlib.sha256(tampered_payload_path.read_bytes()).hexdigest(),
+            }
+
             cases = (
                 ("missing-payload", missing_payload, "files.payload"),
                 ("comment-map", missing_comment, "payload.comments"),
                 ("event", changed_event, "payload.event"),
                 ("semantic-targets", changed_targets, "semantic_targets"),
+                ("comment-id", changed_comment_id, "comment_map[0]"),
+                ("payload-body", changed_payload, "payload.comments[0].body"),
+                ("out-of-range-id", changed_out_of_range_id, "out_of_range"),
+                ("missing-flags", missing_flags, "flags"),
             )
             for name, altered_manifest, expected_error in cases:
                 with self.subTest(name=name):
