@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 README = ROOT / "README.md"
 SEND_SKILL = ROOT / "skills" / "send" / "SKILL.md"
 REVIEW_SKILL = ROOT / "skills" / "review" / "SKILL.md"
-REVIEW_CRITERIA = ROOT / "skills" / "review" / "REVIEW_CRITERIA.md"
+EXPLAINER_POLICY = ROOT / "skills" / "review" / "EXPLAINER_POLICY.md"
 WORKFLOW = ROOT / ".github" / "workflows" / "validate-run-plan.yml"
 
 
@@ -57,8 +57,8 @@ class Issue37DocsTest(unittest.TestCase):
         ):
             self.assertIn(snippet, text)
 
-    def test_review_criteria_documents_post_policy_to_sarif_suppressions(self) -> None:
-        text = REVIEW_CRITERIA.read_text(encoding="utf-8")
+    def test_explainer_policy_documents_post_policy_to_sarif_suppressions(self) -> None:
+        text = EXPLAINER_POLICY.read_text(encoding="utf-8")
         for snippet in (
             "SARIF 派生成果物の公開境界",
             "local_only per pr-codex post_policy",
