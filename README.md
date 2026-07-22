@@ -14,7 +14,7 @@ GitHub PRを **Claude Code** と **Codex CLI** の2者レビュー方式で自�
 ## 必要なもの
 
 - Claude Code
-- Codex CLI (`codex-cli 0.145.0` 以上、`codex --ask-for-approval never -m gpt-5.5 ... exec --output-schema ... --output-last-message ...` が使えること)
+- Codex CLI (`codex-cli 0.145.0` 以上、`codex --ask-for-approval never -m gpt-5.5 ... exec --output-schema ... --output-last-message ...` が使えること。send Step 4.5 の semantic preflight では `-m gpt-5.6-sol` (GPT-5.6) を使う)
 - GitHub CLI (`gh`)
 - `jq`（SKILL.md 内の全テンプレートで利用する。macOS 標準では未インストール）
 - `python3`（同梱 validator / eval runner で `findings.candidates.json` / `findings.verified.json` / `status.json` / `preflight-result.json` / `findings.sarif` / fixture scoring artifact を検証するため）
@@ -71,7 +71,7 @@ cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
 
 - `--permission-mode auto` — `/loop` を非対話で回すために auto mode で起動する。auto mode は分類器による安全チェックでツール実行を自動承認またはブロックするため、すべての操作が無条件に通るわけではない。本スキルはテンプレートに明示した操作だけを実行し、ローカル書き込みは `~/claude-loop-pr-codex/` 配下の成果物作成に限定する
 - `--effort max` — Claude Code 本体の推論設定。`/pr-codex:review` の depth policy とは別軸
-- Codex CLI 側のレビューと投稿前検証は、スキル内で `-m gpt-5.5` を指定して実行する。レビュー実行では `model_reasoning_effort` をスキル側で上書きせず、ユーザー config の値を使う。投稿前検証は `--ignore-user-config` でユーザー config から切り離す
+- Codex CLI 側のレビュー (hunter) は、スキル内で `-m gpt-5.5` を指定して実行する。send Step 4.5 の semantic preflight は #110 の担当替えに従い `-m gpt-5.6-sol` (GPT-5.6) を指定する（素の `gpt-5.6` slug は ChatGPT アカウントの Codex では拒否されるため）。レビュー実行では `model_reasoning_effort` をスキル側で上書きせず、ユーザー config の値を使う。投稿前検証は `--ignore-user-config` でユーザー config から切り離す
 - Codex CLI は `codex-cli 0.145.0` 以降のみ対応する。旧バージョン向けテンプレートは打ち切り、`--sandbox read-only` / `--color never` / `--ephemeral` を並べる旧形式ではなく、`-c sandbox_mode=read-only` と preflight 限定の `--ignore-user-config` を使う。hunter (review Step 4b) と preflight verifier (send Step 4.5) は `--output-schema` / `--output-last-message` による structured output で JSON を直接受ける（0.145.0 で動作確認済み）
 
 
@@ -238,14 +238,13 @@ python3 $CLAUDE_PLUGIN_ROOT/tasks/episode_memory.py retrieve \
 ```
 
 `/pr-codex:send` の挙動:
-
 1. 位置引数なしの場合は `~/claude-loop-pr-codex/` 配下から `status.json` が `state:completed` でかつ `findings.verified.json` / `review.md` が存在するディレクトリを1件選定する（名前昇順の先頭1件）。PR URL / PR 番号が指定された場合は、その PR に対応する completed レビューだけを対象にし、auto 選定は行わない。PR 番号のみ指定が複数 directory に一致した場合は中断して PR URL 指定を案内し、指定 PR が `sent/` にしか無い場合は既に send 済みとして中断する
-2. `findings.verified.json` を必須の一次入力として `Must Fix` / `Should Fix` / `Nit` の投稿方針を抽出し、`review.md` から `## 総評` / `## 良い点` を body に使う（F13 以降は Markdown parser fallback へ切り替えず、欠落・schema 不整合なら中断する。root-cause cluster がない場合は Must Fix 件数も完全一致を要求し、cluster がある場合は canonical / Markdown / SARIF は全 finding 件数、`review-payload.json` は representative comment 件数として検証する）
+2. `findings.verified.json` を必須の一次入力として、`tasks/build_review_payload.py` が `Must Fix` / `Should Fix` / `Nit` の投稿方針の抽出、`review.md` の `## 総評` / `## 良い点` の body 反映、行範囲検証（`metadata.json.files[]` メンバーシップ込み）、event 判定、body セクション構築を決定論的に行い、`review-payload.json` と `payload-manifest.json`（`comment_index → finding_id` の対応表、semantic 対象の全 Must Fix id (`semantic_targets`)、非公開一覧 (`withheld`)、active severity flags、入力 artifact の role 付き sha256 digest）を生成する。security の Must Fix のうち `disclosure_policy: local_only` または `post_policy: local_only / suppress` のものは公開 payload のどこにも載せず `withheld` に記録だけ残す（非 security の Must Fix にこれらの post_policy があれば posting contract 違反として中断する。F13 以降は Markdown parser fallback へ切り替えず、欠落・schema 不整合なら中断する。root-cause cluster がない場合は Must Fix 件数も完全一致を要求し、cluster がある場合は canonical / Markdown / SARIF は全 finding 件数、`review-payload.json` は representative comment 件数として検証する）
 3. `--include-should-fix` 指定時は `Should Fix` のうち `post_policy: body_summary` かつ `explanation_postable: true` の候補を inline comment に含める。未指定なら含めない
 4. `--include-nit` 指定時は `Nit` のうち `post_policy: body_summary` かつ `explanation_postable: true` の候補を inline comment に含める。`local_only` / `suppress` / `explanation_postable: false` の Nit は投稿しない。`nits.md` は Nit がある場合のみ local artifact として残す。diff 範囲外のものは body の `## 行コメント不可 (diff 範囲外)` へ退避する
-5. Step 4.5 の verifier pipeline を schema / range / semantic / payload consistency の 4 stage で実行し、Codex の structured output（`--output-schema` / `--output-last-message`）で `preflight-result.json` を直接保存して cross-field validation を通し、validated JSON から人間可読の `preflight-codex.md` を派生生成する。schema stage では `findings.sarif` の schema validation と `findings.verified.json` ↔ `review.md` ↔ `review-payload.json` ↔ `findings.sarif` の Must Fix count 整合性を検証する。root-cause cluster がある場合、canonical / Markdown / SARIF は全 Must Fix finding 数を保持し、`review-payload.json` は representative inline comment 数へ減ることを許可する。semantic stage では preflight prompt に埋め込まれた active severity flags（`{INCLUDE_SHOULD_FIX}` / `{INCLUDE_NIT}`）を根拠に、Must Fix の反証、オプション未指定時の Should Fix / Nit payload 混入禁止、`--include-should-fix` / `--include-nit` 指定時の inline 許可 severity、diff 範囲外または LEFT-side 非対応で body 退避された opted-in finding の valid exclusion を検証する
+5. Step 4.5 の verifier pipeline を schema / range / semantic / payload consistency の 4 stage で実行する。`schema_validation` / `range_validation` / `payload_consistency` の 3 つの static stage は Python validator / builder（`validate_findings.py` / `validate_findings_sarif.py` / `build_review_payload.py --verify`）が担い、static FAIL の場合は Codex を呼ばず fail-closed で中断する。schema stage では `findings.sarif` の schema validation と `findings.verified.json` ↔ `review.md` ↔ `review-payload.json` ↔ `findings.sarif` の Must Fix count 整合性を検証する（root-cause cluster がある場合、canonical / Markdown / SARIF は全 Must Fix finding 数を保持し、`review-payload.json` は representative inline comment 数へ減ることを許可する）。オプション未指定時の Should Fix / Nit payload 混入禁止、`--include-should-fix` / `--include-nit` 指定時の inline 許可 severity、diff 範囲外または LEFT-side 非対応で body 退避された opted-in finding の valid exclusion は、builder の active severity flags 適用と `payload-manifest.json` の `comment_map` で決定論的に保証する。`--verify` は digest 照合に加えて manifest 構造・`comment_map` / `event` / `counts` / `semantic_targets` の再突き合わせも行い、manifest 自体の改竄を検出する。`semantic_preflight` だけを Codex (GPT-5.6、`-m gpt-5.6-sol`) が担い、canonical の全 Must Fix finding（cluster 非代表 member・withheld を含む `semantic_targets`）を structured output（`schemas/preflight-semantic.v1.json`）で `confirmed` / `refuted` / `insufficient_evidence` の 3 値判定する（Must Fix の反証探索。反証成功 = 不採用）。Must Fix 0 件なら Codex preflight は skip する。`validate_preflight_result.py --from-semantic` が static 結果と合成して `preflight-result.json`（verdict / stage status / counts は host 算出）を生成し、validated JSON から人間可読の `preflight-codex.md` を派生生成する
 6. GitHub Reviews API への payload サマリをユーザーに提示する。引数なしは明示的な承認を得る。`--auto-submit` は最終承認 prompt なしで次へ進む
-7. 投稿直前に `review-response.json` の `.html_url` が未設定であることを確認し、現在の PR head を再取得して `metadata.json.head_sha` と一致することを確認する
+7. 投稿直前に `build_review_payload.py --verify` で `payload-manifest.json` の構造・sha256 digest・ドライラン再生成との完全一致を再確認し（ローカル TOCTOU と manifest 協調改竄の防止）、`review-response.json` の `.html_url` が未設定であることを確認し、現在の PR head を再取得して `metadata.json.head_sha` と一致することを確認する
 8. 承認後または `--auto-submit` の safety gate 通過後、`gh api --method POST .../reviews` で投稿（`event` は Must Fix ありなら `REQUEST_CHANGES`、Must Fix 0 件なら `APPROVE`。ただし `ci-status.json.state` が `failure` / `pending` の場合は自動 `APPROVE` を抑止して `COMMENT` に落とし、CI 状態を body と Step 5 に表示する）
 9. 投稿成功後、対象ディレクトリを `~/claude-loop-pr-codex/sent/$org-$repo-$pr-$head_sha_short/` に移動する（同一 PR でも HEAD 更新後の再投稿履歴が衝突しないよう、`head_sha` の先頭 7 文字を suffix に付ける）
 10. GitHub 投稿と `sent/` 移動が両方成功した場合だけ、成功報告後に `/clear` を単独で実行して新しい conversation へ移る。失敗時、承認拒否時、verifier FAIL、safety gate 中断、または `sent/` 移動失敗時には `/clear` しない
@@ -362,9 +361,12 @@ Runtime artifacts:
   │     ├── validation-report.json # validation の副成果物（canonical findings とは分離）
   │     ├── review-rounds.json    # F5 refine/challenge/verify round artifact。verifier FAIL 候補は local_only で保持
   │     ├── review.md             # 統合レビュー（最終成果物）
-  │     ├── preflight-prompt.md   # /pr-codex:send Step 4.5 の Codex verifier prompt
+  │     ├── review-payload.json   # /pr-codex:send Step 4 の builder が生成する投稿予定 payload
+  │     ├── payload-manifest.json # /pr-codex:send Step 4 の comment_map / counts / sha256 digest
+  │     ├── preflight-prompt.md   # /pr-codex:send Step 4.5 の Codex semantic prompt
+  │     ├── preflight-semantic.json # /pr-codex:send Step 4.5 の Codex semantic decisions
   │     ├── preflight-codex.md    # /pr-codex:send Step 4.5 の人間可読 verifier 結果
-  │     ├── preflight-result.json # /pr-codex:send Step 4.5 の構造化 verifier 結果
+  │     ├── preflight-result.json # /pr-codex:send Step 4.5 の構造化 verifier 結果（--from-semantic / --semantic-skipped で合成）
   │     ├── preflight-codex.log
   │     ├── nits.md               # Nit がある場合のみ。PR には投稿しない控え
   │     ├── claude.log
@@ -468,11 +470,11 @@ mv ~/claude-loop-pr-codex/sent/yuki777-pr-codex-24 \
 
 ## Preflight result schema
 
-- `/pr-codex:send` Step 4.5 は `schemas/preflight-result.v1.json` に従う `preflight-result.json` を出力する
+- `/pr-codex:send` Step 4.5 は `schemas/preflight-result.v1.json` に従う `preflight-result.json` を出力する。Codex が直接出力するのは `schemas/preflight-semantic.v1.json` に従う per-finding の semantic decisions（`confirmed` / `refuted` / `insufficient_evidence` の 3 値）だけで、`tasks/validate_preflight_result.py --from-semantic` が static stage 結果と合成して verdict / stage status / counts を host 側で算出する。Must Fix 0 件時は `--semantic-skipped` で Codex を呼ばずに合成する
 - `verdict` は `PASS` / `FAIL` のみ。`PASS_WITH_WARNINGS` は導入せず、将来の非ブロッキング警告は `violations[].severity = "warning"` として表現する
-- `stages` は `schema_validation` / `range_validation` / `semantic_preflight` / `payload_consistency` の 4 stage を必ず含む
-- `violations[]` は `auto_fixable` と `requires_review_regeneration` を持ち、send 側で直せる payload ずれ（行範囲・event・body など）と review 再生成が必要な semantic/schema 不整合を分離する。`findings.sarif` schema validation 失敗や Must Fix count の不整合は `schema_validation` stage の `must_fix_count_mismatch` として FAIL にする。root-cause cluster がない場合は従来の `canonical_must_fix != markdown_must_fix != payload_must_fix != sarif_must_fix` 型の不一致を拒否し、cluster がある場合は `canonical_must_fix == markdown_must_fix == sarif_must_fix` かつ `payload_must_fix == representative_must_fix` を要求する
-- `tasks/validate_preflight_result.py` は structured output で直接保存された `preflight-result.json` の cross-field validation と、validated JSON からの人間可読 `preflight-codex.md` 生成（`--emit-markdown`）を stdlib-only で行う
+- `stages` は `schema_validation` / `range_validation` / `semantic_preflight` / `payload_consistency` の 4 stage を必ず含む。`schema_validation` / `range_validation` / `payload_consistency` は Python validator / builder が担う static stage、`semantic_preflight` だけが Codex の意味判断
+- `violations[]` は `auto_fixable` と `requires_review_regeneration` を持つ。semantic 判定の `refuted` は `counterargument_succeeded`、`insufficient_evidence` は `insufficient_evidence` rule に写像され、どちらも review 再生成が必要（retry しない）。`findings.sarif` schema validation 失敗や Must Fix count の不整合は static stage の Python validator が投稿前に検出する（root-cause cluster がない場合は従来の `canonical_must_fix != markdown_must_fix != payload_must_fix != sarif_must_fix` 型の不一致を拒否し、cluster がある場合は `canonical_must_fix == markdown_must_fix == sarif_must_fix` かつ `payload_must_fix == representative_must_fix` を要求する）
+- `tasks/validate_preflight_result.py` は `preflight-result.json` の合成（`--from-semantic` / `--semantic-skipped`）と cross-field validation、validated JSON からの人間可読 `preflight-codex.md` 生成（`--emit-markdown`）を stdlib-only で行う
 
 ### fingerprint 正準アルゴリズム
 
@@ -481,6 +483,8 @@ mv ~/claude-loop-pr-codex/sent/yuki777-pr-codex-24 \
 3. `normalized_title`: `title` に Unicode NFKC 正規化 → Unicode lowercase → 連続空白を ASCII space 1 個へ畳み込み → 前後 trim → 末尾の Unicode punctuation（General Category が P で始まる文字）をなくなるまで除去 → 最後に右 trim、の順で処理する
 4. `primary_symbol`: `title` 内で最初に backtick で囲まれた symbol を前後 trim して使う。存在しない場合は空文字列にする
 5. `id = fingerprint = lowercase_hex(sha256(path + "\x1f" + category + "\x1f" + normalized_title + "\x1f" + (primary_symbol || "")))`
+
+fingerprint は LLM では計算できないため、`/pr-codex:review` Step 4c は findings 構築前に `tasks/validate_findings.py --emit-fingerprints --data fingerprint-material.json` で正値を取得する（`--emit-fingerprints` は path / category / title の素材配列から normalized_title / primary_symbol / fingerprint を返す）
 
 ## バージョンアップ（作者向け）
 

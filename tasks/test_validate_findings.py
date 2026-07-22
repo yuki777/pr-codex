@@ -104,6 +104,23 @@ class ValidateFindingsTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    def run_emit_fingerprints(self, payload: object) -> subprocess.CompletedProcess[str]:
+        with tempfile.TemporaryDirectory() as tmp:
+            data_path = Path(tmp) / "findings.json"
+            data_path.write_text(json.dumps(payload, ensure_ascii=True), encoding="utf-8")
+            return subprocess.run(
+                [
+                    sys.executable,
+                    str(VALIDATOR_PATH),
+                    "--data",
+                    str(data_path),
+                    "--emit-fingerprints",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
 
     def assert_invalid_without_crash(
         self,
@@ -592,6 +609,78 @@ class ValidateFindingsTest(unittest.TestCase):
         artifact = copy.deepcopy(valid_artifact())
         artifact["findings"][0]["id"] = "0" * 64
         self.assert_invalid_without_crash(artifact, "id must equal fingerprint")
+
+    def test_emit_fingerprints_from_object(self) -> None:
+        finding = {
+            "location": {"path": "src/example.py"},
+            "category": "bug",
+            "title": "`render` returns the wrong value.",
+        }
+        completed = self.run_emit_fingerprints({"findings": [finding]})
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(
+            json.loads(completed.stdout),
+            [
+                {
+                    "index": 0,
+                    "path": "src/example.py",
+                    "category": "bug",
+                    "title": "`render` returns the wrong value.",
+                    "normalized_title": "`render` returns the wrong value",
+                    "primary_symbol": "render",
+                    "fingerprint": compute_fingerprint(finding),
+                }
+            ],
+        )
+
+    def test_emit_fingerprints_accepts_top_level_array(self) -> None:
+        finding = {
+            "location": {"path": "src/array.py"},
+            "category": "correctness",
+            "title": "Array input works",
+        }
+        completed = self.run_emit_fingerprints([finding])
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(json.loads(completed.stdout)[0]["fingerprint"], compute_fingerprint(finding))
+
+    def test_emit_fingerprints_uses_empty_strings_for_missing_fields(self) -> None:
+        completed = self.run_emit_fingerprints([{}])
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(
+            json.loads(completed.stdout),
+            [
+                {
+                    "index": 0,
+                    "path": "",
+                    "category": "",
+                    "title": "",
+                    "normalized_title": "",
+                    "primary_symbol": "",
+                    "fingerprint": compute_fingerprint({}),
+                }
+            ],
+        )
+
+    def test_emit_fingerprints_rejects_invalid_container_types(self) -> None:
+        for payload in ({"findings": {}}, [42], "findings"):
+            with self.subTest(payload=payload):
+                completed = self.run_emit_fingerprints(payload)
+                self.assertEqual(completed.returncode, 1)
+                self.assertIn("INVALID", completed.stderr)
+                self.assertNotIn("Traceback", completed.stderr)
+
+    def test_cli_requires_schema_outside_emit_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            data_path = Path(tmp) / "findings.verified.json"
+            data_path.write_text(json.dumps(valid_artifact()), encoding="utf-8")
+            completed = subprocess.run(
+                [sys.executable, str(VALIDATOR_PATH), "--data", str(data_path)],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn("--schema is required unless --emit-fingerprints is used", completed.stderr)
 
 
 if __name__ == "__main__":

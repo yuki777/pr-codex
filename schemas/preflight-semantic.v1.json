@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/yuki777/pr-codex/main/schemas/preflight-semantic.v1.json",
+  "title": "pr-codex send preflight semantic decisions v1",
+  "description": "Per-finding decisions emitted directly by Codex semantic_preflight via --output-schema; the host-side validate_preflight_result.py --from-semantic mode composes them into preflight-result.v1.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "decisions"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "enum": [
+        "preflight-semantic.v1"
+      ]
+    },
+    "decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "finding_id",
+          "decision",
+          "counterargument",
+          "note"
+        ],
+        "properties": {
+          "finding_id": {
+            "type": "string"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "confirmed",
+              "refuted",
+              "insufficient_evidence"
+            ]
+          },
+          "counterargument": {
+            "type": "string",
+            "description": "1-2 sentences: strongest counterargument found; for confirmed, why it was rejected"
+          },
+          "note": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

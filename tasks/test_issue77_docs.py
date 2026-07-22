@@ -51,7 +51,7 @@ class Issue77DocsTest(unittest.TestCase):
         step45 = section(text, "### Step 4.5:", "### Step 5:")
         self.assertIn("`--auto-submit` でもスキップしない", step45)
         self.assertIn("`preflight-result.json.verdict == \"PASS\"`", step45)
-        self.assertIn("--output-schema $preflight_schema_path", step45)
+        self.assertIn("--output-schema $semantic_schema_path", step45)
         self.assertIn("同一 prompt の 3 回リトライはしない", step45)
         self.assertNotIn("### RESULT_JSON", step45)
 

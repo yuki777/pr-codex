@@ -1096,7 +1096,29 @@ python3 "$plugin_root/tasks/merge_hunter_results.py" --schema "$plugin_root/sche
    - `producer.name` は `pr-codex`、`producer.version` は Step 4 前処理で `$CLAUDE_PLUGIN_ROOT/.claude-plugin/plugin.json` から読んだ `$plugin_version`、`producer.run_id` は `<org>-<repository>-<pr_number>-<head_sha>` のような再生成可能な値にする
    - `pr.repository` は `metadata.json.repository_full_name`（base repo の owner/repo 形式。GitHub review 投稿先と同一）を使い、`pr.number` / `pr.base_sha` / `pr.head_sha` も `metadata.json` から埋める。fork PR でも `.head.repo.full_name` は使わない。`merge_commit_sha` は `metadata.json.merge_commit_sha` が `null` でない場合のみ入れる
    - canonical finding では **`source_agent` 単数形は使わず**、`source_agents[]` と `merged_from[]` を使う。`merged_from[]` には統合元 candidate の `source_ref`（`merge_hunter_results.py` が採番する `claude-review.json#candidates[0]` 形式）や `candidate_id` など、`findings.candidates.json` まで由来追跡できる文字列を入れる。生 Markdown レビューの見出し形式は hunter の structured output 化により廃止済みであり、使わない
-   - `id` は M1 では **`fingerprint` と完全に同じ値**に固定する。`fingerprint` は README の「fingerprint 正準アルゴリズム」で定義された `lowercase_hex(sha256(path + "\x1f" + category + "\x1f" + normalized_title + "\x1f" + (primary_symbol || "")))` だけを使う。別のハッシュ、UUID、連番、`run_id` 付き ID は使わない
+   - `id` は M1 では **`fingerprint` と完全に同じ値**に固定する。`fingerprint` は README の「fingerprint 正準アルゴリズム」で定義された `lowercase_hex(sha256(path + "\x1f" + category + "\x1f" + normalized_title + "\x1f" + (primary_symbol || "")))` だけを使う。別のハッシュ、UUID、連番、`run_id` 付き ID は使わない。**fingerprint はメインコンテキストで計算・推測せず**、findings 構築前に以下のテンプレートで同梱 CLI から正値を取得する。`fingerprint-material.json` は `{"findings": [{"location": {"path": ...}, "category": ..., "title": ...}, ...]}` 形式で採用予定 finding の素材だけを Write ツールで書き出し（`file_path` は実値の絶対パス）、CLI が返す配列の `fingerprint` / `normalized_title` / `primary_symbol` をそのまま `id` / `fingerprint` に採用する:
+
+```bash
+plugin_root="${CLAUDE_PLUGIN_ROOT:-$(python3 - <<'PY'
+import os
+from pathlib import Path
+roots = []
+if os.environ.get("CLAUDE_CODE_PLUGIN_CACHE_DIR"):
+    roots.append(Path(os.environ["CLAUDE_CODE_PLUGIN_CACHE_DIR"]).expanduser())
+if os.environ.get("CLAUDE_CONFIG_DIR"):
+    roots.append(Path(os.environ["CLAUDE_CONFIG_DIR"]).expanduser() / "plugins" / "cache")
+roots.append(Path.home() / ".claude" / "plugins" / "cache")
+markers = []
+for root in roots:
+    markers.extend(root.glob("**/pr-codex/tasks/validate_findings.py"))
+if not markers:
+    raise SystemExit("CLAUDE_PLUGIN_ROOT is unset and pr-codex plugin root was not found")
+marker = max((m.resolve() for m in markers), key=lambda p: (p.stat().st_mtime_ns, str(p)))
+print(marker.parents[1])
+PY
+)}"
+python3 "$plugin_root/tasks/validate_findings.py" --emit-fingerprints --data ~/claude-loop-pr-codex/$org-$repository-$pr_number/fingerprint-material.json
+```
    - `normalized_title` は `title` を Unicode NFKC → Unicode lowercase → 連続空白を ASCII space 1 個へ畳み込み → 前後 trim → 末尾の Unicode punctuation（General Category P*）をなくなるまで除去 → 最後に右 trim、の順で正規化する。`primary_symbol` は `title` 内で最初に backtick で囲まれた symbol を前後 trim した値に固定し、存在しない場合は空文字列にする
    - `location` は `{path, start_line, end_line?, side, diff_hunk_ref?}`。本 workflow では head 基準のため `side` は通常 `RIGHT` を使う
    - `category` は schema enum の `bug` / `security` / `performance` / `tests` / `design` / `code_quality` / `consistency` / `runtime_error` のいずれかだけを使う。`bugs` や `security_issue` のような自由ラベルは禁止。人間向けの細分類が必要な場合だけ、`fingerprint` 入力外の `category_label` に入れる
@@ -1632,7 +1654,7 @@ $CLAUDE_PLUGIN_ROOT/schemas/
 
 本スキルは Claude Code を `--permission-mode auto` で起動することを前提とする（README の「使い方」参照）。auto mode でも、許可済みツールやコマンドの内容によっては分類器の判断で承認が必要になり得るため、本スキルではテンプレートに明示された操作だけを実行する。
 
-ローカルの書き込みは作業ディレクトリ `~/claude-loop-pr-codex/` 配下に限り、`clone-claude/` / `clone-codex/` の作成と更新、`status.json` / `metadata.json` / `run-plan.json` / `pr.diff` / `pr.diff.ranges.txt` / `claude.log` / `codex.log` / `codex-review.json` / `claude-review.json` / `findings.candidates.json` / `findings.verified.json` / `findings.sarif` / `validation-report.json` / `review-rounds.json` / `review.md` と、それらの `*.tmp` 一時ファイル作成のみ許可する。`$auto_send=true` の Step 6.5 だけは、`skills/send/SKILL.md` の契約に従う範囲で `review-payload.json` / `preflight-prompt.md` / `preflight-codex.md` / `preflight-result.json` / `preflight-codex.log` / `review-response.json` / `nits.md` の作成、および `sent/$dir_name-$head_sha_short/` への移動を許可する。schema / fingerprint / status / SARIF validation と candidates 合成のために `python3 "$plugin_root/tasks/merge_hunter_results.py" ...`、`python3 "$plugin_root/tasks/validate_candidates.py" ...`、`python3 "$plugin_root/tasks/validate_findings.py" ...`、`python3 "$plugin_root/tasks/generate_findings_sarif.py" ...`、`python3 "$plugin_root/tasks/validate_findings_sarif.py" ...`、`python3 "$plugin_root/tasks/validate_status.py" ...` を実行してよいが、`merge_hunter_results.py` の書き込み先は `findings.candidates.json.tmp` のみとし、validator は成果物を書き換えず検証だけに使う。
+ローカルの書き込みは作業ディレクトリ `~/claude-loop-pr-codex/` 配下に限り、`clone-claude/` / `clone-codex/` の作成と更新、`status.json` / `metadata.json` / `run-plan.json` / `pr.diff` / `pr.diff.ranges.txt` / `claude.log` / `codex.log` / `codex-review.json` / `claude-review.json` / `fingerprint-material.json` / `findings.candidates.json` / `findings.verified.json` / `findings.sarif` / `validation-report.json` / `review-rounds.json` / `review.md` と、それらの `*.tmp` 一時ファイル作成のみ許可する。`$auto_send=true` の Step 6.5 だけは、`skills/send/SKILL.md` の契約に従う範囲で `review-payload.json` / `payload-manifest.json` / `preflight-prompt.md` / `preflight-semantic.json` / `preflight-codex.md` / `preflight-result.json` / `preflight-codex.log` / `review-response.json` / `nits.md` の作成、および `sent/$dir_name-$head_sha_short/` への移動を許可する。schema / fingerprint / status / SARIF validation と candidates 合成のために `python3 "$plugin_root/tasks/merge_hunter_results.py" ...`、`python3 "$plugin_root/tasks/validate_candidates.py" ...`、`python3 "$plugin_root/tasks/validate_findings.py" ...`（`--emit-fingerprints` を含む）、`python3 "$plugin_root/tasks/generate_findings_sarif.py" ...`、`python3 "$plugin_root/tasks/validate_findings_sarif.py" ...`、`python3 "$plugin_root/tasks/validate_status.py" ...` を実行してよいが、`merge_hunter_results.py` の書き込み先は `findings.candidates.json.tmp` のみとし、validator は成果物を書き換えず検証だけに使う。
 
 F11 の regression eval (`score_fixture.py` / `m1_m2_gate.py`) は通常の `/pr-codex:review` 実行フローには組み込まない。手動 deep eval で `findings.verified.json` を採点する場合のみ、README / `fixtures/README.md` の手順に従って `artifacts/` 配下へ `score-report.v1` / `m1-m2-gate.v1` を出力する。CI では固定 stub の deterministic test だけを実行し、LLM や GitHub write/API 投稿は必須経路に入れない。
 
@@ -1644,7 +1666,7 @@ F11 の regression eval (`score_fixture.py` / `m1_m2_gate.py`) は通常の `/pr
 4. シェル演算子はテンプレート中に明示された `|` `<` `>` `2>` `&&` のみ許可する。パイプラインの upstream 失敗検知のため、テンプレート中に明示された `set -o pipefail &&` は削除せずそのまま使う
 5. JSON 生成は `jq -n --arg` / `--argjson` / `--slurpfile` / `--rawfile` を使う。ヒアドキュメントで JSON を直接組み立てない
 6. ファイル書き込みの使い分け:
-   - `findings.verified.json.tmp` / `validation-report.json.tmp` / `review-rounds.json.tmp` / `review.md.tmp` は `Write` ツールで書き出し、`findings.candidates.json.tmp` は `merge_hunter_results.py` の `--output` で、`findings.sarif.tmp` は `generate_findings_sarif.py` の `--output` で書き出し、gate 通過後に `mv` で final name へ反映する（`file_path` は `~` / `$...` を展開しないため、実値の絶対パスを渡す）
+   - `findings.verified.json.tmp` / `validation-report.json.tmp` / `review-rounds.json.tmp` / `review.md.tmp` / `fingerprint-material.json` は `Write` ツールで書き出し、`findings.candidates.json.tmp` は `merge_hunter_results.py` の `--output` で、`findings.sarif.tmp` は `generate_findings_sarif.py` の `--output` で書き出し、gate 通過後に `mv` で final name へ反映する（`fingerprint-material.json` は mv 対象外の作業ファイル。`file_path` は `~` / `$...` を展開しないため、実値の絶対パスを渡す）
    - `pr.diff.ranges.txt` は Step 3 の `awk` の標準出力を `>` でリダイレクトして作成する
    - `claude-review.json` / `claude.log` は Step 4a の標準出力・標準エラーを `>` / `2>` でリダイレクトして作成し、`codex-review.json` は Step 4b の `--output-last-message` で、`codex.log` は Step 4b の標準出力・標準エラーを `> ... 2>&1` でまとめて作成する
 7. Step 4a / 4b は `run_in_background: true` で起動し、foreground timeout 引数を `1200000` に固定してはならない。Claude Code Bash tool の foreground timeout 上限 600000 ms を超える実行予算は `run-plan.json.estimated_timeout_ms` / `review_loop.time_budget_ms` として扱い、完了通知待ちで管理する
