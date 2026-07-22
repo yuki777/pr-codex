@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/yuki777/pr-codex/main/schemas/hunter-result.v1.json",
+  "title": "pr-codex hunter result v1",
+  "description": "Structured hunter output emitted directly by /pr-codex:review Step 4a (Claude Code --json-schema) and Step 4b (Codex CLI --output-schema). Strict structured-output compatibility: every field is required and optionality is expressed as nullable types; numeric ranges and string emptiness are enforced by tasks/merge_hunter_results.py, which also adapts this model output into schemas/findings.candidates.v1.json deterministically.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "status",
+    "candidates",
+    "coverage"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "enum": [
+        "hunter-result.v1"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "findings",
+        "clean",
+        "diff_unavailable"
+      ],
+      "description": "findings: candidates has 1+ entries. clean: review completed with zero candidates. diff_unavailable: pr.diff is missing or empty; candidates must be empty."
+    },
+    "candidates": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/candidate"
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "high_risk_paths_checked",
+        "checks_run",
+        "limitations"
+      ],
+      "properties": {
+        "high_risk_paths_checked": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "checks_run": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "severity_suggestion",
+        "category_suggestion",
+        "path",
+        "start_line",
+        "end_line",
+        "side",
+        "problem",
+        "reason",
+        "suggestion"
+      ],
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Short heading for the candidate finding."
+        },
+        "severity_suggestion": {
+          "type": "string",
+          "enum": [
+            "must_fix",
+            "should_fix",
+            "nit",
+            "note"
+          ]
+        },
+        "category_suggestion": {
+          "type": "string",
+          "description": "Free-form category hint; the verifier maps it onto the canonical findings.v1 category enum."
+        },
+        "path": {
+          "type": "string",
+          "description": "Repository-relative file path from pr.diff."
+        },
+        "start_line": {
+          "type": "integer",
+          "description": "Head-based line number (>= 1, enforced by merge_hunter_results.py)."
+        },
+        "end_line": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "Head-based end line for a range; null for a single-line candidate. Must be >= start_line when present (enforced by merge_hunter_results.py)."
+        },
+        "side": {
+          "type": "string",
+          "enum": [
+            "LEFT",
+            "RIGHT"
+          ]
+        },
+        "problem": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "suggestion": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

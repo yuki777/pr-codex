@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Validate and extract /pr-codex:send preflight-result.json artifacts.
+"""Validate /pr-codex:send preflight-result.json artifacts.
 
-The Step 4.5 verifier writes a structured RESULT_JSON block into
-preflight-codex.md and the send workflow persists it as preflight-result.json.
-This stdlib-only helper validates the runtime contract encoded by
-schemas/preflight-result.v1.json plus cross-field rules JSON Schema cannot
-express portably:
+The Step 4.5 verifier writes JSON directly to preflight-result.json using
+Codex structured output. This stdlib-only helper validates the runtime
+contract encoded by schemas/preflight-result.v1.json plus cross-field rules
+JSON Schema cannot express portably:
 
 * all four verifier pipeline stages are present in the stages object;
 * top-level verdict is FAIL iff at least one error violation exists;
@@ -18,13 +17,18 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 EXPECTED_SCHEMA_VERSION = "preflight-result.v1"
+EXPECTED_SCHEMA_ID = "https://raw.githubusercontent.com/yuki777/pr-codex/main/schemas/preflight-result.v1.json"
+SEMANTIC_SCHEMA_VERSION = "preflight-semantic.v1"
+MANIFEST_SCHEMA_VERSION = "payload-manifest.v1"
+SEMANTIC_TOP_LEVEL_KEYS = {"schema_version", "decisions"}
+SEMANTIC_DECISION_KEYS = {"finding_id", "decision", "counterargument", "note"}
+SEMANTIC_DECISIONS = {"confirmed", "refuted", "insufficient_evidence"}
 STAGES = [
     "schema_validation",
     "range_validation",
@@ -72,6 +76,7 @@ RULE_CLASSIFICATION: dict[str, tuple[str, bool, bool]] = {
     "axes_gate_violation": ("semantic_preflight", False, True),
     "evidence_level_violation": ("semantic_preflight", False, True),
     "counterargument_succeeded": ("semantic_preflight", False, True),
+    "insufficient_evidence": ("semantic_preflight", False, True),
     "event_mismatch": ("payload_consistency", True, False),
     "summary_body_mismatch": ("payload_consistency", True, False),
     "good_points_body_mismatch": ("payload_consistency", True, False),
@@ -79,9 +84,6 @@ RULE_CLASSIFICATION: dict[str, tuple[str, bool, bool]] = {
     "must_fix_count_mismatch_findings_vs_md": ("payload_consistency", False, True),
 }
 
-RESULT_JSON_HEADING_RE = re.compile(r"^###\s+RESULT_JSON\s*$", re.MULTILINE)
-IMMEDIATE_JSON_FENCE_RE = re.compile(r"\A\s*```json\s*(?P<json>.*?)\s*```(?P<tail>.*)\Z", re.DOTALL | re.IGNORECASE)
-FINAL_VERDICT_RE = re.compile(r"^VERDICT:\s*(PASS|FAIL)\s*$")
 
 
 def load_json(path: Path) -> Any:
@@ -89,6 +91,35 @@ def load_json(path: Path) -> Any:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:  # noqa: BLE001 - report JSON/path failures uniformly
         raise ValueError(f"{path}: cannot read/parse JSON: {exc}") from exc
+
+
+def validate_schema_file(schema: Any) -> list[str]:
+    """Ensure --schema is the expected preflight-result schema."""
+    if not isinstance(schema, dict):
+        return ["$schema: must be an object"]
+
+    errors: list[str] = []
+    if schema.get("$id") != EXPECTED_SCHEMA_ID:
+        errors.append(f"$schema.$id: must equal '{EXPECTED_SCHEMA_ID}'")
+
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        errors.append("$schema.properties: must be an object")
+        return errors
+
+    schema_version = properties.get("schema_version")
+    if not isinstance(schema_version, dict) or schema_version.get("enum") != [EXPECTED_SCHEMA_VERSION]:
+        errors.append(
+            f"$schema.properties.schema_version.enum: must equal ['{EXPECTED_SCHEMA_VERSION}']"
+        )
+    return errors
+
+
+def is_safe_string(value: Any) -> bool:
+    return isinstance(value, str) and all(
+        not (ord(char) <= 0x1F or 0x7F <= ord(char) <= 0x9F or 0xD800 <= ord(char) <= 0xDFFF)
+        for char in value
+    )
 
 
 def is_non_empty_string(value: Any) -> bool:
@@ -119,48 +150,282 @@ def add_unexpected(errors: list[str], path: str, obj: Any, allowed: set[str]) ->
         if unexpected:
             errors.append(f"{path}: unexpected properties: {', '.join(unexpected)}")
 
+def manifest_semantic_context(
+    manifest: Any,
+) -> tuple[set[str], dict[str, int], list[str]]:
+    """Validate manifest fields used by semantic composition."""
+    errors: list[str] = []
+    semantic_target_ids: set[str] = set()
+    comment_indices: dict[str, int] = {}
+    if not isinstance(manifest, dict):
+        return semantic_target_ids, comment_indices, ["$manifest: must be an object"]
+    if manifest.get("schema_version") != MANIFEST_SCHEMA_VERSION:
+        errors.append(f"$manifest.schema_version: must be {MANIFEST_SCHEMA_VERSION}")
 
-def extract_final_verdict(markdown: str) -> str:
-    """Return the final VERDICT line, requiring it to be the last non-empty line."""
-    non_empty_lines = [line.strip() for line in markdown.splitlines() if line.strip()]
-    if not non_empty_lines:
-        raise ValueError("final VERDICT line not found")
-    match = FINAL_VERDICT_RE.match(non_empty_lines[-1])
-    if not match:
-        raise ValueError("final VERDICT line must be the last non-empty line")
-    return match.group(1)
+    comment_map = manifest.get("comment_map")
+    if not isinstance(comment_map, list):
+        errors.append("$manifest.comment_map: must be an array")
+    else:
+        for index, item in enumerate(comment_map):
+            path = f"$manifest.comment_map[{index}]"
+            if not isinstance(item, dict):
+                errors.append(f"{path}: must be an object")
+                continue
+            missing = sorted({"comment_index", "finding_id", "severity"} - set(item))
+            if missing:
+                errors.append(f"{path}: missing required properties: {', '.join(missing)}")
+            finding_id = item.get("finding_id")
+            comment_index = item.get("comment_index")
+            severity = item.get("severity")
+            if not is_non_empty_string(finding_id):
+                errors.append(f"{path}.finding_id: must be a non-empty safe string")
+            if not is_non_negative_int(comment_index):
+                errors.append(f"{path}.comment_index: must be a non-negative integer")
+            if not is_non_empty_string(severity):
+                errors.append(f"{path}.severity: must be a non-empty safe string")
+            if is_non_empty_string(finding_id) and is_non_negative_int(comment_index):
+                comment_indices.setdefault(finding_id, comment_index)
+
+    out_of_range = manifest.get("out_of_range")
+    if not isinstance(out_of_range, list):
+        errors.append("$manifest.out_of_range: must be an array")
+    else:
+        for index, item in enumerate(out_of_range):
+            path = f"$manifest.out_of_range[{index}]"
+            if not isinstance(item, dict):
+                errors.append(f"{path}: must be an object")
+                continue
+            missing = sorted({"finding_id", "kind", "reason"} - set(item))
+            if missing:
+                errors.append(f"{path}: missing required properties: {', '.join(missing)}")
+            finding_id = item.get("finding_id")
+            kind = item.get("kind")
+            reason = item.get("reason")
+            if not is_non_empty_string(finding_id):
+                errors.append(f"{path}.finding_id: must be a non-empty safe string")
+            if not is_non_empty_string(kind):
+                errors.append(f"{path}.kind: must be a non-empty safe string")
+            if not is_safe_string(reason):
+                errors.append(f"{path}.reason: must be a safe string")
+
+    withheld = manifest.get("withheld")
+    if not isinstance(withheld, list):
+        errors.append("$manifest.withheld: must be an array")
+    else:
+        for index, item in enumerate(withheld):
+            path = f"$manifest.withheld[{index}]"
+            if not isinstance(item, dict):
+                errors.append(f"{path}: must be an object")
+                continue
+            missing = sorted({"finding_id", "kind", "reason"} - set(item))
+            if missing:
+                errors.append(f"{path}: missing required properties: {', '.join(missing)}")
+            finding_id = item.get("finding_id")
+            kind = item.get("kind")
+            reason = item.get("reason")
+            if not is_non_empty_string(finding_id):
+                errors.append(f"{path}.finding_id: must be a non-empty safe string")
+            if kind != "Must Fix":
+                errors.append(f"{path}.kind: must be Must Fix")
+            if reason not in {"local_only", "suppress"}:
+                errors.append(f"{path}.reason: must be local_only or suppress")
+
+    semantic_targets = manifest.get("semantic_targets")
+    duplicate_targets: set[str] = set()
+    if not isinstance(semantic_targets, list):
+        errors.append("$manifest.semantic_targets: must be an array")
+    else:
+        for index, finding_id in enumerate(semantic_targets):
+            path = f"$manifest.semantic_targets[{index}]"
+            if not is_non_empty_string(finding_id):
+                errors.append(f"{path}: must be a non-empty safe string")
+            elif finding_id in semantic_target_ids:
+                duplicate_targets.add(finding_id)
+            else:
+                semantic_target_ids.add(finding_id)
+    if duplicate_targets:
+        errors.append(
+            "$manifest.semantic_targets: duplicate values: "
+            + ", ".join(sorted(duplicate_targets))
+        )
+    return semantic_target_ids, comment_indices, errors
 
 
-def extract_result_json(markdown: str) -> dict[str, Any]:
-    """Extract the fenced JSON block after the final RESULT_JSON heading.
+def validated_semantic_decisions(
+    semantic: Any,
+    expected_finding_ids: set[str],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Validate strict per-finding semantic decisions and their coverage."""
+    errors: list[str] = []
+    validated: list[dict[str, Any]] = []
+    if not isinstance(semantic, dict):
+        return validated, ["$semantic: must be an object"]
+    add_unexpected(errors, "$semantic", semantic, SEMANTIC_TOP_LEVEL_KEYS)
+    missing_top_level = sorted(SEMANTIC_TOP_LEVEL_KEYS - set(semantic))
+    if missing_top_level:
+        errors.append(f"$semantic: missing required properties: {', '.join(missing_top_level)}")
+    if semantic.get("schema_version") != SEMANTIC_SCHEMA_VERSION:
+        errors.append(f"$semantic.schema_version: must be {SEMANTIC_SCHEMA_VERSION}")
 
-    A RESULT_JSON heading is mandatory. If the final heading is dangling, do not
-    fall back to an earlier JSON block because that could turn a malformed or
-    failing verifier output into a false PASS. The final VERDICT line must also
-    match the extracted JSON verdict.
-    """
-    matches = list(RESULT_JSON_HEADING_RE.finditer(markdown))
-    if not matches:
-        raise ValueError("RESULT_JSON heading not found")
+    decisions = semantic.get("decisions")
+    if not isinstance(decisions, list):
+        errors.append("$semantic.decisions: must be an array")
+        return validated, errors
 
-    final_verdict = extract_final_verdict(markdown)
-    search_area = markdown[matches[-1].end() :]
-    match = IMMEDIATE_JSON_FENCE_RE.match(search_area)
-    if not match:
-        raise ValueError("RESULT_JSON fenced json block must appear immediately after final RESULT_JSON heading")
-    tail_lines = [line.strip() for line in match.group("tail").splitlines() if line.strip()]
-    if tail_lines != [f"VERDICT: {final_verdict}"]:
-        raise ValueError("RESULT_JSON fenced json block must be followed only by the final VERDICT line")
-    raw_json = match.group("json")
-    try:
-        data = json.loads(raw_json)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"RESULT_JSON is not valid JSON: {exc}") from exc
-    if not isinstance(data, dict):
-        raise ValueError("RESULT_JSON must be a JSON object")
-    if data.get("verdict") != final_verdict:
-        raise ValueError("RESULT_JSON verdict must match final VERDICT line")
-    return data
+    finding_ids: set[str] = set()
+    duplicate_ids: set[str] = set()
+    for index, decision_item in enumerate(decisions):
+        path = f"$semantic.decisions[{index}]"
+        if not isinstance(decision_item, dict):
+            errors.append(f"{path}: must be an object")
+            continue
+        add_unexpected(errors, path, decision_item, SEMANTIC_DECISION_KEYS)
+        missing = sorted(SEMANTIC_DECISION_KEYS - set(decision_item))
+        if missing:
+            errors.append(f"{path}: missing required properties: {', '.join(missing)}")
+        finding_id = decision_item.get("finding_id")
+        decision = decision_item.get("decision")
+        counterargument = decision_item.get("counterargument")
+        note = decision_item.get("note")
+        valid_item = True
+        if not is_non_empty_string(finding_id):
+            errors.append(f"{path}.finding_id: must be a non-empty safe string")
+            valid_item = False
+        elif finding_id in finding_ids:
+            duplicate_ids.add(finding_id)
+        else:
+            finding_ids.add(finding_id)
+        if decision not in SEMANTIC_DECISIONS:
+            errors.append(
+                f"{path}.decision: must be confirmed, refuted, or insufficient_evidence"
+            )
+            valid_item = False
+        if not is_safe_string(counterargument):
+            errors.append(f"{path}.counterargument: must be a safe string")
+            valid_item = False
+        if not is_safe_string(note):
+            errors.append(f"{path}.note: must be a safe string")
+            valid_item = False
+        if valid_item:
+            validated.append(decision_item)
+
+    sorted_duplicate_ids = sorted(duplicate_ids)
+    if sorted_duplicate_ids:
+        errors.append(
+            "$semantic.decisions.finding_id: duplicate values: "
+            + ", ".join(sorted_duplicate_ids)
+        )
+    actual_finding_ids = finding_ids
+    missing_ids = sorted(expected_finding_ids - actual_finding_ids)
+    extra_ids = sorted(actual_finding_ids - expected_finding_ids)
+    if missing_ids:
+        errors.append(
+            "$semantic.decisions.finding_id: missing manifest semantic_targets ids: "
+            + ", ".join(missing_ids)
+        )
+    if extra_ids:
+        errors.append(
+            "$semantic.decisions.finding_id: unexpected ids: "
+            + ", ".join(extra_ids)
+        )
+    return validated, errors
+
+
+def generated_at_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def composed_preflight_result(
+    semantic_stage: dict[str, str],
+    violations: list[dict[str, Any]],
+) -> dict[str, Any]:
+    error_violations = [
+        violation for violation in violations if violation.get("severity") == "error"
+    ]
+    auto_fixable_count, requires_human_count = expected_counts(error_violations)
+    deterministic_stage = {
+        "status": "PASS",
+        "note": "validated by deterministic host-side validators",
+    }
+    return {
+        "schema_version": EXPECTED_SCHEMA_VERSION,
+        "verdict": "FAIL" if error_violations else "PASS",
+        "stages": {
+            "schema_validation": dict(deterministic_stage),
+            "range_validation": dict(deterministic_stage),
+            "semantic_preflight": semantic_stage,
+            "payload_consistency": dict(deterministic_stage),
+        },
+        "violations": violations,
+        "auto_fixable_count": auto_fixable_count,
+        "requires_human_count": requires_human_count,
+        "generated_at": generated_at_now(),
+    }
+
+
+def compose_from_semantic(
+    semantic: Any,
+    manifest: Any,
+) -> tuple[dict[str, Any] | None, list[str]]:
+    semantic_target_ids, comment_indices, manifest_errors = manifest_semantic_context(manifest)
+    decisions, semantic_errors = validated_semantic_decisions(semantic, semantic_target_ids)
+    errors = manifest_errors + semantic_errors
+    if errors:
+        return None, errors
+
+    counts = {decision: 0 for decision in SEMANTIC_DECISIONS}
+    violations: list[dict[str, Any]] = []
+    for decision_item in decisions:
+        decision = decision_item["decision"]
+        counts[decision] += 1
+        if decision == "confirmed":
+            continue
+        finding_id = decision_item["finding_id"]
+        violations.append(
+            {
+                "stage": "semantic_preflight",
+                "rule": (
+                    "counterargument_succeeded"
+                    if decision == "refuted"
+                    else "insufficient_evidence"
+                ),
+                "finding_id": finding_id,
+                "comment_index": comment_indices.get(finding_id),
+                "detail": decision_item["counterargument"] or "(counterargument not provided)",
+                "severity": "error",
+                "auto_fixable": False,
+                "requires_review_regeneration": True,
+            }
+        )
+
+    semantic_stage = {
+        "status": "FAIL" if violations else "PASS",
+        "note": (
+            f"decisions: {counts['confirmed']} confirmed / {counts['refuted']} refuted / "
+            f"{counts['insufficient_evidence']} insufficient_evidence"
+        ),
+    }
+    return composed_preflight_result(semantic_stage, violations), []
+
+
+def compose_semantic_skipped(
+    manifest: Any,
+) -> tuple[dict[str, Any] | None, list[str]]:
+    semantic_target_ids, _, errors = manifest_semantic_context(manifest)
+    if semantic_target_ids:
+        errors.append(
+            "$manifest: --semantic-skipped requires semantic_targets to be empty; found "
+            + ", ".join(sorted(semantic_target_ids))
+        )
+    if errors:
+        return None, errors
+    semantic_stage = {
+        "status": "PASS",
+        "note": "skipped: no must_fix findings in payload",
+    }
+    return composed_preflight_result(semantic_stage, []), []
+
+
 
 
 def validate_stage_results(errors: list[str], data: dict[str, Any]) -> None:
@@ -182,12 +447,13 @@ def validate_stage_results(errors: list[str], data: dict[str, Any]) -> None:
             errors.append(f"{path}: must be an object")
             continue
         add_unexpected(errors, path, item, STAGE_RESULT_KEYS)
-        if "status" not in item:
-            errors.append(f"{path}: missing required properties: status")
-        elif item.get("status") not in STAGE_STATUSES:
+        missing_properties = [field for field in ("status", "note") if field not in item]
+        if missing_properties:
+            errors.append(f"{path}: missing required properties: {', '.join(missing_properties)}")
+        if "status" in item and item.get("status") not in STAGE_STATUSES:
             errors.append(f"{path}.status: must be PASS or FAIL")
-        if "note" in item and not isinstance(item["note"], str):
-            errors.append(f"{path}.note: must be a string")
+        if "note" in item and not is_safe_string(item["note"]):
+            errors.append(f"{path}.note: must be a string without control characters")
 
 
 def validate_violations(errors: list[str], data: dict[str, Any]) -> None:
@@ -201,7 +467,7 @@ def validate_violations(errors: list[str], data: dict[str, Any]) -> None:
             errors.append(f"{path}: must be an object")
             continue
         add_unexpected(errors, path, violation, VIOLATION_KEYS)
-        required = {"stage", "rule", "detail", "severity", "auto_fixable", "requires_review_regeneration"}
+        required = VIOLATION_KEYS
         missing = sorted(required - set(violation))
         if missing:
             errors.append(f"{path}: missing required properties: {', '.join(missing)}")
@@ -212,10 +478,20 @@ def validate_violations(errors: list[str], data: dict[str, Any]) -> None:
         for field in ("rule", "detail"):
             if field in violation and not is_non_empty_string(violation[field]):
                 errors.append(f"{path}.{field}: must be a non-empty string")
-        if "finding_id" in violation and not isinstance(violation["finding_id"], str):
-            errors.append(f"{path}.finding_id: must be a string")
-        if "comment_index" in violation and not is_non_negative_int(violation["comment_index"]):
-            errors.append(f"{path}.comment_index: must be a non-negative integer")
+        if (
+            "finding_id" in violation
+            and violation["finding_id"] is not None
+            and not is_non_empty_string(violation["finding_id"])
+        ):
+            errors.append(
+                f"{path}.finding_id: must be null or a non-empty string without control characters"
+            )
+        if (
+            "comment_index" in violation
+            and violation["comment_index"] is not None
+            and not is_non_negative_int(violation["comment_index"])
+        ):
+            errors.append(f"{path}.comment_index: must be null or a non-negative integer")
         for field in ("auto_fixable", "requires_review_regeneration"):
             if field in violation and not isinstance(violation[field], bool):
                 errors.append(f"{path}.{field}: must be a boolean")
@@ -336,8 +612,14 @@ def emit_markdown(data: dict[str, Any]) -> str:
         lines.append("- なし")
     else:
         for index, violation in enumerate(violations, start=1):
-            finding = f" finding_id={violation['finding_id']}" if "finding_id" in violation else ""
-            comment = f" comment_index={violation['comment_index']}" if "comment_index" in violation else ""
+            finding = (
+                f" finding_id={violation['finding_id']}" if violation.get("finding_id") is not None else ""
+            )
+            comment = (
+                f" comment_index={violation['comment_index']}"
+                if violation.get("comment_index") is not None
+                else ""
+            )
             lines.append(
                 f"{index}. [{violation.get('severity')}] {violation.get('stage')} "
                 f"{violation.get('rule')}{finding}{comment}: {violation.get('detail')} "
@@ -352,31 +634,69 @@ def emit_markdown(data: dict[str, Any]) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate pr-codex preflight-result.json")
     parser.add_argument("--schema", required=True, type=Path, help="preflight-result.v1.json path")
-    parser.add_argument("--data", type=Path, help="preflight-result.json path")
-    parser.add_argument("--from-markdown", type=Path, help="extract RESULT_JSON from preflight-codex.md instead of --data")
-    parser.add_argument("--emit-json", action="store_true", help="print extracted/validated JSON")
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--data", type=Path, help="preflight-result.json path")
+    mode.add_argument(
+        "--from-semantic",
+        type=Path,
+        help="compose from preflight-semantic.v1 JSON",
+    )
+    mode.add_argument(
+        "--semantic-skipped",
+        action="store_true",
+        help="compose a passing semantic stage when no must_fix findings exist",
+    )
+    parser.add_argument("--manifest", type=Path, help="payload-manifest.v1 JSON path")
+    parser.add_argument("--emit-json", action="store_true", help="print validated JSON")
     parser.add_argument("--emit-markdown", action="store_true", help="print compatible preflight-codex.md markdown")
     args = parser.parse_args()
 
-    if bool(args.data) == bool(args.from_markdown):
-        print("exactly one of --data or --from-markdown is required", file=sys.stderr)
-        return 2
+    semantic_mode = args.from_semantic is not None or args.semantic_skipped
+    if semantic_mode and args.manifest is None:
+        parser.error("--manifest is required with --from-semantic or --semantic-skipped")
+    if args.data is not None and args.manifest is not None:
+        parser.error("--manifest is only valid with --from-semantic or --semantic-skipped")
 
     try:
         schema = load_json(args.schema)
-        if args.from_markdown:
-            data = extract_result_json(args.from_markdown.read_text(encoding="utf-8"))
-        else:
-            data = load_json(args.data)
-    except Exception as exc:  # noqa: BLE001 - CLI should report all extraction/parsing failures uniformly
-        print(str(exc), file=sys.stderr)
-        return 2
-
-    if not isinstance(schema, dict) or schema.get("$id") is None:
+    except ValueError as exc:
         print(f"{args.schema}: invalid preflight-result schema file", file=sys.stderr)
+        print(f"- {exc}", file=sys.stderr)
         return 2
 
-    errors = validate_preflight_result(data)
+    schema_errors = validate_schema_file(schema)
+    if schema_errors:
+        print(f"{args.schema}: invalid preflight-result schema file", file=sys.stderr)
+        for error in schema_errors:
+            print(f"- {error}", file=sys.stderr)
+        return 2
+
+    errors: list[str]
+    if args.data is not None:
+        try:
+            data = load_json(args.data)
+        except ValueError as exc:
+            print("INVALID preflight result", file=sys.stderr)
+            print(f"- {exc}", file=sys.stderr)
+            return 1
+        errors = validate_preflight_result(data)
+    else:
+        try:
+            manifest = load_json(args.manifest)
+            if args.from_semantic is not None:
+                semantic = load_json(args.from_semantic)
+                data, errors = compose_from_semantic(semantic, manifest)
+            else:
+                data, errors = compose_semantic_skipped(manifest)
+        except ValueError as exc:
+            print("INVALID preflight result", file=sys.stderr)
+            print(f"- {exc}", file=sys.stderr)
+            return 1
+        if not errors and data is not None:
+            errors = validate_preflight_result(data)
+        if data is None:
+            data = {}
+
     if errors:
         print("INVALID preflight result", file=sys.stderr)
         for error in errors:
@@ -390,6 +710,7 @@ def main() -> int:
     else:
         print("valid preflight result")
     return 0
+
 
 
 if __name__ == "__main__":

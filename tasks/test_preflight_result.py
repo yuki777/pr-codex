@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression tests for preflight-result extraction and validation."""
+"""Regression tests for direct preflight-result JSON validation."""
 
 from __future__ import annotations
 
@@ -14,15 +14,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 TASKS = ROOT / "tasks"
 SCHEMA_PATH = ROOT / "schemas" / "preflight-result.v1.json"
+SEMANTIC_SCHEMA_PATH = ROOT / "schemas" / "preflight-semantic.v1.json"
 VALIDATOR_PATH = TASKS / "validate_preflight_result.py"
 sys.path.insert(0, str(TASKS))
 
-from validate_preflight_result import (  # noqa: E402
-    emit_markdown,
-    expected_counts,
-    extract_result_json,
-    validate_preflight_result,
-)
+from validate_preflight_result import emit_markdown, expected_counts, validate_preflight_result  # noqa: E402
 
 
 def valid_result() -> dict[str, object]:
@@ -46,6 +42,7 @@ def auto_fixable_range_violation() -> dict[str, object]:
     return {
         "stage": "range_validation",
         "rule": "line_out_of_hunk",
+        "finding_id": None,
         "comment_index": 0,
         "detail": "comment line is outside pr.diff.ranges.txt and can be moved to body",
         "severity": "error",
@@ -59,6 +56,7 @@ def human_semantic_violation() -> dict[str, object]:
         "stage": "semantic_preflight",
         "rule": "counterargument_succeeded",
         "finding_id": "f" * 64,
+        "comment_index": None,
         "detail": "A plausible counterargument exists based on the PR diff.",
         "severity": "error",
         "auto_fixable": False,
@@ -70,14 +68,138 @@ def sarif_count_mismatch_violation() -> dict[str, object]:
     return {
         "stage": "schema_validation",
         "rule": "must_fix_count_mismatch",
+        "finding_id": None,
+        "comment_index": None,
         "detail": "canonical=2 markdown=2 payload=1 sarif=2",
         "severity": "error",
         "auto_fixable": False,
         "requires_review_regeneration": True,
     }
 
+def payload_manifest(
+    *,
+    inline_must_fix: bool = True,
+    out_of_range_must_fix: bool = False,
+    withheld_must_fix: bool = False,
+) -> dict[str, object]:
+    comment_map = [
+        {
+            "comment_index": 3,
+            "finding_id": "inline-must-fix",
+            "severity": "must_fix" if inline_must_fix else "should_fix",
+        }
+    ]
+    out_of_range = []
+    if out_of_range_must_fix:
+        out_of_range.append(
+            {
+                "finding_id": "out-of-range-must-fix",
+                "kind": "Must Fix",
+                "reason": "No changed line can host the comment.",
+            }
+        )
+    withheld = []
+    if withheld_must_fix:
+        withheld.append(
+            {
+                "finding_id": "withheld-must-fix",
+                "kind": "Must Fix",
+                "reason": "local_only",
+            }
+        )
+    semantic_targets = []
+    if inline_must_fix:
+        semantic_targets.append("inline-must-fix")
+    if out_of_range_must_fix:
+        semantic_targets.append("out-of-range-must-fix")
+    if withheld_must_fix:
+        semantic_targets.append("withheld-must-fix")
+    role_files = {
+        role: {"path": str(ROOT / filename), "sha256": "0" * 64}
+        for role, filename in {
+            "findings": "findings.json",
+            "review": "review.md",
+            "metadata": "metadata.json",
+            "ranges": "pr.diff.ranges.txt",
+            "payload": "payload.json",
+        }.items()
+    }
+    return {
+        "schema_version": "payload-manifest.v1",
+        "generated_at": "2026-05-06T00:00:00+00:00",
+        "event": "REQUEST_CHANGES" if semantic_targets else "COMMENT",
+        "comment_map": comment_map,
+        "out_of_range": out_of_range,
+        "withheld": withheld,
+        "semantic_targets": semantic_targets,
+        "counts": {
+            "must_fix_total": len(semantic_targets),
+            "must_fix_inline": int(inline_must_fix),
+            "must_fix_body": int(out_of_range_must_fix),
+            "must_fix_withheld": int(withheld_must_fix),
+            "should_fix_inline": int(not inline_must_fix),
+            "nit_inline": 0,
+        },
+        "files": role_files,
+    }
+
+
+def semantic_result(*decisions: dict[str, str]) -> dict[str, object]:
+    return {
+        "schema_version": "preflight-semantic.v1",
+        "decisions": list(decisions),
+    }
+
+
+def semantic_decision(
+    finding_id: str,
+    decision: str,
+    counterargument: str = "The strongest counterargument does not change the result.",
+    note: str = "",
+) -> dict[str, str]:
+    return {
+        "finding_id": finding_id,
+        "decision": decision,
+        "counterargument": counterargument,
+        "note": note,
+    }
+
+
 
 class ValidatePreflightResultTest(unittest.TestCase):
+    def run_semantic_composition(
+        self,
+        semantic: dict[str, object] | None,
+        manifest: dict[str, object],
+        *,
+        skipped: bool = False,
+        emit: str = "--emit-json",
+    ) -> subprocess.CompletedProcess[str]:
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_path = Path(tmp) / "payload-manifest.json"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            command = [
+                sys.executable,
+                str(VALIDATOR_PATH),
+                "--schema",
+                str(SCHEMA_PATH),
+            ]
+            if skipped:
+                command.append("--semantic-skipped")
+            else:
+                semantic_path = Path(tmp) / "preflight-semantic.json"
+                semantic_path.write_text(json.dumps(semantic), encoding="utf-8")
+                command.extend(["--from-semantic", str(semantic_path)])
+            command.extend(["--manifest", str(manifest_path)])
+            if emit:
+                command.append(emit)
+            return subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
     def assert_invalid_without_crash(self, result: dict[str, object], expected_fragment: str) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             data_path = Path(tmp) / "preflight-result.json"
@@ -108,6 +230,7 @@ class ValidatePreflightResultTest(unittest.TestCase):
                 "stage": "semantic_preflight",
                 "rule": "cluster_representative_missing_until_f6",
                 "finding_id": "abc123",
+                "comment_index": None,
                 "detail": "F6 cluster metadata is not present yet; record as warning only.",
                 "severity": "warning",
                 "auto_fixable": False,
@@ -169,95 +292,83 @@ class ValidatePreflightResultTest(unittest.TestCase):
         result["stages"]["semantic_preflight"]["status"] = "FAIL"
         self.assert_invalid_without_crash(result, "FAIL requires at least one error violation")
 
-    def test_extract_result_json_uses_last_result_json_block(self) -> None:
-        first = copy.deepcopy(valid_result())
-        second = copy.deepcopy(valid_result())
-        second["verdict"] = "FAIL"
-        second["stages"]["semantic_preflight"]["status"] = "FAIL"
-        second["violations"] = [human_semantic_violation()]
-        second["requires_human_count"] = 1
-        markdown = (
-            "### RESULT_JSON\n"
-            "```json\n"
-            + json.dumps(first)
-            + "\n```\n"
-            "some explanation\n"
-            "### RESULT_JSON\n"
-            "```json\n"
-            + json.dumps(second)
-            + "\n```\n"
-            "VERDICT: FAIL\n"
+    def test_stage_note_is_required(self) -> None:
+        result = valid_result()
+        del result["stages"]["schema_validation"]["note"]
+        self.assert_invalid_without_crash(
+            result,
+            "$.stages.schema_validation: missing required properties: note",
         )
-        self.assertEqual(extract_result_json(markdown), second)
 
+    def test_stage_note_accepts_empty_string(self) -> None:
+        result = valid_result()
+        result["stages"]["schema_validation"]["note"] = ""
+        self.assertEqual(validate_preflight_result(result), [])
 
-    def test_extract_result_json_rejects_dangling_final_result_heading(self) -> None:
-        markdown = (
-            "### RESULT_JSON\n```json\n"
-            + json.dumps(valid_result())
-            + "\n```\n"
-            "### RESULT_JSON\n"
-            "VERDICT: FAIL\n"
+    def test_stage_note_rejects_control_characters(self) -> None:
+        result = valid_result()
+        result["stages"]["schema_validation"]["note"] = "invalid\nnote"
+        self.assertIn(
+            "$.stages.schema_validation.note: must be a string without control characters",
+            validate_preflight_result(result),
         )
-        with self.assertRaisesRegex(ValueError, "immediately after final RESULT_JSON heading"):
-            extract_result_json(markdown)
 
-    def test_extract_result_json_requires_matching_final_verdict(self) -> None:
-        markdown = (
-            "### RESULT_JSON\n```json\n"
-            + json.dumps(valid_result())
-            + "\n```\n"
-            "VERDICT: FAIL\n"
+    def test_violation_references_are_required(self) -> None:
+        for missing_field in ("finding_id", "comment_index"):
+            with self.subTest(missing_field=missing_field):
+                result = valid_result()
+                result["verdict"] = "FAIL"
+                result["stages"]["range_validation"]["status"] = "FAIL"
+                violation = auto_fixable_range_violation()
+                del violation[missing_field]
+                result["violations"] = [violation]
+                result["auto_fixable_count"] = 1
+                self.assert_invalid_without_crash(
+                    result,
+                    f"missing required properties: {missing_field}",
+                )
+
+    def test_nullable_violation_references_are_valid(self) -> None:
+        result = valid_result()
+        result["verdict"] = "FAIL"
+        result["stages"]["range_validation"]["status"] = "FAIL"
+        violation = auto_fixable_range_violation()
+        violation["comment_index"] = None
+        result["violations"] = [violation]
+        result["auto_fixable_count"] = 1
+        self.assertEqual(validate_preflight_result(result), [])
+
+    def test_non_null_violation_references_are_validated(self) -> None:
+        result = valid_result()
+        result["verdict"] = "FAIL"
+        result["stages"]["range_validation"]["status"] = "FAIL"
+        violation = auto_fixable_range_violation()
+        violation["finding_id"] = ""
+        violation["comment_index"] = True
+        result["violations"] = [violation]
+        result["auto_fixable_count"] = 1
+        errors = validate_preflight_result(result)
+        self.assertIn(
+            "$.violations[0].finding_id: must be null or a non-empty string without control characters",
+            errors,
         )
-        with self.assertRaisesRegex(ValueError, "verdict must match final VERDICT"):
-            extract_result_json(markdown)
-
-    def test_extract_result_json_requires_final_verdict_as_last_line(self) -> None:
-        markdown = (
-            "### RESULT_JSON\n```json\n"
-            + json.dumps(valid_result())
-            + "\n```\n"
-            "VERDICT: PASS\n"
-            "trailing text\n"
+        self.assertIn(
+            "$.violations[0].comment_index: must be null or a non-negative integer",
+            errors,
         )
-        with self.assertRaisesRegex(ValueError, "final VERDICT line"):
-            extract_result_json(markdown)
 
-    def test_extract_result_json_rejects_extra_fence_after_result_block(self) -> None:
-        fail_result = copy.deepcopy(valid_result())
-        fail_result["verdict"] = "FAIL"
-        fail_result["stages"]["semantic_preflight"]["status"] = "FAIL"
-        fail_result["violations"] = [human_semantic_violation()]
-        fail_result["requires_human_count"] = 1
-        markdown = (
-            "### RESULT_JSON\n```json\n"
-            + json.dumps(fail_result)
-            + "\n```\n"
-            "```json\n"
-            + json.dumps(valid_result())
-            + "\n```\n"
-            "VERDICT: PASS\n"
-        )
-        with self.assertRaisesRegex(ValueError, "followed only by the final VERDICT"):
-            extract_result_json(markdown)
-
-    def test_cli_extracts_and_validates_markdown(self) -> None:
+    def test_cli_validates_data_directly(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            md_path = Path(tmp) / "preflight-codex.md"
-            md_path.write_text(
-                "### RESULT_JSON\n```json\n"
-                + json.dumps(valid_result(), ensure_ascii=True)
-                + "\n```\nVERDICT: PASS\n",
-                encoding="utf-8",
-            )
+            data_path = Path(tmp) / "preflight-result.json"
+            data_path.write_text(json.dumps(valid_result()), encoding="utf-8")
             completed = subprocess.run(
                 [
                     sys.executable,
                     str(VALIDATOR_PATH),
                     "--schema",
                     str(SCHEMA_PATH),
-                    "--from-markdown",
-                    str(md_path),
+                    "--data",
+                    str(data_path),
                     "--emit-json",
                 ],
                 check=False,
@@ -265,34 +376,110 @@ class ValidatePreflightResultTest(unittest.TestCase):
                 text=True,
             )
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertEqual(json.loads(completed.stdout)["verdict"], "PASS")
+        self.assertEqual(json.loads(completed.stdout), valid_result())
 
-
-    def test_cli_rejects_markdown_verdict_mismatch(self) -> None:
+    def test_cli_rejects_invalid_direct_data(self) -> None:
+        result = valid_result()
+        result["schema_version"] = "wrong"
         with tempfile.TemporaryDirectory() as tmp:
-            md_path = Path(tmp) / "preflight-codex.md"
-            md_path.write_text(
-                "### RESULT_JSON\n```json\n"
-                + json.dumps(valid_result(), ensure_ascii=True)
-                + "\n```\nVERDICT: FAIL\n",
-                encoding="utf-8",
-            )
+            data_path = Path(tmp) / "preflight-result.json"
+            data_path.write_text(json.dumps(result), encoding="utf-8")
             completed = subprocess.run(
                 [
                     sys.executable,
                     str(VALIDATOR_PATH),
                     "--schema",
                     str(SCHEMA_PATH),
-                    "--from-markdown",
-                    str(md_path),
-                    "--emit-json",
+                    "--data",
+                    str(data_path),
                 ],
                 check=False,
                 capture_output=True,
                 text=True,
             )
-        self.assertNotEqual(completed.returncode, 0)
-        self.assertIn("verdict must match final VERDICT", completed.stderr)
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("INVALID preflight result", completed.stderr)
+        self.assertIn("$.schema_version: must be preflight-result.v1", completed.stderr)
+
+    def test_cli_emit_markdown_uses_validated_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            data_path = Path(tmp) / "preflight-result.json"
+            data_path.write_text(json.dumps(valid_result()), encoding="utf-8")
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(VALIDATOR_PATH),
+                    "--schema",
+                    str(SCHEMA_PATH),
+                    "--data",
+                    str(data_path),
+                    "--emit-markdown",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("## Stage results", completed.stdout)
+        self.assertTrue(completed.stdout.rstrip().endswith("VERDICT: PASS"))
+
+    def test_cli_rejects_wrong_schema_wiring(self) -> None:
+        schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+        wrong_schemas = {
+            "id": {
+                **schema,
+                "$id": "https://example.invalid/preflight-result.v1.json",
+            },
+            "version": {
+                **schema,
+                "properties": {
+                    **schema["properties"],
+                    "schema_version": {"type": "string", "enum": ["wrong"]},
+                },
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            data_path = Path(tmp) / "preflight-result.json"
+            data_path.write_text(json.dumps(valid_result()), encoding="utf-8")
+            for name, wrong_schema in wrong_schemas.items():
+                with self.subTest(name=name):
+                    schema_path = Path(tmp) / f"{name}.json"
+                    schema_path.write_text(json.dumps(wrong_schema), encoding="utf-8")
+                    completed = subprocess.run(
+                        [
+                            sys.executable,
+                            str(VALIDATOR_PATH),
+                            "--schema",
+                            str(schema_path),
+                            "--data",
+                            str(data_path),
+                        ],
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertEqual(completed.returncode, 2)
+                    self.assertIn("invalid preflight-result schema file", completed.stderr)
+
+    def test_cli_rejects_removed_from_markdown_option(self) -> None:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(VALIDATOR_PATH),
+                "--schema",
+                str(SCHEMA_PATH),
+                "--data",
+                str(SCHEMA_PATH),
+                "--from-markdown",
+                str(SCHEMA_PATH),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn("unrecognized arguments: --from-markdown", completed.stderr)
+
 
     def test_auto_fixable_classification_counts_only_error_violations(self) -> None:
         errors = [auto_fixable_range_violation(), human_semantic_violation()]
@@ -301,6 +488,7 @@ class ValidatePreflightResultTest(unittest.TestCase):
             "stage": "semantic_preflight",
             "rule": "cluster_representative_missing_until_f6",
             "finding_id": "abc123",
+            "comment_index": None,
             "detail": "F6 cluster metadata is not present yet; record as warning only.",
             "severity": "warning",
             "auto_fixable": False,
@@ -333,6 +521,8 @@ class ValidatePreflightResultTest(unittest.TestCase):
             {
                 "stage": "semantic_preflight",
                 "rule": "new_error_rule",
+                "finding_id": None,
+                "comment_index": None,
                 "detail": "unknown error rule",
                 "severity": "error",
                 "auto_fixable": False,
@@ -347,28 +537,353 @@ class ValidatePreflightResultTest(unittest.TestCase):
         self.assertIn("## Stage results", markdown)
         self.assertTrue(markdown.rstrip().endswith("VERDICT: PASS"))
 
+    def test_emit_markdown_omits_null_violation_references(self) -> None:
+        result = valid_result()
+        result["verdict"] = "FAIL"
+        result["stages"]["range_validation"] = {"status": "FAIL", "note": ""}
+        result["violations"] = [auto_fixable_range_violation()]
+        result["violations"][0]["comment_index"] = None
+        result["auto_fixable_count"] = 1
+        markdown = emit_markdown(result)
+        self.assertNotIn("finding_id=", markdown)
+        self.assertNotIn("comment_index=", markdown)
+        self.assertIn("- range_validation: FAIL\n", markdown)
+        self.assertTrue(markdown.rstrip().endswith("VERDICT: FAIL"))
 
-    def test_send_skill_documents_four_stage_pipeline_and_counterargument_polarity(self) -> None:
+    def test_preflight_semantic_schema_is_strict_structured_output_compatible(self) -> None:
+        schema = json.loads(SEMANTIC_SCHEMA_PATH.read_text(encoding="utf-8"))
+        self.assertEqual(schema["properties"]["schema_version"]["enum"], ["preflight-semantic.v1"])
+        self.assertEqual(schema["required"], list(schema["properties"]))
+        decision_schema = schema["properties"]["decisions"]["items"]
+        self.assertFalse(decision_schema["additionalProperties"])
+        self.assertEqual(decision_schema["required"], list(decision_schema["properties"]))
+
+        def assert_no_restricted_keywords(node: object) -> None:
+            if isinstance(node, dict):
+                for keyword in ("minimum", "format", "minLength"):
+                    self.assertNotIn(keyword, node)
+                for value in node.values():
+                    assert_no_restricted_keywords(value)
+            elif isinstance(node, list):
+                for value in node:
+                    assert_no_restricted_keywords(value)
+
+        assert_no_restricted_keywords(schema)
+
+    def test_from_semantic_all_confirmed_composes_pass(self) -> None:
+        manifest = payload_manifest(inline_must_fix=True, out_of_range_must_fix=True)
+        semantic = semantic_result(
+            semantic_decision("inline-must-fix", "confirmed"),
+            semantic_decision("out-of-range-must-fix", "confirmed"),
+        )
+        completed = self.run_semantic_composition(semantic, manifest)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertEqual(result["violations"], [])
+        self.assertEqual(result["auto_fixable_count"], 0)
+        self.assertEqual(result["requires_human_count"], 0)
+        self.assertEqual(
+            result["stages"]["semantic_preflight"],
+            {
+                "status": "PASS",
+                "note": "decisions: 2 confirmed / 0 refuted / 0 insufficient_evidence",
+            },
+        )
+        for stage in ("schema_validation", "range_validation", "payload_consistency"):
+            self.assertEqual(
+                result["stages"][stage],
+                {
+                    "status": "PASS",
+                    "note": "validated by deterministic host-side validators",
+                },
+            )
+
+    def test_from_semantic_requires_manifest_semantic_targets_and_withheld(self) -> None:
+        for missing_key in ("semantic_targets", "withheld"):
+            with self.subTest(missing_key=missing_key):
+                manifest = payload_manifest()
+                del manifest[missing_key]
+                completed = self.run_semantic_composition(
+                    semantic_result(semantic_decision("inline-must-fix", "confirmed")),
+                    manifest,
+                )
+                self.assertEqual(completed.returncode, 1)
+                self.assertIn("INVALID preflight result", completed.stderr)
+                self.assertIn(f"$manifest.{missing_key}", completed.stderr)
+
+    def test_from_semantic_requires_cluster_member_decision_and_uses_null_comment_index(self) -> None:
+        manifest = payload_manifest()
+        manifest["semantic_targets"] = ["inline-must-fix", "cluster-member"]
+        manifest["counts"]["must_fix_total"] = 2
+
+        missing_member = self.run_semantic_composition(
+            semantic_result(semantic_decision("inline-must-fix", "confirmed")),
+            manifest,
+        )
+        self.assertEqual(missing_member.returncode, 1)
+        self.assertIn("cluster-member", missing_member.stderr)
+
+        completed = self.run_semantic_composition(
+            semantic_result(
+                semantic_decision("inline-must-fix", "confirmed"),
+                semantic_decision(
+                    "cluster-member",
+                    "refuted",
+                    counterargument="The cluster member has an independent counterexample.",
+                ),
+            ),
+            manifest,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["violations"][0]["finding_id"], "cluster-member")
+        self.assertIsNone(result["violations"][0]["comment_index"])
+
+    def test_from_semantic_evaluates_withheld_must_fix(self) -> None:
+        completed = self.run_semantic_composition(
+            semantic_result(
+                semantic_decision("inline-must-fix", "confirmed"),
+                semantic_decision(
+                    "withheld-must-fix",
+                    "insufficient_evidence",
+                    counterargument="Local-only evidence is not available to the reviewer.",
+                ),
+            ),
+            payload_manifest(withheld_must_fix=True),
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["violations"][0]["finding_id"], "withheld-must-fix")
+        self.assertIsNone(result["violations"][0]["comment_index"])
+
+    def test_from_semantic_rejects_invalid_semantic_targets(self) -> None:
+        for name, semantic_targets in {
+            "duplicate": ["inline-must-fix", "inline-must-fix"],
+            "empty": [""],
+        }.items():
+            with self.subTest(name=name):
+                manifest = payload_manifest()
+                manifest["semantic_targets"] = semantic_targets
+                manifest["counts"]["must_fix_total"] = len(semantic_targets)
+                completed = self.run_semantic_composition(semantic_result(), manifest)
+                self.assertEqual(completed.returncode, 1)
+                self.assertIn("$manifest.semantic_targets", completed.stderr)
+
+    def test_from_semantic_confirmed_accepts_empty_counterargument(self) -> None:
+        completed = self.run_semantic_composition(
+            semantic_result(
+                semantic_decision(
+                    "inline-must-fix",
+                    "confirmed",
+                    counterargument="",
+                    note="",
+                )
+            ),
+            payload_manifest(),
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertEqual(
+            result["stages"]["semantic_preflight"]["note"],
+            "decisions: 1 confirmed / 0 refuted / 0 insufficient_evidence",
+        )
+
+    def test_from_semantic_refuted_composes_fail_with_counterargument(self) -> None:
+        counterargument = "The diff already guards the allegedly unsafe path."
+        completed = self.run_semantic_composition(
+            semantic_result(
+                semantic_decision(
+                    "inline-must-fix",
+                    "refuted",
+                    counterargument=counterargument,
+                )
+            ),
+            payload_manifest(),
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["verdict"], "FAIL")
+        self.assertEqual(result["auto_fixable_count"], 0)
+        self.assertEqual(result["requires_human_count"], 1)
+        self.assertEqual(
+            result["violations"],
+            [
+                {
+                    "stage": "semantic_preflight",
+                    "rule": "counterargument_succeeded",
+                    "finding_id": "inline-must-fix",
+                    "comment_index": 3,
+                    "detail": counterargument,
+                    "severity": "error",
+                    "auto_fixable": False,
+                    "requires_review_regeneration": True,
+                }
+            ],
+        )
+        self.assertEqual(result["stages"]["semantic_preflight"]["status"], "FAIL")
+
+    def test_from_semantic_refuted_empty_counterargument_uses_fallback_detail(self) -> None:
+        completed = self.run_semantic_composition(
+            semantic_result(
+                semantic_decision(
+                    "inline-must-fix",
+                    "refuted",
+                    counterargument="",
+                )
+            ),
+            payload_manifest(),
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        result = json.loads(completed.stdout)
+        self.assertEqual(
+            result["violations"][0]["detail"],
+            "(counterargument not provided)",
+        )
+
+    def test_from_semantic_insufficient_evidence_composes_new_rule(self) -> None:
+        counterargument = "The available diff does not establish whether the path is reachable."
+        completed = self.run_semantic_composition(
+            semantic_result(
+                semantic_decision(
+                    "out-of-range-must-fix",
+                    "insufficient_evidence",
+                    counterargument=counterargument,
+                )
+            ),
+            payload_manifest(inline_must_fix=False, out_of_range_must_fix=True),
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["verdict"], "FAIL")
+        self.assertEqual(result["requires_human_count"], 1)
+        self.assertEqual(result["violations"][0]["rule"], "insufficient_evidence")
+        self.assertIsNone(result["violations"][0]["comment_index"])
+
+    def test_from_semantic_rejects_finding_id_set_mismatch_and_duplicates(self) -> None:
+        cases = {
+            "missing": semantic_result(),
+            "extra": semantic_result(
+                semantic_decision("inline-must-fix", "confirmed"),
+                semantic_decision("extra", "confirmed"),
+            ),
+            "duplicate": semantic_result(
+                semantic_decision("inline-must-fix", "confirmed"),
+                semantic_decision("inline-must-fix", "confirmed"),
+            ),
+        }
+        for name, semantic in cases.items():
+            with self.subTest(name=name):
+                completed = self.run_semantic_composition(semantic, payload_manifest())
+                self.assertEqual(completed.returncode, 1)
+                self.assertIn("INVALID preflight result", completed.stderr)
+                self.assertIn("finding_id", completed.stderr)
+
+    def test_semantic_skipped_composes_pass_when_no_must_fix_exists(self) -> None:
+        completed = self.run_semantic_composition(
+            None,
+            payload_manifest(inline_must_fix=False),
+            skipped=True,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertEqual(
+            result["stages"]["semantic_preflight"],
+            {
+                "status": "PASS",
+                "note": "skipped: no must_fix findings in payload",
+            },
+        )
+
+    def test_semantic_skipped_rejects_manifest_with_must_fix(self) -> None:
+        completed = self.run_semantic_composition(None, payload_manifest(), skipped=True)
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("INVALID preflight result", completed.stderr)
+        self.assertIn("semantic_targets", completed.stderr)
+
+    def test_data_and_semantic_modes_are_mutually_exclusive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            data_path = Path(tmp) / "preflight-result.json"
+            semantic_path = Path(tmp) / "preflight-semantic.json"
+            manifest_path = Path(tmp) / "payload-manifest.json"
+            data_path.write_text(json.dumps(valid_result()), encoding="utf-8")
+            semantic_path.write_text(
+                json.dumps(semantic_result(semantic_decision("inline-must-fix", "confirmed"))),
+                encoding="utf-8",
+            )
+            manifest_path.write_text(json.dumps(payload_manifest()), encoding="utf-8")
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(VALIDATOR_PATH),
+                    "--schema",
+                    str(SCHEMA_PATH),
+                    "--data",
+                    str(data_path),
+                    "--from-semantic",
+                    str(semantic_path),
+                    "--manifest",
+                    str(manifest_path),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn("not allowed with argument", completed.stderr)
+
+    def test_semantic_modes_require_manifest_pair(self) -> None:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(VALIDATOR_PATH),
+                "--schema",
+                str(SCHEMA_PATH),
+                "--semantic-skipped",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn("--manifest", completed.stderr)
+
+
+    def test_send_skill_documents_hybrid_pipeline_and_counterargument_polarity(self) -> None:
         skill = (ROOT / "skills" / "send" / "SKILL.md").read_text(encoding="utf-8")
         for snippet in (
-            "## STAGE 1: schema_validation",
-            "## STAGE 2: range_validation",
-            "## STAGE 3: semantic_preflight",
-            "## STAGE 4: payload_consistency",
+            "static Python + Codex semantic",
+            "#### 4 stage と担当",
+            "`schema_validation`",
+            "`range_validation`",
+            "`semantic_preflight`",
+            "`payload_consistency`",
+            "static stage が 1 つでも FAIL の場合は Codex を呼ばず fail-closed",
+            "confirmed / refuted / insufficient_evidence",
             "counterargument_succeeded",
+            "`insufficient_evidence` | `semantic_preflight`",
             "反証成功 = 不採用 / FAIL",
             "preflight-result.json",
             "preflight-prompt.md",
+            "preflight-semantic.json",
             "Markdown fallback は使わない",
             "shell で prompt 本文を展開してはならない",
             "<  ~/claude-loop-pr-codex/$dir_name/preflight-prompt.md",
-            "final `VERDICT:` line",
-            "一致しなければ",
+            "--output-schema $semantic_schema_path",
+            "--output-last-message ~/claude-loop-pr-codex/$dir_name/preflight-semantic.json",
+            "--from-semantic ~/claude-loop-pr-codex/$dir_name/preflight-semantic.json",
+            "--semantic-skipped --manifest ~/claude-loop-pr-codex/$dir_name/payload-manifest.json",
+            "JSON オブジェクト 1 個だけ",
+            "同一 prompt の 3 回リトライはしない",
             "既知 rule は severity=error",
-            "RESULT_JSON` の直後に fenced JSON",
         ):
             self.assertIn(snippet, skill)
         self.assertIn('top-level `verdict` は `PASS` / `FAIL` のみ', skill)
+        self.assertNotIn("### RESULT_JSON", skill)
+        self.assertNotIn("--from-markdown", skill)
+        self.assertNotIn("## STAGE 1: schema_validation", skill)
         unsafe_shell_prompt_prefix = "--cd ~/claude-loop-pr-codex/$dir_name " + chr(92) + '\n  "'
         self.assertNotIn(unsafe_shell_prompt_prefix, skill)
 

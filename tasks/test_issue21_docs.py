@@ -8,7 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SEND_SKILL = ROOT / "skills" / "send" / "SKILL.md"
-REVIEW_CRITERIA = ROOT / "skills" / "review" / "REVIEW_CRITERIA.md"
+EXPLAINER_POLICY = ROOT / "skills" / "review" / "EXPLAINER_POLICY.md"
 README = ROOT / "README.md"
 
 
@@ -82,8 +82,8 @@ class Issue21DocsTest(unittest.TestCase):
         for snippet in required_snippets:
             self.assertIn(snippet, step8)
 
-    def test_review_criteria_defines_capped_should_fix_body_summary_format(self) -> None:
-        text = REVIEW_CRITERIA.read_text(encoding="utf-8")
+    def test_explainer_policy_defines_capped_should_fix_body_summary_format(self) -> None:
+        text = EXPLAINER_POLICY.read_text(encoding="utf-8")
         required_snippets = [
             "Should Fix inline comment 整形ルール",
             "上限なし",

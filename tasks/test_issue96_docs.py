@@ -97,15 +97,17 @@ class Issue96DocsTest(unittest.TestCase):
             "schema_version": "preflight-result.v1",
             "verdict": "FAIL",
             "stages": {
-                "schema_validation": {"status": "PASS"},
-                "range_validation": {"status": "PASS"},
-                "semantic_preflight": {"status": "PASS"},
-                "payload_consistency": {"status": "FAIL"},
+                "schema_validation": {"status": "PASS", "note": "validated"},
+                "range_validation": {"status": "PASS", "note": "validated"},
+                "semantic_preflight": {"status": "PASS", "note": "validated"},
+                "payload_consistency": {"status": "FAIL", "note": "approve body scope missing"},
             },
             "violations": [
                 {
                     "stage": "payload_consistency",
                     "rule": "confirmation_scope_body_mismatch",
+                    "finding_id": None,
+                    "comment_index": None,
                     "detail": "APPROVE body is missing the reviewed scope section",
                     "severity": "error",
                     "auto_fixable": True,
