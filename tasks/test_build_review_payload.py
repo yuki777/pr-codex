@@ -187,6 +187,14 @@ class BuildReviewPayloadTest(unittest.TestCase):
         self.assertIn("INVALID review payload inputs", completed.stderr)
         self.assertIn(fragment, completed.stderr)
         self.assertNotIn("Traceback", completed.stderr)
+    def run_verify(self, manifest_path: Path) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(BUILDER_PATH), "--verify", "--manifest", str(manifest_path)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
 
     def test_builds_request_changes_payload_and_comment_map(self) -> None:
         item = finding("must-1", start_line=10, end_line=12)
@@ -215,8 +223,17 @@ class BuildReviewPayloadTest(unittest.TestCase):
         self.assertEqual(manifest["comment_map"], [{"comment_index": 0, "finding_id": "must-1", "severity": "must_fix"}])
         self.assertEqual(
             manifest["counts"],
-            {"must_fix_total": 1, "must_fix_inline": 1, "must_fix_body": 0, "should_fix_inline": 0, "nit_inline": 0},
+            {
+                "must_fix_total": 1,
+                "must_fix_inline": 1,
+                "must_fix_body": 0,
+                "must_fix_withheld": 0,
+                "should_fix_inline": 0,
+                "nit_inline": 0,
+            },
         )
+        self.assertEqual(manifest["withheld"], [])
+        self.assertEqual(manifest["semantic_targets"], ["must-1"])
         self.assertIn("built payload: event=REQUEST_CHANGES comments=1 (must_fix=1 should_fix=0 nit=0) out_of_range=0", completed.stdout)
 
     def test_builds_approve_body_with_deterministic_review_scope(self) -> None:
@@ -262,6 +279,49 @@ class BuildReviewPayloadTest(unittest.TestCase):
         self.assertIn("- 問題: problem far-away", payload["body"])
         self.assertEqual(manifest["out_of_range"], [{"finding_id": "far-away", "kind": "Must Fix", "reason": "diff 範囲外"}])
         self.assertEqual(manifest["counts"]["must_fix_body"], 1)
+    def test_path_absent_from_metadata_files_is_moved_to_body(self) -> None:
+        item = finding("not-in-metadata", path="src/Hidden.py")
+        with tempfile.TemporaryDirectory() as tmp:
+            completed, payload_path, manifest_path, _ = self.run_build(
+                Path(tmp),
+                artifact([item]),
+                ranges_text="src/Hidden.py\tL1-L100\n",
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(payload_path.read_text(encoding="utf-8"))
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["comments"], [])
+        self.assertIn("problem not-in-metadata", payload["body"])
+        self.assertEqual(
+            manifest["out_of_range"],
+            [{"finding_id": "not-in-metadata", "kind": "Must Fix", "reason": "diff 範囲外"}],
+        )
+    def test_missing_or_non_list_metadata_files_invalidates_inline_candidates(self) -> None:
+        item = finding("invalid-files")
+        for files_value in (None, {"src/App.py": True}):
+            with self.subTest(files=files_value), tempfile.TemporaryDirectory() as tmp:
+                metadata_data = metadata()
+                if files_value is None:
+                    del metadata_data["files"]
+                else:
+                    metadata_data["files"] = files_value
+                completed, payload_path, manifest_path, _ = self.run_build(
+                    Path(tmp),
+                    artifact([item]),
+                    metadata_data=metadata_data,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                payload = json.loads(payload_path.read_text(encoding="utf-8"))
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+                self.assertEqual(payload["comments"], [])
+                self.assertEqual(
+                    manifest["out_of_range"],
+                    [{"finding_id": "invalid-files", "kind": "Must Fix", "reason": "diff 範囲外"}],
+                )
+
+
 
     def test_left_side_opted_in_finding_is_moved_to_body(self) -> None:
         item = finding("left-should", "should_fix", side="LEFT")
@@ -318,6 +378,39 @@ class BuildReviewPayloadTest(unittest.TestCase):
         for private_fragment in ("curl", "internal", "secret=", "raw payload", "exploitability"):
             self.assertNotIn(private_fragment, body)
         self.assertEqual(manifest["out_of_range"], [{"finding_id": "security-1", "kind": "Must Fix", "reason": "security disclosure policy"}])
+    def test_local_only_or_suppressed_security_must_fix_is_withheld(self) -> None:
+        cases = (
+            ("local-only", "local_only", "local_only", "local_only"),
+            ("suppressed", "suppress", "body_summary_safe", "suppress"),
+        )
+        for identifier, post_policy, disclosure_policy, expected_reason in cases:
+            with self.subTest(post_policy=post_policy), tempfile.TemporaryDirectory() as tmp:
+                item = finding(identifier, category="security", post_policy=post_policy)
+                item["problem"] = f"private problem {identifier}"
+                item["security"] = {
+                    "severity": "high",
+                    "confidence": "high",
+                    "exploitability": f"private exploit {identifier}",
+                    "public_safe_summary": f"public summary {identifier}",
+                    "disclosure_policy": disclosure_policy,
+                }
+                completed, payload_path, manifest_path, _ = self.run_build(Path(tmp), artifact([item]))
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                payload = json.loads(payload_path.read_text(encoding="utf-8"))
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+                self.assertEqual(payload["event"], "REQUEST_CHANGES")
+                self.assertEqual(payload["comments"], [])
+                self.assertNotIn(f"private problem {identifier}", payload["body"])
+                self.assertNotIn(f"public summary {identifier}", payload["body"])
+                self.assertEqual(manifest["out_of_range"], [])
+                self.assertEqual(
+                    manifest["withheld"],
+                    [{"finding_id": identifier, "kind": "Must Fix", "reason": expected_reason}],
+                )
+                self.assertEqual(manifest["semantic_targets"], [identifier])
+                self.assertEqual(manifest["counts"]["must_fix_withheld"], 1)
+
 
     def test_cluster_posts_only_representative_and_summarizes_five_members(self) -> None:
         representative = finding("rep", path="src/rep.py", start_line=5)
@@ -335,8 +428,12 @@ class BuildReviewPayloadTest(unittest.TestCase):
             }
         ]
         ranges = "\n".join(f"{item['location']['path']}\tL1-L100" for item in all_findings) + "\n"
+        cluster_metadata = metadata()
+        cluster_metadata["files"] = [item["location"]["path"] for item in all_findings]
         with tempfile.TemporaryDirectory() as tmp:
-            completed, payload_path, manifest_path, _ = self.run_build(Path(tmp), data, ranges_text=ranges)
+            completed, payload_path, manifest_path, _ = self.run_build(
+                Path(tmp), data, metadata_data=cluster_metadata, ranges_text=ranges
+            )
             self.assertEqual(completed.returncode, 0, completed.stderr)
             payload = json.loads(payload_path.read_text(encoding="utf-8"))
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -350,6 +447,67 @@ class BuildReviewPayloadTest(unittest.TestCase):
         self.assertIn("- 他 1 件", body)
         self.assertEqual(manifest["counts"]["must_fix_total"], 7)
         self.assertEqual(manifest["counts"]["must_fix_inline"], 1)
+        self.assertEqual(manifest["semantic_targets"], ["rep", *(f"member-{index}" for index in range(1, 7))])
+
+
+    def test_cluster_summary_filters_private_unpostable_and_inactive_members(self) -> None:
+        representative = finding("rep")
+        private_member = finding("private-member", category="security", post_policy="local_only", start_line=20)
+        private_member["problem"] = "do not publish private member"
+        private_member["security"] = {
+            "severity": "high",
+            "confidence": "high",
+            "exploitability": "private exploit details",
+            "public_safe_summary": "private public-safe summary",
+            "disclosure_policy": "local_only",
+        }
+        unpostable_member = finding(
+            "unpostable-member",
+            "should_fix",
+            start_line=30,
+            explanation_postable=False,
+        )
+        excluded_member = finding("excluded-member", "nit", start_line=40)
+        visible_member = finding("visible-member", start_line=50)
+        all_findings = [
+            representative,
+            private_member,
+            unpostable_member,
+            excluded_member,
+            visible_member,
+        ]
+        data = artifact(all_findings)
+        data["root_cause_clusters"] = [
+            {
+                "id": "cluster-filtered",
+                "summary": "same root cause",
+                "representative_finding_id": "rep",
+                "finding_ids": [item["id"] for item in all_findings],
+            }
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            completed, payload_path, manifest_path, _ = self.run_build(
+                Path(tmp),
+                data,
+                flags=("--include-should-fix",),
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(payload_path.read_text(encoding="utf-8"))
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+        body = payload["comments"][0]["body"]
+        self.assertIn("problem visible-member", body)
+        for private_fragment in (
+            "do not publish private member",
+            "private public-safe summary",
+            "problem unpostable-member",
+            "problem excluded-member",
+        ):
+            self.assertNotIn(private_fragment, body)
+        self.assertIn("- 他 3 件", body)
+        self.assertEqual(manifest["withheld"], [])
+        self.assertEqual(manifest["semantic_targets"], ["rep", "private-member", "visible-member"])
 
     def test_include_flags_are_independent_and_comments_are_severity_grouped(self) -> None:
         items = [
@@ -470,20 +628,22 @@ class BuildReviewPayloadTest(unittest.TestCase):
             self.assertEqual(completed.returncode, 0, completed.stderr)
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             expected_paths = {
-                paths["findings"].resolve(),
-                paths["review"].resolve(),
-                paths["metadata"].resolve(),
-                paths["ranges"].resolve(),
-                paths["diff"].resolve(),
-                paths["ci_status"].resolve(),
-                paths["sarif"].resolve(),
-                paths["ci_summary"].resolve(),
-                paths["run_plan"].resolve(),
-                payload_path.resolve(),
+                "findings": paths["findings"].resolve(),
+                "review": paths["review"].resolve(),
+                "metadata": paths["metadata"].resolve(),
+                "ranges": paths["ranges"].resolve(),
+                "diff": paths["diff"].resolve(),
+                "ci_status": paths["ci_status"].resolve(),
+                "sarif": paths["sarif"].resolve(),
+                "ci_summary": paths["ci_summary"].resolve(),
+                "run_plan": paths["run_plan"].resolve(),
+                "payload": payload_path.resolve(),
             }
-            self.assertEqual({Path(key) for key in manifest["files"]}, expected_paths)
-            for raw_path, digest in manifest["files"].items():
-                self.assertEqual(hashlib.sha256(Path(raw_path).read_bytes()).hexdigest(), digest)
+            self.assertEqual(set(manifest["files"]), set(expected_paths))
+            for role, expected_path in expected_paths.items():
+                record = manifest["files"][role]
+                self.assertEqual(Path(record["path"]), expected_path)
+                self.assertEqual(hashlib.sha256(expected_path.read_bytes()).hexdigest(), record["sha256"])
 
             verified = subprocess.run(
                 [sys.executable, str(BUILDER_PATH), "--verify", "--manifest", str(manifest_path)],
@@ -508,6 +668,39 @@ class BuildReviewPayloadTest(unittest.TestCase):
             self.assertIn(str(paths["sarif"].resolve()), tampered.stderr)
             self.assertIn("missing", tampered.stderr)
             self.assertNotIn("Traceback", tampered.stderr)
+    def test_verify_rejects_manifest_semantic_tampering(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            completed, _, manifest_path, _ = self.run_build(directory, artifact([finding("must-1")]))
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            verified = self.run_verify(manifest_path)
+            self.assertEqual(verified.returncode, 0, verified.stderr)
+
+            missing_payload = copy.deepcopy(manifest)
+            del missing_payload["files"]["payload"]
+            missing_comment = copy.deepcopy(manifest)
+            missing_comment["comment_map"] = []
+            changed_event = copy.deepcopy(manifest)
+            changed_event["event"] = "APPROVE"
+            changed_targets = copy.deepcopy(manifest)
+            changed_targets["semantic_targets"] = []
+            cases = (
+                ("missing-payload", missing_payload, "files.payload"),
+                ("comment-map", missing_comment, "payload.comments"),
+                ("event", changed_event, "payload.event"),
+                ("semantic-targets", changed_targets, "semantic_targets"),
+            )
+            for name, altered_manifest, expected_error in cases:
+                with self.subTest(name=name):
+                    altered_path = directory / f"{name}.json"
+                    write_json(altered_path, altered_manifest)
+                    invalid = self.run_verify(altered_path)
+                    self.assertEqual(invalid.returncode, 1, invalid.stderr)
+                    self.assertIn("INVALID payload manifest", invalid.stderr)
+                    self.assertIn(expected_error, invalid.stderr)
+                    self.assertNotIn("Traceback", invalid.stderr)
+
 
     def test_missing_optional_files_use_fallbacks_and_are_not_hashed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -541,7 +734,7 @@ class BuildReviewPayloadTest(unittest.TestCase):
         self.assertEqual(payload["event"], "APPROVE")
         self.assertIn("- 検証観点: 2者レビュー (Claude/Codex hunter) + verifier 4軸 gate", payload["body"])
         self.assertIn("- CI 状態: 未取得", payload["body"])
-        self.assertTrue(all(str(path.resolve()) not in manifest["files"] for path in missing_paths.values()))
+        self.assertTrue(all(role not in manifest["files"] for role in ("ci_status", "run_plan", "ci_summary", "sarif", "diff")))
 
     def test_unreadable_ci_json_is_treated_as_not_obtained(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

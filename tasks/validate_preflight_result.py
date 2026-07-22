@@ -150,15 +150,15 @@ def add_unexpected(errors: list[str], path: str, obj: Any, allowed: set[str]) ->
         if unexpected:
             errors.append(f"{path}: unexpected properties: {', '.join(unexpected)}")
 
-def manifest_must_fix_context(
+def manifest_semantic_context(
     manifest: Any,
 ) -> tuple[set[str], dict[str, int], list[str]]:
     """Validate manifest fields used by semantic composition."""
     errors: list[str] = []
-    must_fix_ids: set[str] = set()
+    semantic_target_ids: set[str] = set()
     comment_indices: dict[str, int] = {}
     if not isinstance(manifest, dict):
-        return must_fix_ids, comment_indices, ["$manifest: must be an object"]
+        return semantic_target_ids, comment_indices, ["$manifest: must be an object"]
     if manifest.get("schema_version") != MANIFEST_SCHEMA_VERSION:
         errors.append(f"$manifest.schema_version: must be {MANIFEST_SCHEMA_VERSION}")
 
@@ -185,8 +185,6 @@ def manifest_must_fix_context(
                 errors.append(f"{path}.severity: must be a non-empty safe string")
             if is_non_empty_string(finding_id) and is_non_negative_int(comment_index):
                 comment_indices.setdefault(finding_id, comment_index)
-            if severity == "must_fix" and is_non_empty_string(finding_id):
-                must_fix_ids.add(finding_id)
 
     out_of_range = manifest.get("out_of_range")
     if not isinstance(out_of_range, list):
@@ -209,13 +207,48 @@ def manifest_must_fix_context(
                 errors.append(f"{path}.kind: must be a non-empty safe string")
             if not is_safe_string(reason):
                 errors.append(f"{path}.reason: must be a safe string")
-            if (
-                is_non_empty_string(finding_id)
-                and isinstance(kind, str)
-                and kind.startswith("Must Fix")
-            ):
-                must_fix_ids.add(finding_id)
-    return must_fix_ids, comment_indices, errors
+
+    withheld = manifest.get("withheld")
+    if not isinstance(withheld, list):
+        errors.append("$manifest.withheld: must be an array")
+    else:
+        for index, item in enumerate(withheld):
+            path = f"$manifest.withheld[{index}]"
+            if not isinstance(item, dict):
+                errors.append(f"{path}: must be an object")
+                continue
+            missing = sorted({"finding_id", "kind", "reason"} - set(item))
+            if missing:
+                errors.append(f"{path}: missing required properties: {', '.join(missing)}")
+            finding_id = item.get("finding_id")
+            kind = item.get("kind")
+            reason = item.get("reason")
+            if not is_non_empty_string(finding_id):
+                errors.append(f"{path}.finding_id: must be a non-empty safe string")
+            if kind != "Must Fix":
+                errors.append(f"{path}.kind: must be Must Fix")
+            if reason not in {"local_only", "suppress"}:
+                errors.append(f"{path}.reason: must be local_only or suppress")
+
+    semantic_targets = manifest.get("semantic_targets")
+    duplicate_targets: set[str] = set()
+    if not isinstance(semantic_targets, list):
+        errors.append("$manifest.semantic_targets: must be an array")
+    else:
+        for index, finding_id in enumerate(semantic_targets):
+            path = f"$manifest.semantic_targets[{index}]"
+            if not is_non_empty_string(finding_id):
+                errors.append(f"{path}: must be a non-empty safe string")
+            elif finding_id in semantic_target_ids:
+                duplicate_targets.add(finding_id)
+            else:
+                semantic_target_ids.add(finding_id)
+    if duplicate_targets:
+        errors.append(
+            "$manifest.semantic_targets: duplicate values: "
+            + ", ".join(sorted(duplicate_targets))
+        )
+    return semantic_target_ids, comment_indices, errors
 
 
 def validated_semantic_decisions(
@@ -267,8 +300,8 @@ def validated_semantic_decisions(
                 f"{path}.decision: must be confirmed, refuted, or insufficient_evidence"
             )
             valid_item = False
-        if not is_non_empty_string(counterargument):
-            errors.append(f"{path}.counterargument: must be a non-empty safe string")
+        if not is_safe_string(counterargument):
+            errors.append(f"{path}.counterargument: must be a safe string")
             valid_item = False
         if not is_safe_string(note):
             errors.append(f"{path}.note: must be a safe string")
@@ -287,7 +320,7 @@ def validated_semantic_decisions(
     extra_ids = sorted(actual_finding_ids - expected_finding_ids)
     if missing_ids:
         errors.append(
-            "$semantic.decisions.finding_id: missing manifest must_fix ids: "
+            "$semantic.decisions.finding_id: missing manifest semantic_targets ids: "
             + ", ".join(missing_ids)
         )
     if extra_ids:
@@ -334,8 +367,8 @@ def compose_from_semantic(
     semantic: Any,
     manifest: Any,
 ) -> tuple[dict[str, Any] | None, list[str]]:
-    must_fix_ids, comment_indices, manifest_errors = manifest_must_fix_context(manifest)
-    decisions, semantic_errors = validated_semantic_decisions(semantic, must_fix_ids)
+    semantic_target_ids, comment_indices, manifest_errors = manifest_semantic_context(manifest)
+    decisions, semantic_errors = validated_semantic_decisions(semantic, semantic_target_ids)
     errors = manifest_errors + semantic_errors
     if errors:
         return None, errors
@@ -358,7 +391,7 @@ def compose_from_semantic(
                 ),
                 "finding_id": finding_id,
                 "comment_index": comment_indices.get(finding_id),
-                "detail": decision_item["counterargument"],
+                "detail": decision_item["counterargument"] or "(counterargument not provided)",
                 "severity": "error",
                 "auto_fixable": False,
                 "requires_review_regeneration": True,
@@ -378,11 +411,11 @@ def compose_from_semantic(
 def compose_semantic_skipped(
     manifest: Any,
 ) -> tuple[dict[str, Any] | None, list[str]]:
-    must_fix_ids, _, errors = manifest_must_fix_context(manifest)
-    if must_fix_ids:
+    semantic_target_ids, _, errors = manifest_semantic_context(manifest)
+    if semantic_target_ids:
         errors.append(
-            "$manifest: --semantic-skipped requires no must_fix findings; found "
-            + ", ".join(sorted(must_fix_ids))
+            "$manifest: --semantic-skipped requires semantic_targets to be empty; found "
+            + ", ".join(sorted(semantic_target_ids))
         )
     if errors:
         return None, errors

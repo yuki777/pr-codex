@@ -278,7 +278,7 @@ python3 $validator_path --schema $schema_path --data ~/claude-loop-pr-codex/$dir
 
 #### `findings.verified.json` から抽出するフィールド
 
-builder は各 Must Fix finding から以下を payload 用に組み立てる。`root_cause_clusters[]` がない finding は従来どおり個別 inline comment にする。cluster member のうち `representative_finding_id` ではない finding は duplicate inline comment としては投稿せず、代表 finding の `body` に affected findings summary として path/line/problem を最大 5 件まで短く含める（超過分は `他 N 件` として数だけ示す）。canonical / review.md / SARIF / preflight の Must Fix count は cluster member を含む full finding count を使い、代表数に減らして数えない:
+builder は各 Must Fix finding から以下を payload 用に組み立てる。`root_cause_clusters[]` がない finding は従来どおり個別 inline comment にする。cluster member のうち `representative_finding_id` ではない finding は duplicate inline comment としては投稿せず、代表 finding の `body` に affected findings summary として path/line/problem を最大 5 件まで短く含める（超過分は `他 N 件` として数だけ示す）。掲載する member は `posting.post_policy == "body_summary" | "inline"` かつ `posting.explanation_postable == true` かつ severity が active severity flags で許可されたもの（must_fix は常時、should_fix / nit はオプション指定時のみ、note は掲載しない）に限り、`local_only` / `suppress` / `explanation_postable == false` / disclosure_policy が `local_only` の member は内容を掲載せず `他 N 件` の数にだけ含める。canonical / review.md / SARIF / preflight の Must Fix count は cluster member を含む full finding count を使い、代表数に減らして数えない:
 
 | 出力キー        | 値 |
 | --------------- | --- |
@@ -322,10 +322,10 @@ builder は各 Nit inline/fallback 候補から以下を保持する。`$include
 
 - `findings.verified.json` が存在しない / 空 / JSON parse 失敗 / top-level object でない / `findings[]` 不在または非配列 / 同梱 validator による `schemas/findings.v1.json` validation / fingerprint 再計算 / format / range validation 失敗 / `id != fingerprint` のいずれかなら、ユーザーに通知して **中断** する（Markdown fallback へは切り替えない）
 - `findings.verified.json.pr.repository != metadata.json.repository_full_name`、`findings.verified.json.pr.number != metadata.json.pr_number`、`findings.verified.json.pr.head_sha != metadata.json.head_sha`、`findings.verified.json.pr.base_sha != metadata.json.base_sha`、または `metadata.json.repository_full_name != "$org/$repository"` のいずれかなら、canonical artifact が投稿先 PR と一致しないため **中断** する（Markdown fallback へは切り替えない）
-- `severity == "must_fix"` の finding は、M1 では原則 **`posting.post_policy == "inline"` かつ `posting.explanation_postable == true`** のものだけを自動 inline 投稿対象として扱う。security high/critical または `disclosure_policy != inline_safe` の Must Fix は例外として inline から除外し、公開可能な `public_safe_summary` を body/local-only 側に分岐する
+- `severity == "must_fix"` の finding は、M1 では原則 **`posting.post_policy == "inline"` かつ `posting.explanation_postable == true`** のものだけを自動 inline 投稿対象として扱う。security の Must Fix は例外として二層に分岐する: `security.disclosure_policy == "body_summary_safe"`（または security high/critical で `inline_safe` でないもの）は inline から除外して body 退避し、公開可能な `public_safe_summary` だけを body に使う。`security.disclosure_policy == "local_only"` または `posting.post_policy` が `local_only` / `suppress` の Must Fix は **公開 payload のどこにも載せず**、`payload-manifest.json` の `withheld` に記録だけ残す（event 判定と semantic 対象には含める）
 - `severity != "must_fix"` の finding に `posting.post_policy == "inline"` が 1 件でもあれば、review 側の M1 posting contract 違反として **中断** する（Markdown fallback へは切り替えない）。M1 では `should_fix` / `nit` / `note` は inline 自動投稿対象外であり、`body_summary` / `local_only` / `suppress` のいずれかで表現する
 - `severity == "must_fix"` の finding で `location.side != "RIGHT"` が 1 件でもあれば、現 workflow の `pr.diff.ranges.txt` が head/new 側前提のため **中断** する（Markdown fallback へは切り替えない）
-- `must_fix` なのに `posting.post_policy` が `body_summary` / `local_only` / `suppress` のもの、または `posting.explanation_postable == false` のものが 1 件でもあれば、GitHub payload へ安全に変換できないため **中断** する（Markdown fallback へは切り替えない）。ただし `category == "security"` かつ `security.severity == "critical" | "high"` または `security.disclosure_policy != "inline_safe"` の場合は例外で、inline 詳細を避けるため `body_summary` / `local_only` 側に分岐させる
+- `must_fix` なのに `posting.post_policy` が `body_summary` / `local_only` / `suppress` のもの、または `posting.explanation_postable == false` のものが 1 件でもあれば、GitHub payload へ安全に変換できないため **中断** する（Markdown fallback へは切り替えない）。ただし `category == "security"` かつ `security.severity == "critical" | "high"` または `security.disclosure_policy != "inline_safe"` の場合は例外で、inline 詳細を避けるため `body_summary_safe` は body 退避、`local_only` / `suppress` は `withheld`（非公開）側に分岐させる
 - `category == "security"` なのに `security` extension が無い、`security.public_safe_summary` が exploit command / secret / raw payload を含む、または `security.severity == "critical" | "high"` で `posting.post_policy == "inline"` のものが 1 件でもあれば **中断** する。公開 repo では high/critical security finding を inline 詳細として投稿せず、review 再生成で `body_summary_safe` / `local_only` に分岐させる
 - `$must_fix` の件数と `$must_fix_markdown_count` が **完全一致** しなければ中断する。人手で `review.md` が編集された、または review 側の派生生成が壊れている可能性があるため、Markdown fallback へは切り替えない
 
@@ -344,7 +344,7 @@ Must Fix:
 - `<path:Lline>` <problem>
 ```
 
-`同一 root cause の影響箇所` は cluster representative の場合のみ追加する。representative 自身はこの箇条書きから除外し、同じ cluster の他 finding を canonical array order で最大 5 件まで列挙する。
+`同一 root cause の影響箇所` は cluster representative の場合のみ追加する。representative 自身はこの箇条書きから除外し、同じ cluster の他 finding のうち上記の掲載条件（posting policy / explanation_postable / active severity flags / security disclosure）を満たすものだけを canonical array order で最大 5 件まで列挙し、条件を満たさない member と 6 件目以降は `他 N 件` の数にだけ含める。
 
 #### 空セクションの扱い
 
@@ -417,6 +417,7 @@ test -f "$plugin_root/skills/lib/extract-diff-ranges.awk" && awk -f "$plugin_roo
 - 単一行コメントは `line` が同一 `path` のいずれかの範囲内に含まれる場合のみ有効
 - 複数行コメントは `[start_line, line]` の両端が同一 `path` の同じ hunk 範囲内に含まれる場合のみ有効。複数 hunk をまたぐ範囲は無効
 - `path` が `pr.diff.ranges.txt` に存在しない場合は無効
+- `path` が `metadata.json.files[]` に含まれない場合は無効（`pr.diff.ranges.txt` が stale で PR 外の path を含んでいても inline comment にしない）。`metadata.json.files[]` が欠落または配列でない場合は、範囲を確定できないためすべてのインラインコメント候補を無効として扱う
 - `pr.diff.ranges.txt` が空、または `pr.diff` が存在しない場合は、行範囲を確定できないためすべてのインラインコメント候補を無効として扱う
 - `location.side != "RIGHT"` の Should Fix / Nit は、現 M1 workflow では GitHub inline comment に変換できないため無効として扱う
 
@@ -509,7 +510,7 @@ builder は以下のルールを実装している:
 
 body のセクション順は必ず `総評` → `## 良い点`（存在する場合）→ `## 確認した範囲`（`APPROVE` の場合）→ `## CI 状態`（CI 抑止 `COMMENT` の場合）→ `## 行コメント不可 (diff 範囲外)`（存在する場合）とする。diff 範囲内の Should Fix / Nit は body section ではなく `comments[]` の inline comment とする。diff 範囲外の Must Fix / Should Fix / Nit は body の `## 行コメント不可 (diff 範囲外)` へ退避する。
 
-payload は builder が `--output` で `~/claude-loop-pr-codex/$dir_name/review-payload.json` に整形 JSON（インデント 2）として書き出す。同時に `--manifest` で `payload-manifest.json`（`payload-manifest.v1`）を書き出し、`comment_index → finding_id` の対応表（`comment_map`）、退避一覧（`out_of_range`）、件数（`counts`）、event、および payload / findings / review.md / metadata / ranges / SARIF / diff の sha256 digest（`files`）を記録する。以降の工程は location 文字列による曖昧照合ではなく `comment_map` を使って finding と comment を対応付ける。
+payload は builder が `--output` で `~/claude-loop-pr-codex/$dir_name/review-payload.json` に整形 JSON（インデント 2）として書き出す。同時に `--manifest` で `payload-manifest.json`（`payload-manifest.v1`）を書き出し、`comment_index → finding_id` の対応表（`comment_map`）、body 退避一覧（`out_of_range`）、非公開一覧（`withheld`。local_only / suppress の Must Fix で、body にも載せない）、semantic 対象の全 Must Fix finding id（`semantic_targets`。cluster 非代表 member を含む）、件数（`counts`）、event、および role 付きの sha256 digest（`files`。required: findings / review / metadata / ranges / payload、optional: sarif / diff / ci_status / run_plan / ci_summary）を記録する。以降の工程は location 文字列による曖昧照合ではなく `comment_map` を使って finding と comment を対応付ける。`--verify` は digest 照合に加えて manifest 自体の構造・required role の存在・`comment_map` / `event` / `counts` / `semantic_targets` と payload / findings の再突き合わせを行い、manifest 改竄も検出する。
 
 #### 許可 severity (active severity flags)
 
@@ -528,7 +529,7 @@ builder は `--include-should-fix` / `--include-nit` の active severity flags �
 | 3. `semantic_preflight` | Codex (GPT-5.6) | payload 投稿対象の各 Must Fix finding の実在性判定（confirmed / refuted / insufficient_evidence の 3 値） |
 | 4. `payload_consistency` | Python (`build_review_payload.py`) | event 判定（'Must Fix が1件以上（body 末尾へ退避した範囲外 Must Fix も含む）→ REQUEST_CHANGES / Must Fix 0件かつ ci-status.json.state が failure または pending → COMMENT / Must Fix 0件かつ ci-status.json.state が success・skipped・未取得 → APPROVE'）、body セクション順（payload.event が APPROVE の場合は payload.body に '## 確認した範囲' を含む）、counts。builder が生成時に決定論的に保証し、`--verify` で再確認する |
 
-semantic preflight は payload 投稿対象（inline + body 退避）の Must Fix finding のみに適用する。Codex は各 Must Fix finding について「この指摘が誤りである可能性」を 1 つだけ探索し、3 値で判定する。「反証あり」と「調査不足」を区別する:
+semantic preflight は canonical の `severity == "must_fix"` 全 finding（cluster 非代表 member と `withheld` を含む。`payload-manifest.json` の `semantic_targets`）に適用する。cluster member の要約も代表 comment の body に掲載されるため、代表だけに縮めない。Codex は各 Must Fix finding について「この指摘が誤りである可能性」を 1 つだけ探索し、3 値で判定する。「反証あり」と「調査不足」を区別する:
 
 - `confirmed`: 反証を挙げられない。`counterargument` には検討した最有力の反証仮説と棄却理由を 1〜2 文で書く
 - `refuted`: 反証が成立した。反証成功 = 不採用 / FAIL
@@ -592,7 +593,7 @@ static stage の rule 語彙（`schema_validation`: `schema_version_mismatch` / 
 
 - いつ使うか: static stage 通過後、`counts.must_fix_total` が 1 以上の場合に Codex semantic コマンドの直前に必ず作成する
 - 作成方法: Write ツールで `~/claude-loop-pr-codex/$dir_name/preflight-prompt.md` に以下の prompt 本文を書き出す。`file_path` は `~` と `$dir_name` を実値へ展開した絶対パスで渡す
-- 置換ルール: `{SEMANTIC_SCHEMA_PATH}` は Step 2.5 で保持した `semantic_schema_path` へ、`{MUST_FIX_FINDINGS}` は `payload-manifest.json` の `comment_map` / `out_of_range` にある Must Fix finding を `findings.verified.json` から引き、finding ごとに `- finding_id / path:L<行> / title / problem / reason / suggestion` を列挙した平文へ、Claude 側で置換してから書き出す。shell で prompt 本文を展開してはならない
+- 置換ルール: `{SEMANTIC_SCHEMA_PATH}` は Step 2.5 で保持した `semantic_schema_path` へ、`{MUST_FIX_FINDINGS}` は `payload-manifest.json` の `semantic_targets` にある全 Must Fix finding（cluster 非代表 member・withheld を含む）を `findings.verified.json` から引き、finding ごとに `- finding_id / path:L<行> / title / problem / reason / suggestion` を列挙した平文へ、Claude 側で置換してから書き出す。shell で prompt 本文を展開してはならない
 - 理由: prompt 本文には Markdown backtick や JSON double quote が含まれるため、shell の double-quoted argument として渡すと command substitution / quote 分割で壊れる。prompt file + stdin 経由に固定し、shell は本文を解釈しない
 
 ```markdown
@@ -725,7 +726,7 @@ interactive mode では、ユーザーの応答が `yes` / `y` / `はい` 等の
 Step 6 の GitHub write の直前に、interactive / auto_submit のどちらでも以下を必ず実行する。これにより `--auto-submit` でも古い review を自動投稿せず、preflight 後にローカル artifact が書き換わった場合（HEAD SHA gate では検出できないローカル TOCTOU）も投稿しない。
 
 - いつ使うか: Step 5 で interactive の承認を得た直後、または auto_submit で最終投稿承認だけをスキップした直後
-- 判定条件: `build_review_payload.py --verify` が終了コード 0（`payload-manifest.json` に記録した payload / findings / review.md / metadata / ranges / SARIF / diff の sha256 digest がすべて現物と一致する）
+- 判定条件: `build_review_payload.py --verify` が終了コード 0（`payload-manifest.json` の構造と required role の存在を検証し、記録された payload / findings / review.md / metadata / ranges / SARIF / diff の sha256 digest がすべて現物と一致し、`comment_map` / `event` / `counts` / `semantic_targets` が payload / findings と再突き合わせで整合する）
 - 次アクション: 成功なら二重投稿防止 gate へ。不一致なら preflight 後にローカル artifact が変更されたため中断し、Step 6 は実行しない
 
 ```bash

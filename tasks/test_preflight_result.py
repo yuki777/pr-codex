@@ -80,6 +80,7 @@ def payload_manifest(
     *,
     inline_must_fix: bool = True,
     out_of_range_must_fix: bool = False,
+    withheld_must_fix: bool = False,
 ) -> dict[str, object]:
     comment_map = [
         {
@@ -93,14 +94,53 @@ def payload_manifest(
         out_of_range.append(
             {
                 "finding_id": "out-of-range-must-fix",
-                "kind": "Must Fix (outside diff)",
+                "kind": "Must Fix",
                 "reason": "No changed line can host the comment.",
             }
         )
+    withheld = []
+    if withheld_must_fix:
+        withheld.append(
+            {
+                "finding_id": "withheld-must-fix",
+                "kind": "Must Fix",
+                "reason": "local_only",
+            }
+        )
+    semantic_targets = []
+    if inline_must_fix:
+        semantic_targets.append("inline-must-fix")
+    if out_of_range_must_fix:
+        semantic_targets.append("out-of-range-must-fix")
+    if withheld_must_fix:
+        semantic_targets.append("withheld-must-fix")
+    role_files = {
+        role: {"path": str(ROOT / filename), "sha256": "0" * 64}
+        for role, filename in {
+            "findings": "findings.json",
+            "review": "review.md",
+            "metadata": "metadata.json",
+            "ranges": "pr.diff.ranges.txt",
+            "payload": "payload.json",
+        }.items()
+    }
     return {
         "schema_version": "payload-manifest.v1",
+        "generated_at": "2026-05-06T00:00:00+00:00",
+        "event": "REQUEST_CHANGES" if semantic_targets else "COMMENT",
         "comment_map": comment_map,
         "out_of_range": out_of_range,
+        "withheld": withheld,
+        "semantic_targets": semantic_targets,
+        "counts": {
+            "must_fix_total": len(semantic_targets),
+            "must_fix_inline": int(inline_must_fix),
+            "must_fix_body": int(out_of_range_must_fix),
+            "must_fix_withheld": int(withheld_must_fix),
+            "should_fix_inline": int(not inline_must_fix),
+            "nit_inline": 0,
+        },
+        "files": role_files,
     }
 
 
@@ -559,6 +599,97 @@ class ValidatePreflightResultTest(unittest.TestCase):
                 },
             )
 
+    def test_from_semantic_requires_manifest_semantic_targets_and_withheld(self) -> None:
+        for missing_key in ("semantic_targets", "withheld"):
+            with self.subTest(missing_key=missing_key):
+                manifest = payload_manifest()
+                del manifest[missing_key]
+                completed = self.run_semantic_composition(
+                    semantic_result(semantic_decision("inline-must-fix", "confirmed")),
+                    manifest,
+                )
+                self.assertEqual(completed.returncode, 1)
+                self.assertIn("INVALID preflight result", completed.stderr)
+                self.assertIn(f"$manifest.{missing_key}", completed.stderr)
+
+    def test_from_semantic_requires_cluster_member_decision_and_uses_null_comment_index(self) -> None:
+        manifest = payload_manifest()
+        manifest["semantic_targets"] = ["inline-must-fix", "cluster-member"]
+        manifest["counts"]["must_fix_total"] = 2
+
+        missing_member = self.run_semantic_composition(
+            semantic_result(semantic_decision("inline-must-fix", "confirmed")),
+            manifest,
+        )
+        self.assertEqual(missing_member.returncode, 1)
+        self.assertIn("cluster-member", missing_member.stderr)
+
+        completed = self.run_semantic_composition(
+            semantic_result(
+                semantic_decision("inline-must-fix", "confirmed"),
+                semantic_decision(
+                    "cluster-member",
+                    "refuted",
+                    counterargument="The cluster member has an independent counterexample.",
+                ),
+            ),
+            manifest,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["violations"][0]["finding_id"], "cluster-member")
+        self.assertIsNone(result["violations"][0]["comment_index"])
+
+    def test_from_semantic_evaluates_withheld_must_fix(self) -> None:
+        completed = self.run_semantic_composition(
+            semantic_result(
+                semantic_decision("inline-must-fix", "confirmed"),
+                semantic_decision(
+                    "withheld-must-fix",
+                    "insufficient_evidence",
+                    counterargument="Local-only evidence is not available to the reviewer.",
+                ),
+            ),
+            payload_manifest(withheld_must_fix=True),
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["violations"][0]["finding_id"], "withheld-must-fix")
+        self.assertIsNone(result["violations"][0]["comment_index"])
+
+    def test_from_semantic_rejects_invalid_semantic_targets(self) -> None:
+        for name, semantic_targets in {
+            "duplicate": ["inline-must-fix", "inline-must-fix"],
+            "empty": [""],
+        }.items():
+            with self.subTest(name=name):
+                manifest = payload_manifest()
+                manifest["semantic_targets"] = semantic_targets
+                manifest["counts"]["must_fix_total"] = len(semantic_targets)
+                completed = self.run_semantic_composition(semantic_result(), manifest)
+                self.assertEqual(completed.returncode, 1)
+                self.assertIn("$manifest.semantic_targets", completed.stderr)
+
+    def test_from_semantic_confirmed_accepts_empty_counterargument(self) -> None:
+        completed = self.run_semantic_composition(
+            semantic_result(
+                semantic_decision(
+                    "inline-must-fix",
+                    "confirmed",
+                    counterargument="",
+                    note="",
+                )
+            ),
+            payload_manifest(),
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertEqual(
+            result["stages"]["semantic_preflight"]["note"],
+            "decisions: 1 confirmed / 0 refuted / 0 insufficient_evidence",
+        )
+
     def test_from_semantic_refuted_composes_fail_with_counterargument(self) -> None:
         counterargument = "The diff already guards the allegedly unsafe path."
         completed = self.run_semantic_composition(
@@ -592,6 +723,24 @@ class ValidatePreflightResultTest(unittest.TestCase):
             ],
         )
         self.assertEqual(result["stages"]["semantic_preflight"]["status"], "FAIL")
+
+    def test_from_semantic_refuted_empty_counterargument_uses_fallback_detail(self) -> None:
+        completed = self.run_semantic_composition(
+            semantic_result(
+                semantic_decision(
+                    "inline-must-fix",
+                    "refuted",
+                    counterargument="",
+                )
+            ),
+            payload_manifest(),
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        result = json.loads(completed.stdout)
+        self.assertEqual(
+            result["violations"][0]["detail"],
+            "(counterargument not provided)",
+        )
 
     def test_from_semantic_insufficient_evidence_composes_new_rule(self) -> None:
         counterargument = "The available diff does not establish whether the path is reachable."
@@ -652,7 +801,7 @@ class ValidatePreflightResultTest(unittest.TestCase):
         completed = self.run_semantic_composition(None, payload_manifest(), skipped=True)
         self.assertEqual(completed.returncode, 1)
         self.assertIn("INVALID preflight result", completed.stderr)
-        self.assertIn("must_fix", completed.stderr)
+        self.assertIn("semantic_targets", completed.stderr)
 
     def test_data_and_semantic_modes_are_mutually_exclusive(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

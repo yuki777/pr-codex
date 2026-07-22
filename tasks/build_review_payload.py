@@ -17,6 +17,19 @@ RANGE_RE = re.compile(r"^L(?P<start>\d+)-L(?P<end>\d+)$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 MUST_FIX_HEADING = "## 重大な問題 (Must Fix)"
 DEFAULT_REVIEW_SCOPE = "2者レビュー (Claude/Codex hunter) + verifier 4軸 gate"
+MANIFEST_REQUIRED_ROLES = ("findings", "review", "metadata", "ranges", "payload")
+MANIFEST_OPTIONAL_ROLES = ("sarif", "diff", "ci_status", "run_plan", "ci_summary")
+MANIFEST_COUNT_KEYS = (
+    "must_fix_total",
+    "must_fix_inline",
+    "must_fix_body",
+    "must_fix_withheld",
+    "should_fix_inline",
+    "nit_inline",
+)
+MANIFEST_EVENTS = {"REQUEST_CHANGES", "COMMENT", "APPROVE"}
+GENERATED_AT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+00:00$")
+
 
 
 class BuildError(Exception):
@@ -154,13 +167,35 @@ def range_contains(ranges: dict[str, list[tuple[int, int]]], path: str, start: i
     return any(hunk_start <= start <= hunk_end and hunk_start <= end <= hunk_end for hunk_start, hunk_end in ranges.get(path, []))
 
 
+def security_disclosure_policy(finding: dict[str, Any]) -> Any:
+    if finding.get("category") != "security":
+        return None
+    security = finding.get("security")
+    return security.get("disclosure_policy") if isinstance(security, dict) else None
+
+
 def security_requires_body(finding: dict[str, Any]) -> bool:
     if finding.get("category") != "security":
         return False
     security = finding.get("security")
     if not isinstance(security, dict):
         return False
-    return security.get("severity") in {"critical", "high"} or security.get("disclosure_policy") != "inline_safe"
+    disclosure_policy = security.get("disclosure_policy")
+    if disclosure_policy == "body_summary_safe":
+        return True
+    return security.get("severity") in {"critical", "high"} and disclosure_policy not in {"inline_safe", "local_only"}
+
+
+def withheld_reason(finding: dict[str, Any]) -> str | None:
+    if finding.get("severity") != "must_fix" or finding.get("category") != "security":
+        return None
+    posting = finding.get("posting")
+    posting = posting if isinstance(posting, dict) else {}
+    if posting.get("post_policy") == "suppress":
+        return "suppress"
+    if posting.get("post_policy") == "local_only" or security_disclosure_policy(finding) == "local_only":
+        return "local_only"
+    return None
 
 
 def validate_build_inputs(findings_data: Any, metadata: Any, markdown: str) -> tuple[list[dict[str, Any]], int]:
@@ -219,7 +254,7 @@ def validate_build_inputs(findings_data: Any, metadata: Any, markdown: str) -> t
             errors.append(f"findings[{index}].posting.post_policy: high-risk security findings must not use post_policy=inline")
         if severity != "must_fix" and posting.get("post_policy") == "inline":
             errors.append(f"findings[{index}].posting.post_policy: only must_fix findings may use post_policy=inline")
-        if severity != "must_fix" or security_requires_body(item):
+        if severity != "must_fix" or security_requires_body(item) or withheld_reason(item) is not None:
             continue
         if posting.get("post_policy") != "inline":
             errors.append(f"findings[{index}].posting.post_policy: must_fix findings must use post_policy=inline")
@@ -267,26 +302,49 @@ def single_line(value: Any) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n").replace("\n", " ").strip()
 
 
-def cluster_context(finding: dict[str, Any], members_by_representative: dict[str, list[dict[str, Any]]]) -> str:
+def cluster_context(
+    finding: dict[str, Any],
+    members_by_representative: dict[str, list[dict[str, Any]]],
+    active_severities: set[str],
+) -> str:
     identifier = finding.get("id")
     members = members_by_representative.get(identifier, []) if isinstance(identifier, str) else []
     if not members:
         return ""
+    postable_members: list[dict[str, Any]] = []
+    for member in members:
+        if member.get("severity") not in active_severities:
+            continue
+        posting = member.get("posting")
+        posting = posting if isinstance(posting, dict) else {}
+        if posting.get("post_policy") in {"local_only", "suppress"}:
+            continue
+        if posting.get("explanation_postable") is not True:
+            continue
+        if security_disclosure_policy(member) == "local_only":
+            continue
+        postable_members.append(member)
+
+    displayed_members = postable_members[:5]
     lines = ["", "同一 root cause の影響箇所:"]
-    for member in members[:5]:
+    for member in displayed_members:
         path, _start, end, _multiline, _side = finding_location(member)
         problem: Any = member.get("problem")
         if security_requires_body(member):
             security = member.get("security")
             problem = security.get("public_safe_summary") if isinstance(security, dict) else ""
         lines.append(f"- `{path}:L{end}` {single_line(problem)}")
-    remaining = len(members) - 5
+    remaining = len(members) - len(displayed_members)
     if remaining > 0:
         lines.append(f"- 他 {remaining} 件")
     return "\n".join(lines)
 
 
-def inline_body(finding: dict[str, Any], members_by_representative: dict[str, list[dict[str, Any]]]) -> str:
+def inline_body(
+    finding: dict[str, Any],
+    members_by_representative: dict[str, list[dict[str, Any]]],
+    active_severities: set[str],
+) -> str:
     severity = finding.get("severity")
     label = location_label(finding)
     if severity == "must_fix":
@@ -295,7 +353,7 @@ def inline_body(finding: dict[str, Any], members_by_representative: dict[str, li
             f"- 問題: {finding.get('problem', '')}\n"
             f"- 理由: {finding.get('reason', '')}\n"
             f"- 提案: {finding.get('suggestion', '')}"
-            f"{cluster_context(finding, members_by_representative)}"
+            f"{cluster_context(finding, members_by_representative, active_severities)}"
         )
     if severity == "should_fix":
         return (
@@ -310,13 +368,17 @@ def inline_body(finding: dict[str, Any], members_by_representative: dict[str, li
     )
 
 
-def inline_comment(finding: dict[str, Any], members_by_representative: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
+def inline_comment(
+    finding: dict[str, Any],
+    members_by_representative: dict[str, list[dict[str, Any]]],
+    active_severities: set[str],
+) -> dict[str, Any]:
     path, start, end, multiline, _ = finding_location(finding)
     comment: dict[str, Any] = {
         "path": path,
         "line": end,
         "side": "RIGHT",
-        "body": inline_body(finding, members_by_representative),
+        "body": inline_body(finding, members_by_representative, active_severities),
     }
     if multiline:
         comment["start_line"] = start
@@ -464,9 +526,22 @@ def build(args: argparse.Namespace) -> tuple[str, int, dict[str, int], int]:
     ci_state_value = ci_data.get("state") if isinstance(ci_data, dict) else None
     ci_state = ci_state_value if ci_state_value in {"success", "failure", "pending", "skipped"} else None
 
+    raw_metadata_files = metadata_data.get("files")
+    metadata_files = (
+        {item for item in raw_metadata_files if isinstance(item, str)}
+        if isinstance(raw_metadata_files, list)
+        else set()
+    )
+    active_severities = {"must_fix"}
+    if args.include_should_fix:
+        active_severities.add("should_fix")
+    if args.include_nit:
+        active_severities.add("nit")
+
     non_representatives, members_by_representative = cluster_maps(findings_data, canonical_findings)
     inline_by_severity: dict[str, list[dict[str, Any]]] = {"must_fix": [], "should_fix": [], "nit": []}
     out_of_range: list[dict[str, Any]] = []
+    withheld: list[dict[str, Any]] = []
     for item in canonical_findings:
         identifier = item.get("id")
         if isinstance(identifier, str) and identifier in non_representatives:
@@ -476,30 +551,49 @@ def build(args: argparse.Namespace) -> tuple[str, int, dict[str, int], int]:
         posting = posting if isinstance(posting, dict) else {}
         selected = severity == "must_fix"
         if severity == "should_fix":
-            selected = args.include_should_fix and posting.get("post_policy") == "body_summary" and posting.get("explanation_postable") is True
+            selected = (
+                args.include_should_fix
+                and posting.get("post_policy") == "body_summary"
+                and posting.get("explanation_postable") is True
+            )
         elif severity == "nit":
-            selected = args.include_nit and posting.get("post_policy") == "body_summary" and posting.get("explanation_postable") is True
+            selected = (
+                args.include_nit
+                and posting.get("post_policy") == "body_summary"
+                and posting.get("explanation_postable") is True
+            )
         elif severity not in {"must_fix", "should_fix", "nit"}:
             selected = False
         if not selected:
             continue
+        private_reason = withheld_reason(item)
+        if private_reason is not None:
+            withheld.append({"finding": item, "kind": candidate_kind(severity), "reason": private_reason})
+            continue
         if security_requires_body(item):
-            out_of_range.append({"finding": item, "kind": candidate_kind(severity), "reason": "security disclosure policy"})
+            out_of_range.append(
+                {"finding": item, "kind": candidate_kind(severity), "reason": "security disclosure policy"}
+            )
             continue
         path, start, end, _multiline, side = finding_location(item)
         if side != "RIGHT":
             out_of_range.append({"finding": item, "kind": candidate_kind(severity), "reason": "LEFT-side 非対応"})
             continue
-        if not diff_available or not ranges or not range_contains(ranges, path, start, end):
+        if (
+            path not in metadata_files
+            or not diff_available
+            or not ranges
+            or not range_contains(ranges, path, start, end)
+        ):
             out_of_range.append({"finding": item, "kind": candidate_kind(severity), "reason": "diff 範囲外"})
             continue
         inline_by_severity[severity].append(item)
 
     ordered_inline = inline_by_severity["must_fix"] + inline_by_severity["should_fix"] + inline_by_severity["nit"]
-    comments = [inline_comment(item, members_by_representative) for item in ordered_inline]
+    comments = [inline_comment(item, members_by_representative, active_severities) for item in ordered_inline]
     must_fix_body = sum(entry["kind"] == "Must Fix" for entry in out_of_range)
-    has_must_fix = bool(inline_by_severity["must_fix"] or must_fix_body)
-    if has_must_fix:
+    must_fix_withheld = sum(entry["kind"] == "Must Fix" for entry in withheld)
+    if must_fix_total:
         event = "REQUEST_CHANGES"
     elif ci_state in {"failure", "pending"}:
         event = "COMMENT"
@@ -529,57 +623,322 @@ def build(args: argparse.Namespace) -> tuple[str, int, dict[str, int], int]:
         {"finding_id": entry["finding"].get("id"), "kind": entry["kind"], "reason": entry["reason"]}
         for entry in out_of_range
     ]
+    manifest_withheld = [
+        {"finding_id": entry["finding"].get("id"), "kind": entry["kind"], "reason": entry["reason"]}
+        for entry in withheld
+    ]
+    semantic_targets = [
+        item.get("id")
+        for item in canonical_findings
+        if item.get("severity") == "must_fix"
+    ]
     counts = {
         "must_fix_total": must_fix_total,
         "must_fix_inline": len(inline_by_severity["must_fix"]),
         "must_fix_body": must_fix_body,
+        "must_fix_withheld": must_fix_withheld,
         "should_fix_inline": len(inline_by_severity["should_fix"]),
         "nit_inline": len(inline_by_severity["nit"]),
     }
+
+    required_paths = {
+        "findings": args.findings,
+        "review": args.review,
+        "metadata": args.metadata,
+        "ranges": args.ranges,
+        "payload": args.output,
+    }
+    manifest_files = {
+        role: {"path": resolved(artifact_path), "sha256": snapshots[resolved(artifact_path)]}
+        for role, artifact_path in required_paths.items()
+    }
+    optional_paths = {
+        "sarif": args.sarif,
+        "diff": args.diff,
+        "ci_status": args.ci_status,
+        "run_plan": args.run_plan,
+        "ci_summary": args.ci_summary,
+    }
+    for role, artifact_path in optional_paths.items():
+        if artifact_path is None:
+            continue
+        artifact_key = resolved(artifact_path)
+        if artifact_key in snapshots:
+            manifest_files[role] = {"path": artifact_key, "sha256": snapshots[artifact_key]}
+
     manifest = {
         "schema_version": "payload-manifest.v1",
         "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
         "event": event,
         "comment_map": comment_map,
         "out_of_range": manifest_out_of_range,
+        "withheld": manifest_withheld,
+        "semantic_targets": semantic_targets,
         "counts": counts,
-        "files": snapshots,
+        "files": manifest_files,
     }
     write_bytes(args.manifest, json_bytes(manifest), "manifest")
     return event, len(comments), counts, len(out_of_range)
 
 
 def verify_manifest(path: Path) -> list[str]:
+    manifest_path = resolved(path)
     try:
         manifest = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:  # noqa: BLE001 - malformed/missing manifests are invalid artifacts
-        return [f"{resolved(path)}: cannot read/parse JSON: {exc}"]
+        return [f"{manifest_path}: cannot read/parse JSON: {exc}"]
     if not isinstance(manifest, dict):
-        return [f"{resolved(path)}: top-level value must be an object"]
+        return [f"{manifest_path}: top-level value must be an object"]
+
     errors: list[str] = []
+    required_types: dict[str, type[Any]] = {
+        "schema_version": str,
+        "generated_at": str,
+        "event": str,
+        "comment_map": list,
+        "out_of_range": list,
+        "withheld": list,
+        "semantic_targets": list,
+        "counts": dict,
+        "files": dict,
+    }
+    for key, expected_type in required_types.items():
+        if key not in manifest:
+            errors.append(f"{manifest_path}: {key}: required key is missing")
+        elif not isinstance(manifest[key], expected_type):
+            errors.append(f"{manifest_path}: {key}: must be a {expected_type.__name__}")
+
     if manifest.get("schema_version") != "payload-manifest.v1":
-        errors.append(f"{resolved(path)}: schema_version must equal payload-manifest.v1")
+        errors.append(f"{manifest_path}: schema_version must equal payload-manifest.v1")
+
+    generated_at = manifest.get("generated_at")
+    if isinstance(generated_at, str):
+        valid_generated_at = GENERATED_AT_RE.fullmatch(generated_at) is not None
+        if valid_generated_at:
+            try:
+                datetime.strptime(generated_at, "%Y-%m-%dT%H:%M:%S+00:00")
+            except ValueError:
+                valid_generated_at = False
+        if not valid_generated_at:
+            errors.append(f"{manifest_path}: generated_at must be UTC YYYY-MM-DDTHH:MM:SS+00:00")
+
+    event = manifest.get("event")
+    if isinstance(event, str) and event not in MANIFEST_EVENTS:
+        errors.append(f"{manifest_path}: event must be REQUEST_CHANGES, COMMENT, or APPROVE")
+
+    comment_map = manifest.get("comment_map")
+    if isinstance(comment_map, list):
+        for index, entry in enumerate(comment_map):
+            entry_label = f"{manifest_path}: comment_map[{index}]"
+            if not isinstance(entry, dict):
+                errors.append(f"{entry_label}: must be an object")
+                continue
+            comment_index = entry.get("comment_index")
+            if not isinstance(comment_index, int) or isinstance(comment_index, bool) or comment_index < 0:
+                errors.append(f"{entry_label}.comment_index: must be an integer >= 0")
+            elif comment_index != index:
+                errors.append(f"{entry_label}.comment_index: must equal {index}")
+            if not isinstance(entry.get("finding_id"), str):
+                errors.append(f"{entry_label}.finding_id: must be a string")
+            if entry.get("severity") not in {"must_fix", "should_fix", "nit"}:
+                errors.append(f"{entry_label}.severity: must be must_fix, should_fix, or nit")
+
+    out_of_range = manifest.get("out_of_range")
+    if isinstance(out_of_range, list):
+        for index, entry in enumerate(out_of_range):
+            entry_label = f"{manifest_path}: out_of_range[{index}]"
+            if not isinstance(entry, dict):
+                errors.append(f"{entry_label}: must be an object")
+                continue
+            if not isinstance(entry.get("finding_id"), str):
+                errors.append(f"{entry_label}.finding_id: must be a string")
+            if entry.get("kind") not in {"Must Fix", "Should Fix", "Nit"}:
+                errors.append(f"{entry_label}.kind: must be Must Fix, Should Fix, or Nit")
+            if entry.get("reason") not in {"diff 範囲外", "LEFT-side 非対応", "security disclosure policy"}:
+                errors.append(f"{entry_label}.reason: invalid reason")
+
+    withheld = manifest.get("withheld")
+    if isinstance(withheld, list):
+        for index, entry in enumerate(withheld):
+            entry_label = f"{manifest_path}: withheld[{index}]"
+            if not isinstance(entry, dict):
+                errors.append(f"{entry_label}: must be an object")
+                continue
+            if not isinstance(entry.get("finding_id"), str):
+                errors.append(f"{entry_label}.finding_id: must be a string")
+            if entry.get("kind") != "Must Fix":
+                errors.append(f"{entry_label}.kind: must equal Must Fix")
+            if entry.get("reason") not in {"local_only", "suppress"}:
+                errors.append(f"{entry_label}.reason: must be local_only or suppress")
+
+    semantic_targets = manifest.get("semantic_targets")
+    if isinstance(semantic_targets, list):
+        for index, identifier in enumerate(semantic_targets):
+            if not isinstance(identifier, str):
+                errors.append(f"{manifest_path}: semantic_targets[{index}]: must be a string")
+
+    counts = manifest.get("counts")
+    valid_counts: dict[str, int] = {}
+    if isinstance(counts, dict):
+        for key in MANIFEST_COUNT_KEYS:
+            value = counts.get(key)
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                errors.append(f"{manifest_path}: counts.{key}: must be an integer >= 0")
+            else:
+                valid_counts[key] = value
+
     files = manifest.get("files")
-    if not isinstance(files, dict):
-        errors.append(f"{resolved(path)}: files must be an object")
-        return errors
-    for raw_path, expected_digest in files.items():
-        if not isinstance(raw_path, str) or not Path(raw_path).is_absolute():
-            errors.append(f"{raw_path!r}: manifest file path must be absolute")
-            continue
-        if not isinstance(expected_digest, str) or SHA256_RE.fullmatch(expected_digest) is None:
-            errors.append(f"{raw_path}: invalid sha256 digest")
-            continue
-        target = Path(raw_path)
+    verified_json_bytes: dict[str, bytes] = {}
+    if isinstance(files, dict):
+        for role in MANIFEST_REQUIRED_ROLES:
+            if role not in files:
+                errors.append(f"{manifest_path}: files.{role}: required role is missing")
+
+        allowed_roles = set(MANIFEST_REQUIRED_ROLES) | set(MANIFEST_OPTIONAL_ROLES)
+        for role, record in files.items():
+            role_label = f"{manifest_path}: files.{role}"
+            if role not in allowed_roles:
+                errors.append(f"{role_label}: unknown role")
+                continue
+            if not isinstance(record, dict):
+                errors.append(f"{role_label}: must be an object")
+                continue
+            raw_path = record.get("path")
+            expected_digest = record.get("sha256")
+            if not isinstance(raw_path, str) or not Path(raw_path).is_absolute():
+                errors.append(f"{role_label}.path: must be an absolute path")
+                continue
+            if not isinstance(expected_digest, str) or SHA256_RE.fullmatch(expected_digest) is None:
+                errors.append(f"{role_label}.sha256: invalid sha256 digest")
+                continue
+            target = Path(raw_path)
+            try:
+                if role in {"findings", "payload"}:
+                    target_bytes = target.read_bytes()
+                    actual_digest = sha256_bytes(target_bytes)
+                else:
+                    target_bytes = None
+                    actual_digest = sha256_file(target)
+            except FileNotFoundError:
+                errors.append(f"{raw_path}: missing")
+            except Exception as exc:  # noqa: BLE001 - verification lists every unreadable artifact
+                errors.append(f"{raw_path}: cannot read: {exc}")
+            else:
+                if actual_digest != expected_digest:
+                    errors.append(f"{raw_path}: sha256 mismatch")
+                elif target_bytes is not None:
+                    verified_json_bytes[role] = target_bytes
+
+    payload_data: Any = None
+    payload_bytes = verified_json_bytes.get("payload")
+    if payload_bytes is not None:
         try:
-            actual_digest = sha256_file(target)
-        except FileNotFoundError:
-            errors.append(f"{raw_path}: missing")
-        except Exception as exc:  # noqa: BLE001 - verification lists every unreadable artifact
-            errors.append(f"{raw_path}: cannot read: {exc}")
+            payload_data = json.loads(payload_bytes.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            errors.append(f"{manifest_path}: files.payload: cannot parse JSON: {exc}")
+        if payload_data is not None and not isinstance(payload_data, dict):
+            errors.append(f"{manifest_path}: files.payload: top-level value must be an object")
+            payload_data = None
+    if isinstance(payload_data, dict):
+        payload_comments = payload_data.get("comments")
+        if not isinstance(payload_comments, list):
+            errors.append(f"{manifest_path}: payload.comments: must be an array")
+        elif isinstance(comment_map, list) and len(payload_comments) != len(comment_map):
+            errors.append(
+                f"{manifest_path}: payload.comments length ({len(payload_comments)}) "
+                f"does not match comment_map ({len(comment_map)})"
+            )
+        payload_event = payload_data.get("event")
+        if not isinstance(payload_event, str):
+            errors.append(f"{manifest_path}: payload.event: must be a string")
+        elif isinstance(event, str) and payload_event != event:
+            errors.append(
+                f"{manifest_path}: payload.event ({payload_event}) does not match manifest.event ({event})"
+            )
+
+    findings_data: Any = None
+    findings_bytes = verified_json_bytes.get("findings")
+    if findings_bytes is not None:
+        try:
+            findings_data = json.loads(findings_bytes.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            errors.append(f"{manifest_path}: files.findings: cannot parse JSON: {exc}")
+        if findings_data is not None and not isinstance(findings_data, dict):
+            errors.append(f"{manifest_path}: files.findings: top-level value must be an object")
+            findings_data = None
+
+    expected_targets: list[str] = []
+    expected_targets_valid = True
+    if isinstance(findings_data, dict):
+        raw_findings = findings_data.get("findings")
+        if not isinstance(raw_findings, list):
+            errors.append(f"{manifest_path}: findings.findings: must be an array")
+            expected_targets_valid = False
         else:
-            if actual_digest != expected_digest:
-                errors.append(f"{raw_path}: sha256 mismatch")
+            for index, finding in enumerate(raw_findings):
+                if not isinstance(finding, dict):
+                    errors.append(f"{manifest_path}: findings.findings[{index}]: must be an object")
+                    expected_targets_valid = False
+                    continue
+                if finding.get("severity") != "must_fix":
+                    continue
+                identifier = finding.get("id")
+                if not isinstance(identifier, str):
+                    errors.append(f"{manifest_path}: findings.findings[{index}].id: must be a string")
+                    expected_targets_valid = False
+                    continue
+                expected_targets.append(identifier)
+
+    semantic_targets_valid = isinstance(semantic_targets, list) and all(
+        isinstance(identifier, str) for identifier in semantic_targets
+    )
+    if expected_targets_valid and isinstance(findings_data, dict) and semantic_targets_valid:
+        if set(expected_targets) != set(semantic_targets) or len(expected_targets) != len(semantic_targets):
+            errors.append(f"{manifest_path}: semantic_targets do not match findings must_fix ids")
+
+    if isinstance(semantic_targets, list) and "must_fix_total" in valid_counts:
+        if valid_counts["must_fix_total"] != len(semantic_targets):
+            errors.append(f"{manifest_path}: counts.must_fix_total must equal len(semantic_targets)")
+
+    if isinstance(comment_map, list):
+        expected_inline = sum(
+            isinstance(entry, dict) and entry.get("severity") == "must_fix"
+            for entry in comment_map
+        )
+        expected_should_fix = sum(
+            isinstance(entry, dict) and entry.get("severity") == "should_fix"
+            for entry in comment_map
+        )
+        expected_nit = sum(
+            isinstance(entry, dict) and entry.get("severity") == "nit"
+            for entry in comment_map
+        )
+        for key, expected in (
+            ("must_fix_inline", expected_inline),
+            ("should_fix_inline", expected_should_fix),
+            ("nit_inline", expected_nit),
+        ):
+            if key in valid_counts and valid_counts[key] != expected:
+                errors.append(f"{manifest_path}: counts.{key} does not match comment_map")
+
+    if isinstance(out_of_range, list) and "must_fix_body" in valid_counts:
+        expected_body = sum(
+            isinstance(entry, dict) and entry.get("kind") == "Must Fix"
+            for entry in out_of_range
+        )
+        if valid_counts["must_fix_body"] != expected_body:
+            errors.append(f"{manifest_path}: counts.must_fix_body does not match out_of_range")
+
+    if isinstance(withheld, list) and "must_fix_withheld" in valid_counts:
+        expected_withheld = sum(
+            isinstance(entry, dict) and entry.get("kind") == "Must Fix"
+            for entry in withheld
+        )
+        if valid_counts["must_fix_withheld"] != expected_withheld:
+            errors.append(f"{manifest_path}: counts.must_fix_withheld does not match withheld")
+
+    if valid_counts.get("must_fix_total", 0) >= 1 and event != "REQUEST_CHANGES":
+        errors.append(f"{manifest_path}: event must be REQUEST_CHANGES when must_fix_total is at least 1")
     return errors
 
 
