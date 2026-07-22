@@ -76,7 +76,7 @@ class Issue88DocsTest(unittest.TestCase):
             "$include_nit == true` の `$nit_inline_candidates`",
             "種別 (`Must Fix` / `Should Fix` / `Nit`)",
             "`location.side != \"RIGHT\"` の Should Fix / Nit",
-            "退避理由 (`diff 範囲外` / `LEFT-side 非対応`)",
+            "退避理由 (`diff 範囲外` / `LEFT-side 非対応` / `security disclosure policy`)",
         ):
             self.assertIn(snippet, range_rules)
 
@@ -90,7 +90,7 @@ class Issue88DocsTest(unittest.TestCase):
             self.assertIn(snippet, payload)
         self.assertNotIn("comments` 配列は Must Fix のみ", payload)
 
-        preflight = section(text, "## STAGE 3: semantic_preflight", "## STAGE 4: payload_consistency")
+        flags = section(text, "#### 許可 severity (active severity flags)", "### Step 4.5:")
         for snippet in (
             "active severity flags で許可された severity",
             "`include_should_fix=false` では `must_fix` のみ",
@@ -100,8 +100,8 @@ class Issue88DocsTest(unittest.TestCase):
             "valid exclusion",
             "send 側の明示オプションだけで inline comment に昇格",
         ):
-            self.assertIn(snippet, preflight)
-        self.assertNotIn("findings[].severity == 'must_fix'", preflight)
+            self.assertIn(snippet, flags)
+        self.assertNotIn("findings[].severity == 'must_fix'", flags)
 
     def test_readme_documents_severity_flags_and_safety_boundaries(self) -> None:
         text = README.read_text(encoding="utf-8")
@@ -117,8 +117,6 @@ class Issue88DocsTest(unittest.TestCase):
             "`--include-should-fix` / `--include-nit` 指定時の inline 許可 severity",
             "body 退避された opted-in finding の valid exclusion",
             "active severity flags",
-            "{INCLUDE_SHOULD_FIX}",
-            "{INCLUDE_NIT}",
             "unknown option、解釈できない位置引数、位置引数が2つ以上、重複オプションは unsupported argument",
         ):
             self.assertIn(snippet, text)

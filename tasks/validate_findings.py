@@ -148,6 +148,43 @@ def compute_fingerprint(finding: dict[str, Any]) -> str:
     material = "\x1f".join([path, category, normalized_title, symbol])
     return hashlib.sha256(material.encode("utf-8", errors="strict")).hexdigest()
 
+def fingerprint_records(data: Any) -> list[dict[str, Any]]:
+    """Build fingerprint records from partial findings input."""
+    if isinstance(data, list):
+        findings = data
+    elif isinstance(data, dict):
+        findings = data.get("findings")
+        if not isinstance(findings, list):
+            raise ValueError("$: findings must be an array")
+    else:
+        raise ValueError("$: must be an object with findings or an array")
+
+    records: list[dict[str, Any]] = []
+    for index, finding in enumerate(findings):
+        if not isinstance(finding, dict):
+            raise ValueError(f"$[{index}]: finding must be an object")
+        raw_location = finding.get("location")
+        location = raw_location if isinstance(raw_location, dict) else {}
+        raw_path = location.get("path")
+        path = raw_path if isinstance(raw_path, str) else ""
+        raw_category = finding.get("category")
+        category = raw_category if isinstance(raw_category, str) else ""
+        raw_title = finding.get("title")
+        title = raw_title if isinstance(raw_title, str) else ""
+        records.append(
+            {
+                "index": index,
+                "path": path,
+                "category": category,
+                "title": title,
+                "normalized_title": normalize_title(title),
+                "primary_symbol": primary_symbol(title),
+                "fingerprint": compute_fingerprint(finding),
+            }
+        )
+    return records
+
+
 
 def enum_from_schema(schema: dict[str, Any], name: str, fallback: set[str]) -> set[str]:
     if not isinstance(schema, dict):
@@ -742,10 +779,28 @@ def validate_artifact(schema: dict[str, Any], data: Any, metadata: Any | None = 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate pr-codex findings.verified.json")
-    parser.add_argument("--schema", required=True, type=Path, help="schemas/findings.v1.json path")
+    parser.add_argument("--schema", type=Path, help="schemas/findings.v1.json path")
     parser.add_argument("--data", required=True, type=Path, help="findings.verified.json path")
     parser.add_argument("--metadata", type=Path, help="metadata.json path for PR posting target consistency checks")
+    parser.add_argument(
+        "--emit-fingerprints",
+        action="store_true",
+        help="print fingerprints computed from partial findings JSON",
+    )
     args = parser.parse_args()
+
+    if args.emit_fingerprints:
+        try:
+            data = load_json(args.data)
+            records = fingerprint_records(data)
+        except (ValueError, UnicodeError) as exc:
+            print(f"INVALID: {exc}", file=sys.stderr)
+            return 1
+        print(json.dumps(records, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.schema is None:
+        parser.error("--schema is required unless --emit-fingerprints is used")
 
     try:
         schema = load_json(args.schema)
@@ -764,6 +819,7 @@ def main() -> int:
 
     print("VALID findings artifact")
     return 0
+
 
 
 if __name__ == "__main__":

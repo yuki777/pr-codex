@@ -14,6 +14,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 TASKS = ROOT / "tasks"
 SCHEMA_PATH = ROOT / "schemas" / "preflight-result.v1.json"
+SEMANTIC_SCHEMA_PATH = ROOT / "schemas" / "preflight-semantic.v1.json"
 VALIDATOR_PATH = TASKS / "validate_preflight_result.py"
 sys.path.insert(0, str(TASKS))
 
@@ -75,8 +76,90 @@ def sarif_count_mismatch_violation() -> dict[str, object]:
         "requires_review_regeneration": True,
     }
 
+def payload_manifest(
+    *,
+    inline_must_fix: bool = True,
+    out_of_range_must_fix: bool = False,
+) -> dict[str, object]:
+    comment_map = [
+        {
+            "comment_index": 3,
+            "finding_id": "inline-must-fix",
+            "severity": "must_fix" if inline_must_fix else "should_fix",
+        }
+    ]
+    out_of_range = []
+    if out_of_range_must_fix:
+        out_of_range.append(
+            {
+                "finding_id": "out-of-range-must-fix",
+                "kind": "Must Fix (outside diff)",
+                "reason": "No changed line can host the comment.",
+            }
+        )
+    return {
+        "schema_version": "payload-manifest.v1",
+        "comment_map": comment_map,
+        "out_of_range": out_of_range,
+    }
+
+
+def semantic_result(*decisions: dict[str, str]) -> dict[str, object]:
+    return {
+        "schema_version": "preflight-semantic.v1",
+        "decisions": list(decisions),
+    }
+
+
+def semantic_decision(
+    finding_id: str,
+    decision: str,
+    counterargument: str = "The strongest counterargument does not change the result.",
+    note: str = "",
+) -> dict[str, str]:
+    return {
+        "finding_id": finding_id,
+        "decision": decision,
+        "counterargument": counterargument,
+        "note": note,
+    }
+
+
 
 class ValidatePreflightResultTest(unittest.TestCase):
+    def run_semantic_composition(
+        self,
+        semantic: dict[str, object] | None,
+        manifest: dict[str, object],
+        *,
+        skipped: bool = False,
+        emit: str = "--emit-json",
+    ) -> subprocess.CompletedProcess[str]:
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_path = Path(tmp) / "payload-manifest.json"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            command = [
+                sys.executable,
+                str(VALIDATOR_PATH),
+                "--schema",
+                str(SCHEMA_PATH),
+            ]
+            if skipped:
+                command.append("--semantic-skipped")
+            else:
+                semantic_path = Path(tmp) / "preflight-semantic.json"
+                semantic_path.write_text(json.dumps(semantic), encoding="utf-8")
+                command.extend(["--from-semantic", str(semantic_path)])
+            command.extend(["--manifest", str(manifest_path)])
+            if emit:
+                command.append(emit)
+            return subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
     def assert_invalid_without_crash(self, result: dict[str, object], expected_fragment: str) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             data_path = Path(tmp) / "preflight-result.json"
@@ -427,23 +510,222 @@ class ValidatePreflightResultTest(unittest.TestCase):
         self.assertIn("- range_validation: FAIL\n", markdown)
         self.assertTrue(markdown.rstrip().endswith("VERDICT: FAIL"))
 
+    def test_preflight_semantic_schema_is_strict_structured_output_compatible(self) -> None:
+        schema = json.loads(SEMANTIC_SCHEMA_PATH.read_text(encoding="utf-8"))
+        self.assertEqual(schema["properties"]["schema_version"]["enum"], ["preflight-semantic.v1"])
+        self.assertEqual(schema["required"], list(schema["properties"]))
+        decision_schema = schema["properties"]["decisions"]["items"]
+        self.assertFalse(decision_schema["additionalProperties"])
+        self.assertEqual(decision_schema["required"], list(decision_schema["properties"]))
 
-    def test_send_skill_documents_four_stage_pipeline_and_counterargument_polarity(self) -> None:
+        def assert_no_restricted_keywords(node: object) -> None:
+            if isinstance(node, dict):
+                for keyword in ("minimum", "format", "minLength"):
+                    self.assertNotIn(keyword, node)
+                for value in node.values():
+                    assert_no_restricted_keywords(value)
+            elif isinstance(node, list):
+                for value in node:
+                    assert_no_restricted_keywords(value)
+
+        assert_no_restricted_keywords(schema)
+
+    def test_from_semantic_all_confirmed_composes_pass(self) -> None:
+        manifest = payload_manifest(inline_must_fix=True, out_of_range_must_fix=True)
+        semantic = semantic_result(
+            semantic_decision("inline-must-fix", "confirmed"),
+            semantic_decision("out-of-range-must-fix", "confirmed"),
+        )
+        completed = self.run_semantic_composition(semantic, manifest)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertEqual(result["violations"], [])
+        self.assertEqual(result["auto_fixable_count"], 0)
+        self.assertEqual(result["requires_human_count"], 0)
+        self.assertEqual(
+            result["stages"]["semantic_preflight"],
+            {
+                "status": "PASS",
+                "note": "decisions: 2 confirmed / 0 refuted / 0 insufficient_evidence",
+            },
+        )
+        for stage in ("schema_validation", "range_validation", "payload_consistency"):
+            self.assertEqual(
+                result["stages"][stage],
+                {
+                    "status": "PASS",
+                    "note": "validated by deterministic host-side validators",
+                },
+            )
+
+    def test_from_semantic_refuted_composes_fail_with_counterargument(self) -> None:
+        counterargument = "The diff already guards the allegedly unsafe path."
+        completed = self.run_semantic_composition(
+            semantic_result(
+                semantic_decision(
+                    "inline-must-fix",
+                    "refuted",
+                    counterargument=counterargument,
+                )
+            ),
+            payload_manifest(),
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["verdict"], "FAIL")
+        self.assertEqual(result["auto_fixable_count"], 0)
+        self.assertEqual(result["requires_human_count"], 1)
+        self.assertEqual(
+            result["violations"],
+            [
+                {
+                    "stage": "semantic_preflight",
+                    "rule": "counterargument_succeeded",
+                    "finding_id": "inline-must-fix",
+                    "comment_index": 3,
+                    "detail": counterargument,
+                    "severity": "error",
+                    "auto_fixable": False,
+                    "requires_review_regeneration": True,
+                }
+            ],
+        )
+        self.assertEqual(result["stages"]["semantic_preflight"]["status"], "FAIL")
+
+    def test_from_semantic_insufficient_evidence_composes_new_rule(self) -> None:
+        counterargument = "The available diff does not establish whether the path is reachable."
+        completed = self.run_semantic_composition(
+            semantic_result(
+                semantic_decision(
+                    "out-of-range-must-fix",
+                    "insufficient_evidence",
+                    counterargument=counterargument,
+                )
+            ),
+            payload_manifest(inline_must_fix=False, out_of_range_must_fix=True),
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["verdict"], "FAIL")
+        self.assertEqual(result["requires_human_count"], 1)
+        self.assertEqual(result["violations"][0]["rule"], "insufficient_evidence")
+        self.assertIsNone(result["violations"][0]["comment_index"])
+
+    def test_from_semantic_rejects_finding_id_set_mismatch_and_duplicates(self) -> None:
+        cases = {
+            "missing": semantic_result(),
+            "extra": semantic_result(
+                semantic_decision("inline-must-fix", "confirmed"),
+                semantic_decision("extra", "confirmed"),
+            ),
+            "duplicate": semantic_result(
+                semantic_decision("inline-must-fix", "confirmed"),
+                semantic_decision("inline-must-fix", "confirmed"),
+            ),
+        }
+        for name, semantic in cases.items():
+            with self.subTest(name=name):
+                completed = self.run_semantic_composition(semantic, payload_manifest())
+                self.assertEqual(completed.returncode, 1)
+                self.assertIn("INVALID preflight result", completed.stderr)
+                self.assertIn("finding_id", completed.stderr)
+
+    def test_semantic_skipped_composes_pass_when_no_must_fix_exists(self) -> None:
+        completed = self.run_semantic_composition(
+            None,
+            payload_manifest(inline_must_fix=False),
+            skipped=True,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertEqual(
+            result["stages"]["semantic_preflight"],
+            {
+                "status": "PASS",
+                "note": "skipped: no must_fix findings in payload",
+            },
+        )
+
+    def test_semantic_skipped_rejects_manifest_with_must_fix(self) -> None:
+        completed = self.run_semantic_composition(None, payload_manifest(), skipped=True)
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("INVALID preflight result", completed.stderr)
+        self.assertIn("must_fix", completed.stderr)
+
+    def test_data_and_semantic_modes_are_mutually_exclusive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            data_path = Path(tmp) / "preflight-result.json"
+            semantic_path = Path(tmp) / "preflight-semantic.json"
+            manifest_path = Path(tmp) / "payload-manifest.json"
+            data_path.write_text(json.dumps(valid_result()), encoding="utf-8")
+            semantic_path.write_text(
+                json.dumps(semantic_result(semantic_decision("inline-must-fix", "confirmed"))),
+                encoding="utf-8",
+            )
+            manifest_path.write_text(json.dumps(payload_manifest()), encoding="utf-8")
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(VALIDATOR_PATH),
+                    "--schema",
+                    str(SCHEMA_PATH),
+                    "--data",
+                    str(data_path),
+                    "--from-semantic",
+                    str(semantic_path),
+                    "--manifest",
+                    str(manifest_path),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn("not allowed with argument", completed.stderr)
+
+    def test_semantic_modes_require_manifest_pair(self) -> None:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(VALIDATOR_PATH),
+                "--schema",
+                str(SCHEMA_PATH),
+                "--semantic-skipped",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn("--manifest", completed.stderr)
+
+
+    def test_send_skill_documents_hybrid_pipeline_and_counterargument_polarity(self) -> None:
         skill = (ROOT / "skills" / "send" / "SKILL.md").read_text(encoding="utf-8")
         for snippet in (
-            "## STAGE 1: schema_validation",
-            "## STAGE 2: range_validation",
-            "## STAGE 3: semantic_preflight",
-            "## STAGE 4: payload_consistency",
+            "static Python + Codex semantic",
+            "#### 4 stage と担当",
+            "`schema_validation`",
+            "`range_validation`",
+            "`semantic_preflight`",
+            "`payload_consistency`",
+            "static stage が 1 つでも FAIL の場合は Codex を呼ばず fail-closed",
+            "confirmed / refuted / insufficient_evidence",
             "counterargument_succeeded",
+            "`insufficient_evidence` | `semantic_preflight`",
             "反証成功 = 不採用 / FAIL",
             "preflight-result.json",
             "preflight-prompt.md",
+            "preflight-semantic.json",
             "Markdown fallback は使わない",
             "shell で prompt 本文を展開してはならない",
             "<  ~/claude-loop-pr-codex/$dir_name/preflight-prompt.md",
-            "--output-schema $preflight_schema_path",
-            "--output-last-message ~/claude-loop-pr-codex/$dir_name/preflight-result.json",
+            "--output-schema $semantic_schema_path",
+            "--output-last-message ~/claude-loop-pr-codex/$dir_name/preflight-semantic.json",
+            "--from-semantic ~/claude-loop-pr-codex/$dir_name/preflight-semantic.json",
+            "--semantic-skipped --manifest ~/claude-loop-pr-codex/$dir_name/payload-manifest.json",
             "JSON オブジェクト 1 個だけ",
             "同一 prompt の 3 回リトライはしない",
             "既知 rule は severity=error",
@@ -452,6 +734,7 @@ class ValidatePreflightResultTest(unittest.TestCase):
         self.assertIn('top-level `verdict` は `PASS` / `FAIL` のみ', skill)
         self.assertNotIn("### RESULT_JSON", skill)
         self.assertNotIn("--from-markdown", skill)
+        self.assertNotIn("## STAGE 1: schema_validation", skill)
         unsafe_shell_prompt_prefix = "--cd ~/claude-loop-pr-codex/$dir_name " + chr(92) + '\n  "'
         self.assertNotIn(unsafe_shell_prompt_prefix, skill)
 
