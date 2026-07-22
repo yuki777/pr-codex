@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression tests for preflight-result extraction and validation."""
+"""Regression tests for direct preflight-result JSON validation."""
 
 from __future__ import annotations
 
@@ -17,12 +17,7 @@ SCHEMA_PATH = ROOT / "schemas" / "preflight-result.v1.json"
 VALIDATOR_PATH = TASKS / "validate_preflight_result.py"
 sys.path.insert(0, str(TASKS))
 
-from validate_preflight_result import (  # noqa: E402
-    emit_markdown,
-    expected_counts,
-    extract_result_json,
-    validate_preflight_result,
-)
+from validate_preflight_result import emit_markdown, expected_counts, validate_preflight_result  # noqa: E402
 
 
 def valid_result() -> dict[str, object]:
@@ -46,6 +41,7 @@ def auto_fixable_range_violation() -> dict[str, object]:
     return {
         "stage": "range_validation",
         "rule": "line_out_of_hunk",
+        "finding_id": None,
         "comment_index": 0,
         "detail": "comment line is outside pr.diff.ranges.txt and can be moved to body",
         "severity": "error",
@@ -59,6 +55,7 @@ def human_semantic_violation() -> dict[str, object]:
         "stage": "semantic_preflight",
         "rule": "counterargument_succeeded",
         "finding_id": "f" * 64,
+        "comment_index": None,
         "detail": "A plausible counterargument exists based on the PR diff.",
         "severity": "error",
         "auto_fixable": False,
@@ -70,6 +67,8 @@ def sarif_count_mismatch_violation() -> dict[str, object]:
     return {
         "stage": "schema_validation",
         "rule": "must_fix_count_mismatch",
+        "finding_id": None,
+        "comment_index": None,
         "detail": "canonical=2 markdown=2 payload=1 sarif=2",
         "severity": "error",
         "auto_fixable": False,
@@ -108,6 +107,7 @@ class ValidatePreflightResultTest(unittest.TestCase):
                 "stage": "semantic_preflight",
                 "rule": "cluster_representative_missing_until_f6",
                 "finding_id": "abc123",
+                "comment_index": None,
                 "detail": "F6 cluster metadata is not present yet; record as warning only.",
                 "severity": "warning",
                 "auto_fixable": False,
@@ -169,95 +169,83 @@ class ValidatePreflightResultTest(unittest.TestCase):
         result["stages"]["semantic_preflight"]["status"] = "FAIL"
         self.assert_invalid_without_crash(result, "FAIL requires at least one error violation")
 
-    def test_extract_result_json_uses_last_result_json_block(self) -> None:
-        first = copy.deepcopy(valid_result())
-        second = copy.deepcopy(valid_result())
-        second["verdict"] = "FAIL"
-        second["stages"]["semantic_preflight"]["status"] = "FAIL"
-        second["violations"] = [human_semantic_violation()]
-        second["requires_human_count"] = 1
-        markdown = (
-            "### RESULT_JSON\n"
-            "```json\n"
-            + json.dumps(first)
-            + "\n```\n"
-            "some explanation\n"
-            "### RESULT_JSON\n"
-            "```json\n"
-            + json.dumps(second)
-            + "\n```\n"
-            "VERDICT: FAIL\n"
+    def test_stage_note_is_required(self) -> None:
+        result = valid_result()
+        del result["stages"]["schema_validation"]["note"]
+        self.assert_invalid_without_crash(
+            result,
+            "$.stages.schema_validation: missing required properties: note",
         )
-        self.assertEqual(extract_result_json(markdown), second)
 
+    def test_stage_note_accepts_empty_string(self) -> None:
+        result = valid_result()
+        result["stages"]["schema_validation"]["note"] = ""
+        self.assertEqual(validate_preflight_result(result), [])
 
-    def test_extract_result_json_rejects_dangling_final_result_heading(self) -> None:
-        markdown = (
-            "### RESULT_JSON\n```json\n"
-            + json.dumps(valid_result())
-            + "\n```\n"
-            "### RESULT_JSON\n"
-            "VERDICT: FAIL\n"
+    def test_stage_note_rejects_control_characters(self) -> None:
+        result = valid_result()
+        result["stages"]["schema_validation"]["note"] = "invalid\nnote"
+        self.assertIn(
+            "$.stages.schema_validation.note: must be a string without control characters",
+            validate_preflight_result(result),
         )
-        with self.assertRaisesRegex(ValueError, "immediately after final RESULT_JSON heading"):
-            extract_result_json(markdown)
 
-    def test_extract_result_json_requires_matching_final_verdict(self) -> None:
-        markdown = (
-            "### RESULT_JSON\n```json\n"
-            + json.dumps(valid_result())
-            + "\n```\n"
-            "VERDICT: FAIL\n"
+    def test_violation_references_are_required(self) -> None:
+        for missing_field in ("finding_id", "comment_index"):
+            with self.subTest(missing_field=missing_field):
+                result = valid_result()
+                result["verdict"] = "FAIL"
+                result["stages"]["range_validation"]["status"] = "FAIL"
+                violation = auto_fixable_range_violation()
+                del violation[missing_field]
+                result["violations"] = [violation]
+                result["auto_fixable_count"] = 1
+                self.assert_invalid_without_crash(
+                    result,
+                    f"missing required properties: {missing_field}",
+                )
+
+    def test_nullable_violation_references_are_valid(self) -> None:
+        result = valid_result()
+        result["verdict"] = "FAIL"
+        result["stages"]["range_validation"]["status"] = "FAIL"
+        violation = auto_fixable_range_violation()
+        violation["comment_index"] = None
+        result["violations"] = [violation]
+        result["auto_fixable_count"] = 1
+        self.assertEqual(validate_preflight_result(result), [])
+
+    def test_non_null_violation_references_are_validated(self) -> None:
+        result = valid_result()
+        result["verdict"] = "FAIL"
+        result["stages"]["range_validation"]["status"] = "FAIL"
+        violation = auto_fixable_range_violation()
+        violation["finding_id"] = ""
+        violation["comment_index"] = True
+        result["violations"] = [violation]
+        result["auto_fixable_count"] = 1
+        errors = validate_preflight_result(result)
+        self.assertIn(
+            "$.violations[0].finding_id: must be null or a non-empty string without control characters",
+            errors,
         )
-        with self.assertRaisesRegex(ValueError, "verdict must match final VERDICT"):
-            extract_result_json(markdown)
-
-    def test_extract_result_json_requires_final_verdict_as_last_line(self) -> None:
-        markdown = (
-            "### RESULT_JSON\n```json\n"
-            + json.dumps(valid_result())
-            + "\n```\n"
-            "VERDICT: PASS\n"
-            "trailing text\n"
+        self.assertIn(
+            "$.violations[0].comment_index: must be null or a non-negative integer",
+            errors,
         )
-        with self.assertRaisesRegex(ValueError, "final VERDICT line"):
-            extract_result_json(markdown)
 
-    def test_extract_result_json_rejects_extra_fence_after_result_block(self) -> None:
-        fail_result = copy.deepcopy(valid_result())
-        fail_result["verdict"] = "FAIL"
-        fail_result["stages"]["semantic_preflight"]["status"] = "FAIL"
-        fail_result["violations"] = [human_semantic_violation()]
-        fail_result["requires_human_count"] = 1
-        markdown = (
-            "### RESULT_JSON\n```json\n"
-            + json.dumps(fail_result)
-            + "\n```\n"
-            "```json\n"
-            + json.dumps(valid_result())
-            + "\n```\n"
-            "VERDICT: PASS\n"
-        )
-        with self.assertRaisesRegex(ValueError, "followed only by the final VERDICT"):
-            extract_result_json(markdown)
-
-    def test_cli_extracts_and_validates_markdown(self) -> None:
+    def test_cli_validates_data_directly(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            md_path = Path(tmp) / "preflight-codex.md"
-            md_path.write_text(
-                "### RESULT_JSON\n```json\n"
-                + json.dumps(valid_result(), ensure_ascii=True)
-                + "\n```\nVERDICT: PASS\n",
-                encoding="utf-8",
-            )
+            data_path = Path(tmp) / "preflight-result.json"
+            data_path.write_text(json.dumps(valid_result()), encoding="utf-8")
             completed = subprocess.run(
                 [
                     sys.executable,
                     str(VALIDATOR_PATH),
                     "--schema",
                     str(SCHEMA_PATH),
-                    "--from-markdown",
-                    str(md_path),
+                    "--data",
+                    str(data_path),
                     "--emit-json",
                 ],
                 check=False,
@@ -265,34 +253,110 @@ class ValidatePreflightResultTest(unittest.TestCase):
                 text=True,
             )
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertEqual(json.loads(completed.stdout)["verdict"], "PASS")
+        self.assertEqual(json.loads(completed.stdout), valid_result())
 
-
-    def test_cli_rejects_markdown_verdict_mismatch(self) -> None:
+    def test_cli_rejects_invalid_direct_data(self) -> None:
+        result = valid_result()
+        result["schema_version"] = "wrong"
         with tempfile.TemporaryDirectory() as tmp:
-            md_path = Path(tmp) / "preflight-codex.md"
-            md_path.write_text(
-                "### RESULT_JSON\n```json\n"
-                + json.dumps(valid_result(), ensure_ascii=True)
-                + "\n```\nVERDICT: FAIL\n",
-                encoding="utf-8",
-            )
+            data_path = Path(tmp) / "preflight-result.json"
+            data_path.write_text(json.dumps(result), encoding="utf-8")
             completed = subprocess.run(
                 [
                     sys.executable,
                     str(VALIDATOR_PATH),
                     "--schema",
                     str(SCHEMA_PATH),
-                    "--from-markdown",
-                    str(md_path),
-                    "--emit-json",
+                    "--data",
+                    str(data_path),
                 ],
                 check=False,
                 capture_output=True,
                 text=True,
             )
-        self.assertNotEqual(completed.returncode, 0)
-        self.assertIn("verdict must match final VERDICT", completed.stderr)
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("INVALID preflight result", completed.stderr)
+        self.assertIn("$.schema_version: must be preflight-result.v1", completed.stderr)
+
+    def test_cli_emit_markdown_uses_validated_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            data_path = Path(tmp) / "preflight-result.json"
+            data_path.write_text(json.dumps(valid_result()), encoding="utf-8")
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(VALIDATOR_PATH),
+                    "--schema",
+                    str(SCHEMA_PATH),
+                    "--data",
+                    str(data_path),
+                    "--emit-markdown",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("## Stage results", completed.stdout)
+        self.assertTrue(completed.stdout.rstrip().endswith("VERDICT: PASS"))
+
+    def test_cli_rejects_wrong_schema_wiring(self) -> None:
+        schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+        wrong_schemas = {
+            "id": {
+                **schema,
+                "$id": "https://example.invalid/preflight-result.v1.json",
+            },
+            "version": {
+                **schema,
+                "properties": {
+                    **schema["properties"],
+                    "schema_version": {"type": "string", "enum": ["wrong"]},
+                },
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            data_path = Path(tmp) / "preflight-result.json"
+            data_path.write_text(json.dumps(valid_result()), encoding="utf-8")
+            for name, wrong_schema in wrong_schemas.items():
+                with self.subTest(name=name):
+                    schema_path = Path(tmp) / f"{name}.json"
+                    schema_path.write_text(json.dumps(wrong_schema), encoding="utf-8")
+                    completed = subprocess.run(
+                        [
+                            sys.executable,
+                            str(VALIDATOR_PATH),
+                            "--schema",
+                            str(schema_path),
+                            "--data",
+                            str(data_path),
+                        ],
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertEqual(completed.returncode, 2)
+                    self.assertIn("invalid preflight-result schema file", completed.stderr)
+
+    def test_cli_rejects_removed_from_markdown_option(self) -> None:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(VALIDATOR_PATH),
+                "--schema",
+                str(SCHEMA_PATH),
+                "--data",
+                str(SCHEMA_PATH),
+                "--from-markdown",
+                str(SCHEMA_PATH),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn("unrecognized arguments: --from-markdown", completed.stderr)
+
 
     def test_auto_fixable_classification_counts_only_error_violations(self) -> None:
         errors = [auto_fixable_range_violation(), human_semantic_violation()]
@@ -301,6 +365,7 @@ class ValidatePreflightResultTest(unittest.TestCase):
             "stage": "semantic_preflight",
             "rule": "cluster_representative_missing_until_f6",
             "finding_id": "abc123",
+            "comment_index": None,
             "detail": "F6 cluster metadata is not present yet; record as warning only.",
             "severity": "warning",
             "auto_fixable": False,
@@ -333,6 +398,8 @@ class ValidatePreflightResultTest(unittest.TestCase):
             {
                 "stage": "semantic_preflight",
                 "rule": "new_error_rule",
+                "finding_id": None,
+                "comment_index": None,
                 "detail": "unknown error rule",
                 "severity": "error",
                 "auto_fixable": False,
@@ -346,6 +413,19 @@ class ValidatePreflightResultTest(unittest.TestCase):
         markdown = emit_markdown(valid_result())
         self.assertIn("## Stage results", markdown)
         self.assertTrue(markdown.rstrip().endswith("VERDICT: PASS"))
+
+    def test_emit_markdown_omits_null_violation_references(self) -> None:
+        result = valid_result()
+        result["verdict"] = "FAIL"
+        result["stages"]["range_validation"] = {"status": "FAIL", "note": ""}
+        result["violations"] = [auto_fixable_range_violation()]
+        result["violations"][0]["comment_index"] = None
+        result["auto_fixable_count"] = 1
+        markdown = emit_markdown(result)
+        self.assertNotIn("finding_id=", markdown)
+        self.assertNotIn("comment_index=", markdown)
+        self.assertIn("- range_validation: FAIL\n", markdown)
+        self.assertTrue(markdown.rstrip().endswith("VERDICT: FAIL"))
 
 
     def test_send_skill_documents_four_stage_pipeline_and_counterargument_polarity(self) -> None:
@@ -362,13 +442,16 @@ class ValidatePreflightResultTest(unittest.TestCase):
             "Markdown fallback は使わない",
             "shell で prompt 本文を展開してはならない",
             "<  ~/claude-loop-pr-codex/$dir_name/preflight-prompt.md",
-            "final `VERDICT:` line",
-            "一致しなければ",
+            "--output-schema $preflight_schema_path",
+            "--output-last-message ~/claude-loop-pr-codex/$dir_name/preflight-result.json",
+            "JSON オブジェクト 1 個だけ",
+            "同一 prompt の 3 回リトライはしない",
             "既知 rule は severity=error",
-            "RESULT_JSON` の直後に fenced JSON",
         ):
             self.assertIn(snippet, skill)
         self.assertIn('top-level `verdict` は `PASS` / `FAIL` のみ', skill)
+        self.assertNotIn("### RESULT_JSON", skill)
+        self.assertNotIn("--from-markdown", skill)
         unsafe_shell_prompt_prefix = "--cd ~/claude-loop-pr-codex/$dir_name " + chr(92) + '\n  "'
         self.assertNotIn(unsafe_shell_prompt_prefix, skill)
 

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/yuki777/pr-codex/main/schemas/preflight-result.v1.json",
   "title": "pr-codex send preflight result v1",
-  "description": "Structured verifier pipeline result emitted by /pr-codex:send Step 4.5 before GitHub Reviews API submission. PASS_WITH_WARNINGS is intentionally not a verdict; warnings are represented as violations[].severity=warning.",
+  "description": "Structured verifier pipeline result emitted directly by the /pr-codex:send Step 4.5 Codex verifier via --output-schema / --output-last-message, then cross-field validated by tasks/validate_preflight_result.py. PASS_WITH_WARNINGS is intentionally not a verdict; warnings are represented per violation via severity=warning and never flip the top-level verdict. Strict structured-output compatibility: every field is required and optionality is expressed as nullable types (violation finding_id / comment_index); numeric minimums and the RFC 3339 generated_at format are enforced by the Python validator.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -16,9 +16,13 @@
   ],
   "properties": {
     "schema_version": {
-      "const": "preflight-result.v1"
+      "type": "string",
+      "enum": [
+        "preflight-result.v1"
+      ]
     },
     "verdict": {
+      "type": "string",
       "enum": [
         "PASS",
         "FAIL"
@@ -56,15 +60,15 @@
     },
     "auto_fixable_count": {
       "type": "integer",
-      "minimum": 0
+      "description": "Count of violations with severity=error and auto_fixable=true. Non-negativity and recomputation are enforced by the Python validator."
     },
     "requires_human_count": {
       "type": "integer",
-      "minimum": 0
+      "description": "Count of violations with severity=error that require human attention. Non-negativity and recomputation are enforced by the Python validator."
     },
     "generated_at": {
       "type": "string",
-      "format": "date-time"
+      "description": "RFC 3339 timestamp with timezone (e.g. 2026-05-06T00:00:00Z); format is enforced by the Python validator."
     }
   },
   "$defs": {
@@ -72,17 +76,20 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "status"
+        "status",
+        "note"
       ],
       "properties": {
         "status": {
+          "type": "string",
           "enum": [
             "PASS",
             "FAIL"
           ]
         },
         "note": {
-          "type": "string"
+          "type": "string",
+          "description": "1-2 sentence human-readable rationale for the stage status. May be an empty string."
         }
       }
     },
@@ -92,6 +99,8 @@
       "required": [
         "stage",
         "rule",
+        "finding_id",
+        "comment_index",
         "detail",
         "severity",
         "auto_fixable",
@@ -99,6 +108,7 @@
       ],
       "properties": {
         "stage": {
+          "type": "string",
           "enum": [
             "schema_validation",
             "range_validation",
@@ -108,20 +118,28 @@
         },
         "rule": {
           "type": "string",
-          "minLength": 1
+          "description": "Stable rule identifier from the violation classification table. Non-emptiness is enforced by the Python validator."
         },
         "finding_id": {
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Related canonical finding id, or null when the violation is not tied to a specific finding."
         },
         "comment_index": {
-          "type": "integer",
-          "minimum": 0
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "Zero-based index into payload.comments[], or null when the violation is not tied to a specific comment. Non-negativity is enforced by the Python validator."
         },
         "detail": {
           "type": "string",
-          "minLength": 1
+          "description": "Human-readable violation detail. Non-emptiness is enforced by the Python validator."
         },
         "severity": {
+          "type": "string",
           "enum": [
             "error",
             "warning"

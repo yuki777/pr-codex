@@ -500,9 +500,9 @@ payload は Write ツールで `~/claude-loop-pr-codex/$dir_name/review-payload.
 
 ### Step 4.5: 投稿前 verifier pipeline (Codex セルフレビュー)
 
-Claude が生成した `review-payload.json` と review 側が生成した local-only `findings.sarif` を Codex CLI に独立検証させ、投稿直前の検証を **4 stage verifier pipeline** として実行する。`--auto-submit` でもスキップしない。Step 5 第2ステップ（interactive の最終承認プロンプト、または auto_submit の自動続行判断）の直前で必ず実行する。`findings.verified.json` は必須入力であり、Markdown fallback は使わない。検証では `comments[]` への Must Fix 以外の混入、Should Fix / Nit inline comment の対応関係と指定外混入、SARIF schema/side/post_policy 違反、行範囲外コメント、event/body 不整合を検出する。従来互換の `preflight-codex.md` / `preflight-codex.log` は維持し、新たに構造化結果 `preflight-result.json` を出力する。検証プロンプトには `$include_should_fix` / `$include_nit` の実行時 boolean を明示し、semantic stage はその active severity flags を根拠に許可 severity を決める。さらに `$plugin_root/schemas/findings.v1.json`、`$plugin_root/schemas/sarif-2.1.0.json`、`$plugin_root/schemas/preflight-result.v1.json`、および各 validator/generator の絶対パスを埋め込み、`--cd ~/claude-loop-pr-codex/$dir_name` 配下の相対 `schemas/` には依存しない。
+Claude が生成した `review-payload.json` と review 側が生成した local-only `findings.sarif` を Codex CLI に独立検証させ、投稿直前の検証を **4 stage verifier pipeline** として実行する。`--auto-submit` でもスキップしない。Step 5 第2ステップ（interactive の最終承認プロンプト、または auto_submit の自動続行判断）の直前で必ず実行する。`findings.verified.json` は必須入力であり、Markdown fallback は使わない。検証では `comments[]` への Must Fix 以外の混入、Should Fix / Nit inline comment の対応関係と指定外混入、SARIF schema/side/post_policy 違反、行範囲外コメント、event/body 不整合を検出する。検証結果は Codex の structured output（`--output-schema` / `--output-last-message`）で `preflight-result.json` として直接受け、`validate_preflight_result.py` の cross-field validation を通過した後、validated JSON から人間可読の `preflight-codex.md` を派生生成する。Markdown からの `RESULT_JSON` 抽出や final `VERDICT:` line との整合検証は行わない。検証プロンプトには `$include_should_fix` / `$include_nit` の実行時 boolean を明示し、semantic stage はその active severity flags を根拠に許可 severity を決める。さらに `$plugin_root/schemas/findings.v1.json`、`$plugin_root/schemas/sarif-2.1.0.json`、`$plugin_root/schemas/preflight-result.v1.json`、および各 validator/generator の絶対パスを埋め込み、`--cd ~/claude-loop-pr-codex/$dir_name` 配下の相対 `schemas/` には依存しない。
 
-`findings.verified.json` 検証プロンプトには `$plugin_root/schemas/findings.v1.json` の**絶対パス**（Step 2.5 で解決した `schema_path`）と同梱 validator の絶対パス（`validator_path`）を埋め込む。SARIF 検証には `sarif_schema_path` / `sarif_validator_path` / `sarif_generator_path` を使う。`preflight-result.json` 抽出/検証には `preflight_schema_path` と `preflight_validator_path` を使い、Codex の出力崩れを `PASS` と誤判定しない。
+`findings.verified.json` 検証プロンプトには `$plugin_root/schemas/findings.v1.json` の**絶対パス**（Step 2.5 で解決した `schema_path`）と同梱 validator の絶対パス（`validator_path`）を埋め込む。SARIF 検証には `sarif_schema_path` / `sarif_validator_path` / `sarif_generator_path` を使う。`preflight-result.json` の structured output 強制には `preflight_schema_path` を、検証には `preflight_validator_path` を使い、Codex の出力崩れを `PASS` と誤判定しない。
 
 #### 4 stage と既存観点の対応
 
@@ -545,7 +545,7 @@ Codex は `preflight-result.json` の `violations[]` を以下の安定 `rule` �
 
 #### `preflight-result.json` 構造
 
-Codex は `preflight-codex.md` の末尾付近に `### RESULT_JSON` 見出しと fenced JSON を 1 つ出力する。Claude は次の抽出コマンドで最後の `RESULT_JSON` JSON block を検証し、`~/claude-loop-pr-codex/$dir_name/preflight-result.json` として保存する。
+Codex は `--output-schema` により `schemas/preflight-result.v1.json` 準拠の JSON オブジェクトを最終メッセージとして直接出力し、`--output-last-message` がそれを `~/claude-loop-pr-codex/$dir_name/preflight-result.json` として保存する。Claude は次の検証コマンドで cross-field validation を通し、validated JSON から人間可読の `preflight-codex.md` を派生生成する。violation が特定の finding / comment に紐づかない場合、`finding_id` / `comment_index` は `null` にする。
 
 ```json
 {
@@ -572,7 +572,7 @@ Codex は `preflight-codex.md` の末尾付近に `### RESULT_JSON` 見出しと
 - 理由: prompt 本文には Markdown backtick や JSON double quote が含まれるため、shell の double-quoted argument として渡すと command substitution / quote 分割で壊れる。prompt file + stdin 経由に固定し、shell は本文を解釈しない
 
 ```markdown
-あなたは GitHub PR レビュー投稿前の独立検証エージェントです。Claude が生成した review-payload.json を読み、4 stage verifier pipeline として検証してください。最後に人間可読の違反一覧、RESULT_JSON の fenced JSON、そして最終行の VERDICT: PASS または VERDICT: FAIL を必ず出力してください。
+あなたは GitHub PR レビュー投稿前の独立検証エージェントです。Claude が生成した review-payload.json を読み、4 stage verifier pipeline として検証してください。最終メッセージは preflight-result.v1 schema に従う JSON オブジェクト 1 個だけを出力してください。前置き・後置きの散文、Markdown 見出し、コードフェンスを最終メッセージに含めてはいけません。
 
 目的は、GitHub Reviews API に投稿する直前の payload から、schema 不整合・範囲外コメント・semantic false positive・event/body 不整合を検出して誤投稿を防ぐことです。top-level verdict は PASS / FAIL のみで、PASS_WITH_WARNINGS は使いません。
 
@@ -657,12 +657,12 @@ Codex は `preflight-codex.md` の末尾付近に `### RESULT_JSON` 見出しと
 - must_fix_count_mismatch_findings_vs_md: stage=payload_consistency, auto_fixable=false, requires_review_regeneration=true
 
 ## 出力フォーマット
-1. Stage ごとに検証内容と `STAGE 1: PASS` / `STAGE 1: FAIL` のような判定を書く
-2. `### 違反一覧` に、violation ごとの stage / rule / finding_id または comment_index / detail / auto_fixable / requires_review_regeneration を列挙する。違反がなければ「なし」
-3. `### RESULT_JSON` の直後に fenced JSON を 1 個だけ出力する。JSON fence の後は最終 `VERDICT:` line 以外の本文や追加 JSON fence を出力しない。JSON は {PREFLIGHT_SCHEMA_PATH} の schema に従い、可能なら `python3 {PREFLIGHT_VALIDATOR_PATH} --schema {PREFLIGHT_SCHEMA_PATH} --from-markdown preflight-codex.md` と同じ契約を満たす形にする
-4. 最終行に必ず `VERDICT: PASS` または `VERDICT: FAIL` を単独で出力する
+1. 最終メッセージは {PREFLIGHT_SCHEMA_PATH} の schema (preflight-result.v1) に従う JSON オブジェクト 1 個だけとする。前置き・後置きの本文、Markdown 見出し、コードフェンスを最終メッセージに含めない
+2. 各 stage の判定は stages.<stage>.status (PASS / FAIL) に書き、判定根拠の要約を stages.<stage>.note に 1〜2 文で書く
+3. violation は violations[] に、stage / rule / finding_id / comment_index / detail / severity / auto_fixable / requires_review_regeneration を分類表どおりに列挙する。特定の finding / comment に紐づかない violation は finding_id / comment_index を null にする。違反がなければ violations は空配列にする
+4. verdict は error violation が 1 件以上あれば FAIL、0 件なら PASS とし、auto_fixable_count / requires_human_count は severity=error の violation だけから数える。この整合は `python3 {PREFLIGHT_VALIDATOR_PATH} --schema {PREFLIGHT_SCHEMA_PATH} --data preflight-result.json` と同じ cross-field validation で検証される
 
-RESULT_JSON の必須形（実際の出力ではこの object を fenced JSON として出力する）:
+出力 JSON の必須形:
 {
   "schema_version": "preflight-result.v1",
   "verdict": "PASS",
@@ -682,8 +682,8 @@ RESULT_JSON の必須形（実際の出力ではこの object を fenced JSON �
 #### Codex verifier コマンド
 
 - いつ使うか: `preflight-prompt.md` を Write ツールで作成した直後、Step 5 の承認プロンプト前に必ず実行する
-- 判定条件: `preflight-codex.md` の最後の非空行に `VERDICT: PASS` または `VERDICT: FAIL` があり、最後の `### RESULT_JSON` 直後に fenced JSON が 1 個だけあり、その `verdict` と一致し、次の `preflight-result.json` 抽出/検証コマンドが終了コード 0 で成功する
-- 次アクション: `preflight-result.json.verdict == "PASS"` かつ `preflight-codex.md` の `VERDICT: PASS` が確認できた場合だけ Step 5 へ進む。`FAIL` なら下記の失敗時処理へ進む。Codex 実行または JSON 抽出/検証が失敗した場合は FAIL と同等に扱い、payload 修正では直せない出力崩れとして再試行対象にする（最大 3 回）
+- 判定条件: 終了コードが 0、`preflight-result.json` が生成されて非空、かつ次の preflight-result 検証コマンドが終了コード 0 で成功する
+- 次アクション: `preflight-result.json.verdict == "PASS"` の場合だけ Step 5 へ進む。`FAIL` なら下記の失敗時処理へ進む。Codex 実行の失敗、`preflight-result.json` の欠落、または検証コマンドの失敗（malformed structured output）は、同じ prompt で Codex verifier コマンドを **1 回だけ** 再実行して回復を試みる。再実行でも解消しない場合は FAIL と同等に扱い、自動投稿を中止して検証失敗の内容をユーザーに報告する（同一 prompt の 3 回リトライはしない）
 - prompt は `exec` の `-` 引数と stdin redirection で渡す。Bash ツールへ渡すコマンド文字列に prompt 本文を直接埋め込んではならない
 
 ```bash
@@ -695,10 +695,12 @@ codex \
   --ignore-user-config \
   --skip-git-repo-check \
   --cd ~/claude-loop-pr-codex/$dir_name \
+  --output-schema $preflight_schema_path \
+  --output-last-message ~/claude-loop-pr-codex/$dir_name/preflight-result.json \
   - \
   <  ~/claude-loop-pr-codex/$dir_name/preflight-prompt.md \
-  >  ~/claude-loop-pr-codex/$dir_name/preflight-codex.md \
-  2> ~/claude-loop-pr-codex/$dir_name/preflight-codex.log
+  >  ~/claude-loop-pr-codex/$dir_name/preflight-codex.log \
+  2>&1
 ```
 
 フラグの説明:
@@ -707,16 +709,22 @@ codex \
 - `-c sandbox_mode=read-only` — シェル実行を read-only サンドボックスに固定する。`--sandbox read-only` と等価だが、config override として明示するため `-c` に統一する
 - `--ignore-user-config` — 投稿前検証中のみ `$CODEX_HOME/config.toml` / `~/.codex/config.toml` を読み込まない。auth は引き続き `CODEX_HOME` を使うため、古い MCP 設定や無効な `model_reasoning_effort` による config 検証エラーから Step 4.5 preflight を切り離せる
 - `--skip-git-repo-check` / `-C, --cd` は `exec` サブコマンド側の option のため、`exec` の後ろ、かつ prompt の前に置く
+- `--output-schema` — `schemas/preflight-result.v1.json`（Step 2.5 の `preflight_schema_path`）を structured output として強制する。`exec` サブコマンド側の option のため `exec` の後ろに置く
+- `--output-last-message` — 最終メッセージ（schema 準拠 JSON）を `preflight-result.json` へ直接保存する。標準出力の実行ログは `preflight-codex.log` にまとめる（`2>&1`）
 - `--color never` / `--ephemeral` はテンプレートを簡素化するため使わない。カラーは TTY 自動判定に任せ、セッション保存挙動は config 側に委ねる
 
-#### RESULT_JSON 抽出・検証コマンド
+#### preflight-result 検証と人間可読化コマンド
 
 - いつ使うか: 上の Codex verifier コマンドが終了した直後に必ず実行する
-- 判定条件: 終了コード 0 かつ `preflight-result.json` が非空で、final `VERDICT:` line と `preflight-result.json.verdict` が一致し（一致しなければ失敗）、`schema_version == "preflight-result.v1"` / `verdict in {"PASS","FAIL"}` / 4 stage / violation count の cross-field validation を満たす
-- 次アクション: 成功なら `preflight-result.json` を Read ツールで取得し、`verdict` と count を確認する。`RESULT_JSON` 見出し欠落、最後の `RESULT_JSON` 見出し後の JSON fence 欠落、追加 JSON fence / 余分な本文、final `VERDICT:` line との不一致、または schema/cross-field validation 失敗時は Codex 出力が構造化契約に違反したものとして Step 4.5 FAIL と扱い、最大 3 回まで再試行する
+- 判定条件: 2 つのテンプレートの終了コードがともに 0。1 つ目で `preflight-result.json` が `schema_version == "preflight-result.v1"` / `verdict in {"PASS","FAIL"}` / 4 stage / violation 分類 / count 再計算の cross-field validation を満たし、2 つ目で validated JSON から人間可読の `preflight-codex.md` が生成される
+- 次アクション: 成功なら `preflight-result.json` を Read ツールで取得し、`verdict` と count を確認して失敗時処理または Step 5 へ進む。検証コマンドの失敗（malformed structured output）は上記のとおり Codex verifier コマンドの 1 回だけの再実行対象とし、再実行でも失敗するなら自動投稿を中止してユーザーに報告する
 
 ```bash
-python3 $preflight_validator_path --schema $preflight_schema_path --from-markdown ~/claude-loop-pr-codex/$dir_name/preflight-codex.md --emit-json > ~/claude-loop-pr-codex/$dir_name/preflight-result.json && test -s ~/claude-loop-pr-codex/$dir_name/preflight-result.json
+python3 $preflight_validator_path --schema $preflight_schema_path --data ~/claude-loop-pr-codex/$dir_name/preflight-result.json
+```
+
+```bash
+python3 $preflight_validator_path --schema $preflight_schema_path --data ~/claude-loop-pr-codex/$dir_name/preflight-result.json --emit-markdown > ~/claude-loop-pr-codex/$dir_name/preflight-codex.md
 ```
 
 #### 失敗時の Claude 側の処理
@@ -909,7 +917,7 @@ test ! -d ~/claude-loop-pr-codex/$dir_name && test -d ~/claude-loop-pr-codex/sen
 - `review.md` に Must Fix が一件も無い → Should Fix / Nit の明示指定があれば inline comment として投稿し、Must Fix 0 件の結論として `event: APPROVE` + body (総評 + 良い点 + 確認した範囲) で投稿する。ただし `ci-status.json.state` が `failure` / `pending` の場合は `event: COMMENT` に抑止し、CI 状態を body と Step 5 に表示する
 - `review.md` の `## 総評` セクションが空 or 見つからない → ユーザーに通知して処理中断。`sent/` 移動は行わない
 - Step 3.5 で `pr.diff.ranges.txt` が空 → インラインコメント候補はすべて body 末尾の `## 行コメント不可 (diff 範囲外)` に移動し、`comments` 配列には含めない
-- Step 4.5 の Codex verifier が `RESULT_JSON` を出力しない、最後の `RESULT_JSON` 見出しが dangling、`RESULT_JSON` 後に追加 JSON fence / 余分な本文を出す、final `VERDICT:` line と JSON verdict が一致しない、または `tasks/validate_preflight_result.py` が `preflight-result.json` validation に失敗 → 構造化 preflight 失敗として最大 3 回まで再試行し、解消しなければ投稿を中止
+- Step 4.5 の Codex verifier 実行が失敗、`preflight-result.json` が生成されない、または `tasks/validate_preflight_result.py` が `preflight-result.json` validation に失敗（malformed structured output）→ 同じ prompt で Codex verifier コマンドを 1 回だけ再実行し、解消しなければ投稿を中止
 - Step 4.5 の `preflight-result.json.verdict == "FAIL"` かつ `requires_human_count > 0` → review 側の再生成が必要として即中断し、`preflight-result.json` / `preflight-codex.md` のパスと違反一覧を提示
 - Step 0 で未知オプション、解釈できない位置引数、位置引数が2つ以上、重複オプション、または `--include-nit` 単独 → `unsupported argument` として中断し、payload 生成や GitHub write は行わない
 - Step 1 direct mode で PR 番号のみ指定が複数 directory に一致 → 曖昧として中断し、PR URL 指定を案内する
@@ -938,7 +946,7 @@ test ! -d ~/claude-loop-pr-codex/$dir_name && test -d ~/claude-loop-pr-codex/sen
 9. 1 回の実行で処理する対象ディレクトリは 1 件のみとする。位置引数なしでは名前昇順の auto 選定を使い、PR URL / PR 番号指定時は direct mode として指定 PR の directory だけを検証する
 10. 投稿前の Step 5 承認プロンプトは interactive mode では必須。`--auto-submit` では最終投稿承認だけをスキップできるが、Step 5.5 の二重投稿防止と head SHA 再確認は必須。Should Fix / Nit は default では含めず、`--include-should-fix` / `--include-nit` 指定時だけ全件を inline comment に含める。`--include-nit` は `--include-should-fix` との併用必須とする
 11. Step 3 の `python3 "$plugin_root/tasks/validate_findings.py" ...` を **必ず**実行する。`findings.verified.json` 欠落または validator 失敗時に payload 生成や Markdown fallback へ進んではならない
-12. Step 4.5 の verifier pipeline は **必須**。スキップしてはならない。`preflight-result.json.verdict == "PASS"` と `preflight-codex.md` の `VERDICT: PASS` を確認するまで Step 5 に進まない。schema 検証観点では `$plugin_root/schemas/findings.v1.json`、`$plugin_root/schemas/sarif-2.1.0.json`、`$plugin_root/schemas/preflight-result.v1.json` の絶対パスを prompt / 抽出コマンドに埋め込み、`--cd` 配下の相対 `schemas/` には依存しない
+12. Step 4.5 の verifier pipeline は **必須**。スキップしてはならない。`preflight-result.json` の cross-field validation 通過と `verdict == "PASS"` を確認するまで Step 5 に進まない。schema 検証観点では `$plugin_root/schemas/findings.v1.json`、`$plugin_root/schemas/sarif-2.1.0.json`、`$plugin_root/schemas/preflight-result.v1.json` の絶対パスを prompt / verifier コマンドに埋め込み、`--cd` 配下の相対 `schemas/` には依存しない
 
 ## ファイル構成
 
@@ -971,13 +979,13 @@ $CLAUDE_PLUGIN_ROOT/schemas/
         ├── review.md              ← 投稿元
         ├── pr.diff
         ├── pr.diff.ranges.txt     ← Step 3.5 で生成するコメント可能行範囲
-        ├── claude-review.md
-        ├── codex-review.md
+        ├── claude-review.json
+        ├── codex-review.json
         ├── claude.log
         ├── preflight-prompt.md     ← Step 4.5 の Codex verifier prompt（Write ツールで生成）
-        ├── preflight-codex.md      ← Step 4.5 の人間可読 verifier 結果（VERDICT: PASS/FAIL）
-        ├── preflight-result.json   ← Step 4.5 の構造化 verifier 結果 (`schemas/preflight-result.v1.json`)
-        ├── preflight-codex.log     ← Codex 実行時の stderr
+        ├── preflight-codex.md      ← Step 4.5 の validated JSON から派生生成した人間可読 verifier 結果
+        ├── preflight-result.json   ← Step 4.5 の構造化 verifier 結果 (`schemas/preflight-result.v1.json`、`--output-last-message` で直接保存)
+        ├── preflight-codex.log     ← Codex 実行時の標準出力・標準エラー（`2>&1`）
         ├── nits.md                 ← primary path で Nit がある場合のみ生成（local artifact として保持）
         └── codex.log
 ```
@@ -998,8 +1006,8 @@ $CLAUDE_PLUGIN_ROOT/schemas/
               ├── review-response.json   ← 追加: gh api のレスポンス (.html_url 等を含む)
               ├── pr.diff
               ├── pr.diff.ranges.txt
-              ├── claude-review.md
-              ├── codex-review.md
+              ├── claude-review.json
+              ├── codex-review.json
               ├── claude.log
               ├── preflight-prompt.md
               ├── preflight-codex.md

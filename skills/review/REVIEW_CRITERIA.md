@@ -8,7 +8,7 @@
 - 既存レビューコメントを取得できる場合は、重複指摘を避ける
 
 停止条件:
-- `pr.diff` が存在しない、または空の場合は、呼び出し元プロンプトの指示に従って `PR_DIFF_UNAVAILABLE` のみを返す
+- `pr.diff` が存在しない、または空の場合は、呼び出し元プロンプトの指示に従って `status` を `diff_unavailable` にし、`candidates` を空配列にして返す
 - 関連 URL や追加情報を取得できない場合でも推測で補わず、`pr.diff` と checkout 済みソースから確認できる範囲でレビューを完了する
 - 必要な根拠や行番号を特定できない指摘は Must Fix / Should Fix / Nit に含めない
 
@@ -82,14 +82,14 @@ MCPが使える場合は、以下も取得してレビューに活用するこ�
 3. 各ファイルで必要な変更がすべて揃っているか、実際にファイルを読んで確認する。差分だけで判断しない
 
 ## 行番号規約
-指摘に付ける行番号は、以下の規約で必ず head 基準に統一すること。base 基準や diff 内のオフセットを書いてはいけない。
+candidate に付ける行番号は、以下の規約で必ず head 基準に統一すること。base 基準や diff 内のオフセットを書いてはいけない。
 
 - 行番号は `clone-claude/` および `clone-codex/` にチェックアウトされた head の行番号で書く（実ファイルを Read して確定する）
-- Must Fix / Should Fix の見出し行番号は、必ず `pr.diff.ranges.txt` に記載された同一 `path` の新ファイル側 hunk 範囲内に収める。GitHub Reviews API はこの範囲外の inline comment を 422 で拒否する
-- 範囲指定 `path:L<開始>-L<終了>` を使う場合は、開始行と終了行の両方が同一 hunk 範囲内に含まれる場合だけ使う。複数 hunk をまたぐ行範囲を見出しにしてはいけない
-- 問題の本質が `pr.diff.ranges.txt` の範囲外にある場合は、同一ファイルの範囲内にある最も近い変更行を見出しに使い、本文で `(参考: path:L<行番号>)` として元の範囲外行を補足する
-- 同一ファイルにコメント可能行がない範囲外指摘は、Must Fix / Should Fix の見出しとして出力せず、`### 補足` に参考情報として記載する
-- 削除行に対する指摘は、削除位置の直後または直前の head 側に存在する行を `line` として指し、本文に「直前の削除に対する指摘」または「直後の削除に対する指摘」と明記する
+- `severity_suggestion` が must_fix / should_fix の candidate の `start_line` / `end_line` は、必ず `pr.diff.ranges.txt` に記載された同一 `path` の新ファイル側 hunk 範囲内に収める。GitHub Reviews API はこの範囲外の inline comment を 422 で拒否する
+- 行範囲（`start_line` と `end_line`）を使う場合は、開始行と終了行の両方が同一 hunk 範囲内に含まれる場合だけ使う。複数 hunk をまたぐ行範囲を 1 つの candidate にしてはいけない
+- 問題の本質が `pr.diff.ranges.txt` の範囲外にある場合は、同一ファイルの範囲内にある最も近い変更行を `start_line` に使い、`reason` で `(参考: path:L<行番号>)` として元の範囲外行を補足する
+- 同一ファイルにコメント可能行がない範囲外指摘は、must_fix / should_fix にはせず、`severity_suggestion` を note にして参考情報として記録する
+- 削除行に対する指摘は、削除位置の直後または直前の head 側に存在する行を `start_line` として指し、`problem` または `reason` に「直前の削除に対する指摘」または「直後の削除に対する指摘」と明記する
 - head 側の行が直接特定できない場合は、`pr.diff` の hunk header `@@ -OLD,N +NEW,M @@` を使い、`+NEW` 側オフセットから head 行を逆算する
 
 ## エビデンスラダーと採用基準
@@ -130,19 +130,18 @@ trigger path が再現できなくても `corroborated` かつ `impact_explained
 低ければ `explanation_postable=false` にできる。
 
 ## 出力フォーマット
-レビュー結果は以下の形式で出力すること:
+hunter の最終出力は、呼び出し元プロンプトが指定する `hunter-result.v1` schema の JSON である。以下の各セクションは、`severity_suggestion` の判定基準と `candidates[]` フィールドの記入基準として適用する（セクション名は verifier / explainer が `findings.verified.json` から派生生成する `review.md` の構成にも対応する）:
 
 ### 総評
-全体的な評価を1-2文で述べる。承認可否を明示する。
+総評は hunter の JSON 出力には含めない。verifier / explainer が `review.md` 生成時に作成する。
 
 ### 重大な問題 (Must Fix)
 マージ前に必ず修正すべき問題。Must Fix は **4軸ゲート (REAL=yes ∧ TRIGGERABLE=yes ∧ IMPACTFUL=yes ∧ (GENERAL=yes ∨ specific-impact 説明済)) を満たす指摘のみ** とする。REAL / TRIGGERABLE / IMPACTFUL のいずれかが `yes` に達しない場合、または GENERAL が `yes` でなく specific-impact も説明できない場合は Should Fix 以下へ降格する。各項目に以下を含める:
-- 箇所: ファイルパスと行番号（必ず `path/to/file.ext:L<行番号>` または `path/to/file.ext:L<開始>-L<終了>` 形式）
-- 問題: 何が問題か
-- 理由: なぜ問題か
-- 提案: どう修正すべきか
-- 軸: `REAL=yes / TRIGGERABLE=yes / IMPACTFUL=yes / GENERAL=yes` のように 4 軸の値を 1 行で明記する
-- Must Fix 昇格根拠: `unknown` 不在、または `GENERAL` が `yes` でない場合に specific-impact 説明済である理由を明記する
+- 箇所: `path` / `start_line` / `end_line`（head 基準。単一行なら `end_line` は null）
+- 問題: `problem`（何が問題か）
+- 理由: `reason`（なぜ問題か）
+- 提案: `suggestion`（どう修正すべきか）
+- 軸: 4 軸の確定と昇格根拠の記録は verifier (Step 4c) の責務。hunter も candidate 選定時に同じ 4 軸で落とす理由を優先探索し、REAL / TRIGGERABLE / IMPACTFUL のいずれかを説明できない指摘を must_fix にしない
 
 4軸の判定基準:
 
@@ -177,7 +176,7 @@ trigger path が再現できなくても `corroborated` かつ `impact_explained
 - Nit / 補足は Should Fix inline comment に混ぜない
 
 ### 軽微な指摘 (Nit)
-スタイルや好みに関する軽微な指摘。簡潔に記載（必ず `path/to/file.ext:L<行番号>` 表記を付与）。
+スタイルや好みに関する軽微な指摘。`severity_suggestion` を nit とし、`path` / `start_line` を必ず埋めて簡潔に記載する。
 
 ### SARIF 派生成果物の公開境界
 
@@ -193,10 +192,10 @@ trigger path が再現できなくても `corroborated` かつ `impact_explained
 `severity` は `must_fix → error` / `should_fix → warning` / `nit → note` / `note → none` に写像する。`category == "security"` の finding は `security` extension を必須とし、SARIF には `properties.security_severity_label = security.severity` を付ける。`security.severity == critical/high` または `security.disclosure_policy != inline_safe` の finding は public inline ではなく body summary/local-only 側に分岐する。
 
 ### 良い点
-評価できるコードや設計判断があれば簡潔に述べる。厳しいレビューでも、良い点は認める。
+良い点は hunter の JSON 出力には含めない。verifier / explainer が `review.md` 生成時に作成する。厳しいレビューでも、良い点は認める。
 
 ### 補足
-投稿対象外の補足事項があれば記載する。例: コメント可能行がない範囲外の参考指摘、レビュー上の前提、確認できなかった事項。なければ省略してよい。
+hunter では、コメント可能行がない範囲外の参考指摘は `severity_suggestion=note` の candidate として、確認できなかった事項やレビュー上の前提は `coverage.limitations` に記録する。`review.md` の補足セクションは verifier / explainer が生成する。
 
 ## 重要
 遠慮は不要。「動くから良い」は理由にならない。プロダクションコードとして長期的に保守可能かどうかを基準に判断すること。曖昧な表現（「〜かもしれません」「〜した方がいいかも」）は避け、断定的に指摘すること。採用したい理由ではなく落とす理由を優先探索し、実発火・影響・横展開または specific-impact を確認できない指摘を Must Fix にしないこと。

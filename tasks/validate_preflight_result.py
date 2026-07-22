@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Validate and extract /pr-codex:send preflight-result.json artifacts.
+"""Validate /pr-codex:send preflight-result.json artifacts.
 
-The Step 4.5 verifier writes a structured RESULT_JSON block into
-preflight-codex.md and the send workflow persists it as preflight-result.json.
-This stdlib-only helper validates the runtime contract encoded by
-schemas/preflight-result.v1.json plus cross-field rules JSON Schema cannot
-express portably:
+The Step 4.5 verifier writes JSON directly to preflight-result.json using
+Codex structured output. This stdlib-only helper validates the runtime
+contract encoded by schemas/preflight-result.v1.json plus cross-field rules
+JSON Schema cannot express portably:
 
 * all four verifier pipeline stages are present in the stages object;
 * top-level verdict is FAIL iff at least one error violation exists;
@@ -18,13 +17,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 EXPECTED_SCHEMA_VERSION = "preflight-result.v1"
+EXPECTED_SCHEMA_ID = "https://raw.githubusercontent.com/yuki777/pr-codex/main/schemas/preflight-result.v1.json"
 STAGES = [
     "schema_validation",
     "range_validation",
@@ -79,9 +78,6 @@ RULE_CLASSIFICATION: dict[str, tuple[str, bool, bool]] = {
     "must_fix_count_mismatch_findings_vs_md": ("payload_consistency", False, True),
 }
 
-RESULT_JSON_HEADING_RE = re.compile(r"^###\s+RESULT_JSON\s*$", re.MULTILINE)
-IMMEDIATE_JSON_FENCE_RE = re.compile(r"\A\s*```json\s*(?P<json>.*?)\s*```(?P<tail>.*)\Z", re.DOTALL | re.IGNORECASE)
-FINAL_VERDICT_RE = re.compile(r"^VERDICT:\s*(PASS|FAIL)\s*$")
 
 
 def load_json(path: Path) -> Any:
@@ -89,6 +85,35 @@ def load_json(path: Path) -> Any:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:  # noqa: BLE001 - report JSON/path failures uniformly
         raise ValueError(f"{path}: cannot read/parse JSON: {exc}") from exc
+
+
+def validate_schema_file(schema: Any) -> list[str]:
+    """Ensure --schema is the expected preflight-result schema."""
+    if not isinstance(schema, dict):
+        return ["$schema: must be an object"]
+
+    errors: list[str] = []
+    if schema.get("$id") != EXPECTED_SCHEMA_ID:
+        errors.append(f"$schema.$id: must equal '{EXPECTED_SCHEMA_ID}'")
+
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        errors.append("$schema.properties: must be an object")
+        return errors
+
+    schema_version = properties.get("schema_version")
+    if not isinstance(schema_version, dict) or schema_version.get("enum") != [EXPECTED_SCHEMA_VERSION]:
+        errors.append(
+            f"$schema.properties.schema_version.enum: must equal ['{EXPECTED_SCHEMA_VERSION}']"
+        )
+    return errors
+
+
+def is_safe_string(value: Any) -> bool:
+    return isinstance(value, str) and all(
+        not (ord(char) <= 0x1F or 0x7F <= ord(char) <= 0x9F or 0xD800 <= ord(char) <= 0xDFFF)
+        for char in value
+    )
 
 
 def is_non_empty_string(value: Any) -> bool:
@@ -120,47 +145,6 @@ def add_unexpected(errors: list[str], path: str, obj: Any, allowed: set[str]) ->
             errors.append(f"{path}: unexpected properties: {', '.join(unexpected)}")
 
 
-def extract_final_verdict(markdown: str) -> str:
-    """Return the final VERDICT line, requiring it to be the last non-empty line."""
-    non_empty_lines = [line.strip() for line in markdown.splitlines() if line.strip()]
-    if not non_empty_lines:
-        raise ValueError("final VERDICT line not found")
-    match = FINAL_VERDICT_RE.match(non_empty_lines[-1])
-    if not match:
-        raise ValueError("final VERDICT line must be the last non-empty line")
-    return match.group(1)
-
-
-def extract_result_json(markdown: str) -> dict[str, Any]:
-    """Extract the fenced JSON block after the final RESULT_JSON heading.
-
-    A RESULT_JSON heading is mandatory. If the final heading is dangling, do not
-    fall back to an earlier JSON block because that could turn a malformed or
-    failing verifier output into a false PASS. The final VERDICT line must also
-    match the extracted JSON verdict.
-    """
-    matches = list(RESULT_JSON_HEADING_RE.finditer(markdown))
-    if not matches:
-        raise ValueError("RESULT_JSON heading not found")
-
-    final_verdict = extract_final_verdict(markdown)
-    search_area = markdown[matches[-1].end() :]
-    match = IMMEDIATE_JSON_FENCE_RE.match(search_area)
-    if not match:
-        raise ValueError("RESULT_JSON fenced json block must appear immediately after final RESULT_JSON heading")
-    tail_lines = [line.strip() for line in match.group("tail").splitlines() if line.strip()]
-    if tail_lines != [f"VERDICT: {final_verdict}"]:
-        raise ValueError("RESULT_JSON fenced json block must be followed only by the final VERDICT line")
-    raw_json = match.group("json")
-    try:
-        data = json.loads(raw_json)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"RESULT_JSON is not valid JSON: {exc}") from exc
-    if not isinstance(data, dict):
-        raise ValueError("RESULT_JSON must be a JSON object")
-    if data.get("verdict") != final_verdict:
-        raise ValueError("RESULT_JSON verdict must match final VERDICT line")
-    return data
 
 
 def validate_stage_results(errors: list[str], data: dict[str, Any]) -> None:
@@ -182,12 +166,13 @@ def validate_stage_results(errors: list[str], data: dict[str, Any]) -> None:
             errors.append(f"{path}: must be an object")
             continue
         add_unexpected(errors, path, item, STAGE_RESULT_KEYS)
-        if "status" not in item:
-            errors.append(f"{path}: missing required properties: status")
-        elif item.get("status") not in STAGE_STATUSES:
+        missing_properties = [field for field in ("status", "note") if field not in item]
+        if missing_properties:
+            errors.append(f"{path}: missing required properties: {', '.join(missing_properties)}")
+        if "status" in item and item.get("status") not in STAGE_STATUSES:
             errors.append(f"{path}.status: must be PASS or FAIL")
-        if "note" in item and not isinstance(item["note"], str):
-            errors.append(f"{path}.note: must be a string")
+        if "note" in item and not is_safe_string(item["note"]):
+            errors.append(f"{path}.note: must be a string without control characters")
 
 
 def validate_violations(errors: list[str], data: dict[str, Any]) -> None:
@@ -201,7 +186,7 @@ def validate_violations(errors: list[str], data: dict[str, Any]) -> None:
             errors.append(f"{path}: must be an object")
             continue
         add_unexpected(errors, path, violation, VIOLATION_KEYS)
-        required = {"stage", "rule", "detail", "severity", "auto_fixable", "requires_review_regeneration"}
+        required = VIOLATION_KEYS
         missing = sorted(required - set(violation))
         if missing:
             errors.append(f"{path}: missing required properties: {', '.join(missing)}")
@@ -212,10 +197,20 @@ def validate_violations(errors: list[str], data: dict[str, Any]) -> None:
         for field in ("rule", "detail"):
             if field in violation and not is_non_empty_string(violation[field]):
                 errors.append(f"{path}.{field}: must be a non-empty string")
-        if "finding_id" in violation and not isinstance(violation["finding_id"], str):
-            errors.append(f"{path}.finding_id: must be a string")
-        if "comment_index" in violation and not is_non_negative_int(violation["comment_index"]):
-            errors.append(f"{path}.comment_index: must be a non-negative integer")
+        if (
+            "finding_id" in violation
+            and violation["finding_id"] is not None
+            and not is_non_empty_string(violation["finding_id"])
+        ):
+            errors.append(
+                f"{path}.finding_id: must be null or a non-empty string without control characters"
+            )
+        if (
+            "comment_index" in violation
+            and violation["comment_index"] is not None
+            and not is_non_negative_int(violation["comment_index"])
+        ):
+            errors.append(f"{path}.comment_index: must be null or a non-negative integer")
         for field in ("auto_fixable", "requires_review_regeneration"):
             if field in violation and not isinstance(violation[field], bool):
                 errors.append(f"{path}.{field}: must be a boolean")
@@ -336,8 +331,14 @@ def emit_markdown(data: dict[str, Any]) -> str:
         lines.append("- なし")
     else:
         for index, violation in enumerate(violations, start=1):
-            finding = f" finding_id={violation['finding_id']}" if "finding_id" in violation else ""
-            comment = f" comment_index={violation['comment_index']}" if "comment_index" in violation else ""
+            finding = (
+                f" finding_id={violation['finding_id']}" if violation.get("finding_id") is not None else ""
+            )
+            comment = (
+                f" comment_index={violation['comment_index']}"
+                if violation.get("comment_index") is not None
+                else ""
+            )
             lines.append(
                 f"{index}. [{violation.get('severity')}] {violation.get('stage')} "
                 f"{violation.get('rule')}{finding}{comment}: {violation.get('detail')} "
@@ -352,29 +353,32 @@ def emit_markdown(data: dict[str, Any]) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate pr-codex preflight-result.json")
     parser.add_argument("--schema", required=True, type=Path, help="preflight-result.v1.json path")
-    parser.add_argument("--data", type=Path, help="preflight-result.json path")
-    parser.add_argument("--from-markdown", type=Path, help="extract RESULT_JSON from preflight-codex.md instead of --data")
-    parser.add_argument("--emit-json", action="store_true", help="print extracted/validated JSON")
+    parser.add_argument("--data", required=True, type=Path, help="preflight-result.json path")
+    parser.add_argument("--emit-json", action="store_true", help="print validated JSON")
     parser.add_argument("--emit-markdown", action="store_true", help="print compatible preflight-codex.md markdown")
     args = parser.parse_args()
 
-    if bool(args.data) == bool(args.from_markdown):
-        print("exactly one of --data or --from-markdown is required", file=sys.stderr)
-        return 2
 
     try:
         schema = load_json(args.schema)
-        if args.from_markdown:
-            data = extract_result_json(args.from_markdown.read_text(encoding="utf-8"))
-        else:
-            data = load_json(args.data)
-    except Exception as exc:  # noqa: BLE001 - CLI should report all extraction/parsing failures uniformly
-        print(str(exc), file=sys.stderr)
+    except ValueError as exc:
+        print(f"{args.schema}: invalid preflight-result schema file", file=sys.stderr)
+        print(f"- {exc}", file=sys.stderr)
         return 2
 
-    if not isinstance(schema, dict) or schema.get("$id") is None:
+    schema_errors = validate_schema_file(schema)
+    if schema_errors:
         print(f"{args.schema}: invalid preflight-result schema file", file=sys.stderr)
+        for error in schema_errors:
+            print(f"- {error}", file=sys.stderr)
         return 2
+
+    try:
+        data = load_json(args.data)
+    except ValueError as exc:
+        print("INVALID preflight result", file=sys.stderr)
+        print(f"- {exc}", file=sys.stderr)
+        return 1
 
     errors = validate_preflight_result(data)
     if errors:
