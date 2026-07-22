@@ -576,6 +576,20 @@ class BuildReviewPayloadTest(unittest.TestCase):
             "disclosure_policy": "body_summary_safe",
         }
         cases.append(("security-inline", artifact([security_inline_item]), metadata(), None, "high-risk security findings must not use post_policy=inline"))
+        disclosure_local_inline = copy.deepcopy(security_inline_item)
+        disclosure_local_inline["id"] = "security-local-inline"
+        disclosure_local_inline["fingerprint"] = "security-local-inline"
+        disclosure_local_inline["security"]["disclosure_policy"] = "local_only"
+        cases.append(
+            (
+                "security-local-inline",
+                artifact([disclosure_local_inline]),
+                metadata(),
+                None,
+                "high-risk security findings must not use post_policy=inline",
+            )
+        )
+
 
         count_mismatch = artifact([finding("count")])
         cases.append(("count", count_mismatch, metadata(), "## 総評\n\nok\n\n## 重大な問題 (Must Fix)\n\nなし\n", "Must Fix heading count"))
