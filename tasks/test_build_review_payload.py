@@ -557,6 +557,20 @@ class BuildReviewPayloadTest(unittest.TestCase):
 
         must_body = artifact([finding("must-body", post_policy="body_summary")])
         cases.append(("must-post-policy", must_body, metadata(), None, "must use post_policy=inline"))
+        for post_policy in ("local_only", "suppress"):
+            non_security_private = artifact(
+                [finding(f"must-{post_policy}", post_policy=post_policy)]
+            )
+            cases.append(
+                (
+                    f"non-security-{post_policy}",
+                    non_security_private,
+                    metadata(),
+                    None,
+                    "must use post_policy=inline",
+                )
+            )
+
 
         must_private = artifact([finding("must-private", explanation_postable=False)])
         cases.append(("must-postable", must_private, metadata(), None, "explanation_postable=true"))
