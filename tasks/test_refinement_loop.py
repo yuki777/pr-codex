@@ -425,6 +425,31 @@ class RefinementLoopTest(unittest.TestCase):
                 {"round_index": 1, "auto_deep_eligible": True},
             )
 
+    def test_controller_does_not_classify_unselected_unresolved_candidates_as_verified(self) -> None:
+        unresolved_low_risk = [
+            {
+                "candidate_id": "unresolved-low-risk",
+                "evidence_state": "supported",
+                "evidence_level": "suspicion",
+                "axes": {
+                    "real": "yes",
+                    "triggerable": "unknown",
+                    "impactful": "unknown",
+                },
+                "severity_raw": "nit",
+                "category_raw": "code_quality",
+            }
+        ]
+        plan = plan_next_round(
+            policy(),
+            rounds=[{"new_evidence_count": 1}],
+            candidates=unresolved_low_risk,
+            elapsed_ms=100,
+        )
+        self.assertFalse(plan["should_run"])
+        self.assertEqual(plan["halting"]["reason"], "no_active_candidates")
+        self.assertEqual(plan["target_candidate_ids"], [])
+
     def test_controller_halts_when_no_unresolved_target_remains(self) -> None:
         verified = [
             {

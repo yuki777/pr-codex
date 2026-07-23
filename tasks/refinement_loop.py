@@ -608,12 +608,23 @@ def plan_next_round(
         changed_candidate_ids=previous_changed_ids,
         run_plan=run_plan,
     )
+    unresolved_candidates_count = sum(
+        _candidate_requires_refinement(candidate)
+        for candidate in candidates
+        if isinstance(candidate, dict)
+    )
     decision = evaluate_halting(
         policy,
         evaluation_rounds,
         elapsed_ms=elapsed_ms,
-        active_candidates_count=len(targets),
+        active_candidates_count=unresolved_candidates_count,
     )
+    if not decision.should_halt and unresolved_candidates_count > 0 and not targets:
+        decision = HaltingDecision(
+            True,
+            "no_active_candidates",
+            "unresolved candidates are outside the next-round priority scope",
+        )
     return {
         "round_index": round_index,
         "should_run": not decision.should_halt,
