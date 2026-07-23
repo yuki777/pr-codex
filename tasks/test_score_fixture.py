@@ -44,6 +44,26 @@ class ScoreFixtureTest(unittest.TestCase):
                 self.assertEqual(report["false_positive_rate"], 0.0)
                 self.assertEqual(report["recall_known_bug"], 1.0)
 
+    def test_positive_idempotency_seed_has_component_blast_radius(self) -> None:
+        expected = load_json(ROOT / "fixtures" / "positive" / "expected-findings.json")
+        actual = load_json(
+            ROOT / "fixtures" / "positive" / "scoring-stubs"
+            / "perfect.findings.verified.json"
+        )
+        expected_idempotency = next(
+            finding
+            for finding in expected["expected_findings"]
+            if finding["id"] == "global-refund-idempotency-collision"
+        )
+        actual_idempotency = next(
+            finding
+            for finding in actual["findings"]
+            if finding["location"]["start_line"] == 53
+        )
+
+        self.assertEqual(expected_idempotency["expected_blast_radius"], "component")
+        self.assertEqual(actual_idempotency["blast_radius"], "component")
+
     def test_positive_unknown_blast_radii_fail_quality_gate(self) -> None:
         expected = load_json(ROOT / "fixtures" / "positive" / "expected-findings.json")
         actual = copy.deepcopy(
@@ -177,6 +197,25 @@ class ScoreFixtureTest(unittest.TestCase):
             idempotency["fingerprint"],
         )
 
+    def test_known_bug_line_range_accepts_non_ascii_title_with_structural_match(self) -> None:
+        expected = load_json(ROOT / "fixtures" / "positive" / "expected-findings.json")
+        actual = copy.deepcopy(
+            load_json(ROOT / "fixtures" / "positive" / "scoring-stubs" / "perfect.findings.verified.json")
+        )
+        multilingual = next(
+            finding for finding in actual["findings"] if finding["location"]["start_line"] == 46
+        )
+        multilingual["title"] = "先頭要素だけのテナント検証により他テナントの支払いを返金できる"
+
+        report = score_fixture(expected, actual, EVALUATED_AT)
+
+        row = next(
+            item
+            for item in report["breakdown"]
+            if item["expected_id"] == "cross-tenant-payment-after-first-item"
+        )
+        self.assertEqual(row["match_status"], "matched")
+
     def test_known_bug_location_overlap_requires_semantic_match(self) -> None:
         expected = load_json(ROOT / "fixtures" / "positive" / "expected-findings.json")
         actual = copy.deepcopy(
@@ -205,8 +244,9 @@ class ScoreFixtureTest(unittest.TestCase):
         docs = (ROOT / "fixtures" / "README.md").read_text(encoding="utf-8")
 
         self.assertIn("`line_range` がある `known_bug`", docs)
-        self.assertIn("位置の重複と title keyword の一致", docs)
-        self.assertIn("category の一致", docs)
+        self.assertIn("path / category の一致と行位置の重複", docs)
+        self.assertIn("ASCII keyword", docs)
+        self.assertIn("非 ASCII の英数字", docs)
         self.assertIn("`line_range` がない旧 fixture", docs)
 
     def test_partial_axes_drift_separates_exact_from_acceptable(self) -> None:

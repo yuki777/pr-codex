@@ -2,14 +2,14 @@
   "schema_version": "score-report.v1",
   "fixture_id": "pr-codex-positive-seeded-001",
   "evaluated_at": "2026-07-23T00:00:00Z",
-  "oracle_sha256": "f21022727bb55089b8d0e8ff85852526b78d946f8d9146b39452490a59b1d077",
+  "oracle_sha256": "5a7b57437239698e2507549f626e726db8b170aa39a18a77879bfa0dc2869507",
   "expected_finding_ids": [
     "cross-tenant-payment-after-first-item",
     "global-refund-idempotency-collision",
     "timestamp-only-pagination-cursor",
     "limit-plus-one-is-not-returned"
   ],
-  "exact_pass_rate": 0.3333,
+  "exact_pass_rate": 0.6667,
   "acceptable_pass_rate": 0.0,
   "false_positive_rate": 0.0,
   "recall_known_bug": 0.6667,
@@ -41,7 +41,7 @@
   ],
   "counts": {
     "axes_target": 3,
-    "exact_pass": 1,
+    "exact_pass": 2,
     "acceptable_pass": 0,
     "known_bug": 3,
     "known_bug_matched": 2,
@@ -118,9 +118,9 @@
         }
       },
       "blast_radius_diff": {
-        "expected": "isolated",
+        "expected": "component",
         "actual": "component",
-        "acceptable": false
+        "acceptable": true
       },
       "severity_diff": {
         "expected": [

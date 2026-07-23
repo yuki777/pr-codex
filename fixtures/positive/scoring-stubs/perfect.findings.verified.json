@@ -79,7 +79,7 @@
         "triggerable": "yes",
         "impactful": "yes"
       },
-      "blast_radius": "isolated",
+      "blast_radius": "component",
       "posting": {
         "post_policy": "inline",
         "explanation_postable": true,

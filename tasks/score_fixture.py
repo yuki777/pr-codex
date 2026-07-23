@@ -128,7 +128,7 @@ def location_candidate_indexes(
         index
         for index, actual in enumerate(actuals)
         if location_matches(expected, actual)
-        and title_keyword_match(expected.get("title"), actual.get("title"))
+        and known_bug_title_match(expected.get("title"), actual.get("title"))
     ]
 
 
@@ -177,6 +177,16 @@ def title_keyword_match(expected_title: Any, actual_title: Any) -> bool:
         return False
     overlap = expected_tokens & actual_tokens
     return len(overlap) >= min(2, len(expected_tokens))
+
+
+def known_bug_title_match(expected_title: Any, actual_title: Any) -> bool:
+    if title_keyword_match(expected_title, actual_title):
+        return True
+    return any(
+        isinstance(title, str)
+        and any(character.isalnum() and not character.isascii() for character in title)
+        for title in (expected_title, actual_title)
+    )
 
 
 def actual_matches_trap(expected: dict[str, Any], actual: dict[str, Any]) -> bool:

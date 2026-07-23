@@ -4,16 +4,16 @@
   "aggregate": {
     "baseline": {
       "score_metrics": {
-        "exact_pass_rate": 0.3333,
-        "acceptable_pass_rate": 0.2222,
+        "exact_pass_rate": 0.8889,
+        "acceptable_pass_rate": 0.6667,
         "false_positive_rate": 0.0,
-        "recall_known_bug": 0.5556
+        "recall_known_bug": 0.8889
       },
       "execution": {
         "model": "mixed",
         "reasoning_effort": "mixed",
         "completion_rate": 1.0,
-        "avg_duration_ms": 51504.3333,
+        "avg_duration_ms": 52175.0,
         "avg_tokens": null
       },
       "round_metrics": {
@@ -21,7 +21,7 @@
         "rounds_completed": 2,
         "max_rounds": 3,
         "halt_reason": null,
-        "elapsed_ms": 51504,
+        "elapsed_ms": 52175,
         "time_budget_ms": 1200000,
         "verifier_fail_candidates": 0,
         "suppressed_candidate_count": 0,
@@ -37,16 +37,16 @@
     },
     "iterative": {
       "score_metrics": {
-        "exact_pass_rate": 0.6667,
-        "acceptable_pass_rate": 0.6667,
+        "exact_pass_rate": 0.8889,
+        "acceptable_pass_rate": 0.8889,
         "false_positive_rate": 0.0,
-        "recall_known_bug": 1.0
+        "recall_known_bug": 0.8889
       },
       "execution": {
         "model": "mixed",
         "reasoning_effort": "mixed",
         "completion_rate": 1.0,
-        "avg_duration_ms": 34831.3333,
+        "avg_duration_ms": 35070.3333,
         "avg_tokens": null
       },
       "round_metrics": {
@@ -54,7 +54,7 @@
         "rounds_completed": 1,
         "max_rounds": 3,
         "halt_reason": "all_candidates_verified",
-        "elapsed_ms": 34831,
+        "elapsed_ms": 35070,
         "time_budget_ms": 1200000,
         "verifier_fail_candidates": 0,
         "suppressed_candidate_count": 0,
@@ -69,7 +69,7 @@
       }
     },
     "delta": {
-      "acceptable_pass_rate": 0.4445,
+      "acceptable_pass_rate": 0.2222,
       "false_positive_rate": 0.0,
       "avg_rounds_completed": -0.6667
     }
@@ -79,8 +79,8 @@
       "fixture_id": "pr-codex-positive-seeded-001-round-policy",
       "baseline": {
         "score_metrics": {
-          "exact_pass_rate": 0.6667,
-          "acceptable_pass_rate": 0.6667,
+          "exact_pass_rate": 1.0,
+          "acceptable_pass_rate": 1.0,
           "false_positive_rate": 0.0,
           "recall_known_bug": 1.0
         },
@@ -124,7 +124,7 @@
           },
           "oracle": {
             "path": "fixtures/positive/expected-findings.json",
-            "sha256": "70862dc4a2b94a092917f24cd7af018206d5969405ef368af0f7d1e0ee1ba3a1"
+            "sha256": "2538d6bb2e009111bda8dbf12ae652626b8b401e730b6d36e079036235f54904"
           },
           "findings_artifact": {
             "path": "fixtures/positive/eval-artifacts/round-policy-baseline.findings.json",
@@ -132,7 +132,7 @@
           },
           "score_report": {
             "path": "fixtures/positive/eval-artifacts/round-policy-baseline.score.json",
-            "sha256": "511243e2a1b145a5fe2c87e1caa6a840964f063b5cb1db558280c03572cc27e5"
+            "sha256": "f4732222066a66b3533680d91e97f08256924ca5bf78a4af38ebe8b3d270b453"
           },
           "execution_manifest": {
             "path": "fixtures/positive/eval-artifacts/round-policy-baseline.execution.json",
@@ -140,16 +140,16 @@
           },
           "scorer": {
             "path": "tasks/score_fixture.py",
-            "sha256": "1971181a10022b3853f97eb58920e897a4d245089cfba822cb96c96338b54c9f",
-            "revision": "sha256:1971181a10022b3853f97eb58920e897a4d245089cfba822cb96c96338b54c9f"
+            "sha256": "902594d465d21d826442e5cc2064c0cb5efcba8eccaf827993ee465f2c2bdb7c",
+            "revision": "sha256:902594d465d21d826442e5cc2064c0cb5efcba8eccaf827993ee465f2c2bdb7c"
           },
           "evaluated_at": "2026-07-23T00:00:00Z"
         }
       },
       "iterative": {
         "score_metrics": {
-          "exact_pass_rate": 0.6667,
-          "acceptable_pass_rate": 0.6667,
+          "exact_pass_rate": 1.0,
+          "acceptable_pass_rate": 1.0,
           "false_positive_rate": 0.0,
           "recall_known_bug": 1.0
         },
@@ -193,7 +193,7 @@
           },
           "oracle": {
             "path": "fixtures/positive/expected-findings.json",
-            "sha256": "70862dc4a2b94a092917f24cd7af018206d5969405ef368af0f7d1e0ee1ba3a1"
+            "sha256": "2538d6bb2e009111bda8dbf12ae652626b8b401e730b6d36e079036235f54904"
           },
           "findings_artifact": {
             "path": "fixtures/positive/eval-artifacts/round-policy-iterative.findings.json",
@@ -201,7 +201,7 @@
           },
           "score_report": {
             "path": "fixtures/positive/eval-artifacts/round-policy-iterative.score.json",
-            "sha256": "511243e2a1b145a5fe2c87e1caa6a840964f063b5cb1db558280c03572cc27e5"
+            "sha256": "f4732222066a66b3533680d91e97f08256924ca5bf78a4af38ebe8b3d270b453"
           },
           "execution_manifest": {
             "path": "fixtures/positive/eval-artifacts/round-policy-iterative.execution.json",
@@ -209,8 +209,8 @@
           },
           "scorer": {
             "path": "tasks/score_fixture.py",
-            "sha256": "1971181a10022b3853f97eb58920e897a4d245089cfba822cb96c96338b54c9f",
-            "revision": "sha256:1971181a10022b3853f97eb58920e897a4d245089cfba822cb96c96338b54c9f"
+            "sha256": "902594d465d21d826442e5cc2064c0cb5efcba8eccaf827993ee465f2c2bdb7c",
+            "revision": "sha256:902594d465d21d826442e5cc2064c0cb5efcba8eccaf827993ee465f2c2bdb7c"
           },
           "evaluated_at": "2026-07-23T00:00:00Z"
         }
@@ -220,24 +220,24 @@
       "fixture_id": "pr-codex-positive-seeded-001-preflight-effort",
       "baseline": {
         "score_metrics": {
-          "exact_pass_rate": 0.0,
-          "acceptable_pass_rate": 0.0,
+          "exact_pass_rate": 1.0,
+          "acceptable_pass_rate": 1.0,
           "false_positive_rate": 0.0,
-          "recall_known_bug": 0.0
+          "recall_known_bug": 1.0
         },
         "execution": {
           "model": "gpt-5.6-sol",
           "reasoning_effort": "xhigh",
           "completion_rate": 1.0,
-          "avg_duration_ms": 32205,
-          "avg_tokens": 21091
+          "avg_duration_ms": 34217,
+          "avg_tokens": 23326
         },
         "round_metrics": {
           "enabled": false,
           "rounds_completed": 1,
           "max_rounds": 1,
           "halt_reason": "all_candidates_verified",
-          "elapsed_ms": 32205,
+          "elapsed_ms": 34217,
           "time_budget_ms": 1200000,
           "verifier_fail_candidates": 0,
           "suppressed_candidate_count": 0,
@@ -255,9 +255,9 @@
           "sample_count": 1,
           "repetitions": 1,
           "prompt_config": {
-            "id": "semantic-preflight-baseline-xhigh",
+            "id": "semantic-preflight-shared-xhigh",
             "path": "fixtures/positive/eval-artifacts/preflight-effort-baseline.prompt.md",
-            "sha256": "1bef19e1bc66786ff806649190d18684755446ebefeebc16c9c8f8a9aa090d15"
+            "sha256": "ab759c8a5ef2e15be7b2116fac9781950489ca850752259812b0da97dc7710db"
           },
           "fixture": {
             "path": "fixtures/positive/diff.patch",
@@ -265,32 +265,32 @@
           },
           "oracle": {
             "path": "fixtures/positive/expected-findings.json",
-            "sha256": "70862dc4a2b94a092917f24cd7af018206d5969405ef368af0f7d1e0ee1ba3a1"
+            "sha256": "2538d6bb2e009111bda8dbf12ae652626b8b401e730b6d36e079036235f54904"
           },
           "findings_artifact": {
             "path": "fixtures/positive/eval-artifacts/preflight-effort-baseline.findings.json",
-            "sha256": "11049276d6c4c2bd85a2399dc84103263628038a968876173dbc641e4d23c039"
+            "sha256": "f956ddf31a17b539753b2b894ae0f4c176633b76b80f7cc77ba7a2f8734f08f3"
           },
           "score_report": {
             "path": "fixtures/positive/eval-artifacts/preflight-effort-baseline.score.json",
-            "sha256": "9d0a461b6ca246ced014c82c44ac1c510bd9a7a59550e61eda88a918363311a1"
+            "sha256": "f4732222066a66b3533680d91e97f08256924ca5bf78a4af38ebe8b3d270b453"
           },
           "execution_manifest": {
             "path": "fixtures/positive/eval-artifacts/preflight-effort-baseline.execution.json",
-            "sha256": "1c8b6b3b4f75f45fc19b12f2ad871a3c88548398c2b8d7a5bd944162e58a22e2"
+            "sha256": "b70994d5989d706a75d8b0c3b57ae9a6b9f4b19c81a6df22d4660431e32a47e2"
           },
           "scorer": {
             "path": "tasks/score_fixture.py",
-            "sha256": "1971181a10022b3853f97eb58920e897a4d245089cfba822cb96c96338b54c9f",
-            "revision": "sha256:1971181a10022b3853f97eb58920e897a4d245089cfba822cb96c96338b54c9f"
+            "sha256": "902594d465d21d826442e5cc2064c0cb5efcba8eccaf827993ee465f2c2bdb7c",
+            "revision": "sha256:902594d465d21d826442e5cc2064c0cb5efcba8eccaf827993ee465f2c2bdb7c"
           },
           "evaluated_at": "2026-07-23T00:00:00Z"
         }
       },
       "iterative": {
         "score_metrics": {
-          "exact_pass_rate": 0.6667,
-          "acceptable_pass_rate": 0.6667,
+          "exact_pass_rate": 1.0,
+          "acceptable_pass_rate": 1.0,
           "false_positive_rate": 0.0,
           "recall_known_bug": 1.0
         },
@@ -298,15 +298,15 @@
           "model": "gpt-5.6-sol",
           "reasoning_effort": "high",
           "completion_rate": 1.0,
-          "avg_duration_ms": 14173,
-          "avg_tokens": 19690
+          "avg_duration_ms": 14890,
+          "avg_tokens": 23003
         },
         "round_metrics": {
           "enabled": false,
           "rounds_completed": 1,
           "max_rounds": 1,
           "halt_reason": "all_candidates_verified",
-          "elapsed_ms": 14173,
+          "elapsed_ms": 14890,
           "time_budget_ms": 1200000,
           "verifier_fail_candidates": 0,
           "suppressed_candidate_count": 0,
@@ -324,9 +324,9 @@
           "sample_count": 1,
           "repetitions": 1,
           "prompt_config": {
-            "id": "semantic-preflight-lean-v2-high",
+            "id": "semantic-preflight-shared-high",
             "path": "fixtures/positive/eval-artifacts/preflight-effort-iterative.prompt.md",
-            "sha256": "f9cf7c603db30eddadda04cefb7ff05db18941e03c6f791107876c2b8d175c43"
+            "sha256": "ab759c8a5ef2e15be7b2116fac9781950489ca850752259812b0da97dc7710db"
           },
           "fixture": {
             "path": "fixtures/positive/diff.patch",
@@ -334,24 +334,24 @@
           },
           "oracle": {
             "path": "fixtures/positive/expected-findings.json",
-            "sha256": "70862dc4a2b94a092917f24cd7af018206d5969405ef368af0f7d1e0ee1ba3a1"
+            "sha256": "2538d6bb2e009111bda8dbf12ae652626b8b401e730b6d36e079036235f54904"
           },
           "findings_artifact": {
             "path": "fixtures/positive/eval-artifacts/preflight-effort-iterative.findings.json",
-            "sha256": "9d231634e2606a607da193d277dd6c4d921832e1c0bcf4a3a2c39e4934d72fe8"
+            "sha256": "f956ddf31a17b539753b2b894ae0f4c176633b76b80f7cc77ba7a2f8734f08f3"
           },
           "score_report": {
             "path": "fixtures/positive/eval-artifacts/preflight-effort-iterative.score.json",
-            "sha256": "175bcf9f81309c14752dbc2d9b7993089ad67b774fbb5cf58ec7da847647df46"
+            "sha256": "f4732222066a66b3533680d91e97f08256924ca5bf78a4af38ebe8b3d270b453"
           },
           "execution_manifest": {
             "path": "fixtures/positive/eval-artifacts/preflight-effort-iterative.execution.json",
-            "sha256": "8242cd7cc43cf7ff7ea6114c75009985777dc9544acc3784a4c62e85025d9ccd"
+            "sha256": "edfc992386bebab686fd98c0413572944650843c408af2d12c2b935337cdac9f"
           },
           "scorer": {
             "path": "tasks/score_fixture.py",
-            "sha256": "1971181a10022b3853f97eb58920e897a4d245089cfba822cb96c96338b54c9f",
-            "revision": "sha256:1971181a10022b3853f97eb58920e897a4d245089cfba822cb96c96338b54c9f"
+            "sha256": "902594d465d21d826442e5cc2064c0cb5efcba8eccaf827993ee465f2c2bdb7c",
+            "revision": "sha256:902594d465d21d826442e5cc2064c0cb5efcba8eccaf827993ee465f2c2bdb7c"
           },
           "evaluated_at": "2026-07-23T00:00:00Z"
         }
@@ -361,7 +361,7 @@
       "fixture_id": "pr-codex-positive-seeded-001-fable-prompt",
       "baseline": {
         "score_metrics": {
-          "exact_pass_rate": 0.3333,
+          "exact_pass_rate": 0.6667,
           "acceptable_pass_rate": 0.0,
           "false_positive_rate": 0.0,
           "recall_known_bug": 0.6667
@@ -406,7 +406,7 @@
           },
           "oracle": {
             "path": "fixtures/positive/expected-findings.json",
-            "sha256": "70862dc4a2b94a092917f24cd7af018206d5969405ef368af0f7d1e0ee1ba3a1"
+            "sha256": "2538d6bb2e009111bda8dbf12ae652626b8b401e730b6d36e079036235f54904"
           },
           "findings_artifact": {
             "path": "fixtures/positive/eval-artifacts/fable-prompt-baseline.findings.json",
@@ -414,7 +414,7 @@
           },
           "score_report": {
             "path": "fixtures/positive/eval-artifacts/fable-prompt-baseline.score.json",
-            "sha256": "68a4b5d07c618ca398e394ab3dce9b0b649820da1c6c41ed7c5671486f2e9357"
+            "sha256": "224cc6d522e5b80f3a08f9196726fca606973aadbbd7032dd90a80ee7149a48c"
           },
           "execution_manifest": {
             "path": "fixtures/positive/eval-artifacts/fable-prompt-baseline.execution.json",
@@ -422,8 +422,8 @@
           },
           "scorer": {
             "path": "tasks/score_fixture.py",
-            "sha256": "1971181a10022b3853f97eb58920e897a4d245089cfba822cb96c96338b54c9f",
-            "revision": "sha256:1971181a10022b3853f97eb58920e897a4d245089cfba822cb96c96338b54c9f"
+            "sha256": "902594d465d21d826442e5cc2064c0cb5efcba8eccaf827993ee465f2c2bdb7c",
+            "revision": "sha256:902594d465d21d826442e5cc2064c0cb5efcba8eccaf827993ee465f2c2bdb7c"
           },
           "evaluated_at": "2026-07-23T00:00:00Z"
         }
@@ -433,7 +433,7 @@
           "exact_pass_rate": 0.6667,
           "acceptable_pass_rate": 0.6667,
           "false_positive_rate": 0.0,
-          "recall_known_bug": 1.0
+          "recall_known_bug": 0.6667
         },
         "execution": {
           "model": "claude-fable-5",
@@ -475,7 +475,7 @@
           },
           "oracle": {
             "path": "fixtures/positive/expected-findings.json",
-            "sha256": "70862dc4a2b94a092917f24cd7af018206d5969405ef368af0f7d1e0ee1ba3a1"
+            "sha256": "2538d6bb2e009111bda8dbf12ae652626b8b401e730b6d36e079036235f54904"
           },
           "findings_artifact": {
             "path": "fixtures/positive/eval-artifacts/fable-prompt-iterative.findings.json",
@@ -483,7 +483,7 @@
           },
           "score_report": {
             "path": "fixtures/positive/eval-artifacts/fable-prompt-iterative.score.json",
-            "sha256": "833035e62e5db72a91588961e1ab6688b70f47cf3b1155e0b4cae503d9c0b97f"
+            "sha256": "50c418c27400702da9aebdad42ad2d123808ce14732f701938a41ed46ca9d716"
           },
           "execution_manifest": {
             "path": "fixtures/positive/eval-artifacts/fable-prompt-iterative.execution.json",
@@ -491,8 +491,8 @@
           },
           "scorer": {
             "path": "tasks/score_fixture.py",
-            "sha256": "1971181a10022b3853f97eb58920e897a4d245089cfba822cb96c96338b54c9f",
-            "revision": "sha256:1971181a10022b3853f97eb58920e897a4d245089cfba822cb96c96338b54c9f"
+            "sha256": "902594d465d21d826442e5cc2064c0cb5efcba8eccaf827993ee465f2c2bdb7c",
+            "revision": "sha256:902594d465d21d826442e5cc2064c0cb5efcba8eccaf827993ee465f2c2bdb7c"
           },
           "evaluated_at": "2026-07-23T00:00:00Z"
         }

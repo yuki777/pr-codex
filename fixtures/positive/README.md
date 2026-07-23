@@ -34,10 +34,12 @@
 | --- | --- | --- |
 | `issue112-positive-round-policy-baseline-r1` | `fixed-round3-v2.md` | `fixed-final-round3.findings.verified.json` |
 | `issue112-positive-round-policy-iterative-r1` | `final-round1.md` | `adaptive-final-round1.findings.verified.json` |
-| `issue112-positive-preflight-effort-baseline-r1` | `preflight-baseline/preflight-prompt.md` | `preflight-baseline/findings.verified.json` |
-| `issue112-positive-preflight-effort-iterative-r1` | `preflight-lean-high/preflight-prompt.md` | `preflight-lean-high/findings.verified.json` |
+| `issue112-positive-preflight-effort-baseline-r1` | `preflight-effort-baseline.prompt.md`（shared bytes / xhigh） | `preflight-effort-baseline.findings.json`（shared upstream findings） |
+| `issue112-positive-preflight-effort-iterative-r1` | `preflight-effort-iterative.prompt.md`（shared bytes / high） | `preflight-effort-iterative.findings.json`（shared upstream findings） |
 | `issue112-positive-fable-prompt-baseline-r1` | `baseline.md` | `fable-baseline-default.findings.verified.json` |
 | `issue112-positive-fable-prompt-iterative-r1` | `lean-v2.md` | `fable-lean-v2-default.findings.verified.json` |
+
+preflight effort の2 run は prompt SHA-256 と findings SHA-256 が同一で、実行時の `model_reasoning_effort` だけを xhigh / high で変えている。両 run とも Must Fix 2件を `confirmed` と判定した。
 
 再生成コマンドは `python3 tasks/score_fixture.py --expected fixtures/positive/expected-findings.json --actual <findings> --out <score-report> --evaluated-at 2026-07-23T00:00:00Z`。`eval-artifacts/` には synthetic fixture だけを含む canonical prompt、verified findings、score report、execution manifest のみを保存し、raw stderr/stdout、実行 log、secret、ローカル absolute path は保存しない。
 

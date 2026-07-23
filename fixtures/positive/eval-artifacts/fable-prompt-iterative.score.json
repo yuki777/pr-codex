@@ -2,7 +2,7 @@
   "schema_version": "score-report.v1",
   "fixture_id": "pr-codex-positive-seeded-001",
   "evaluated_at": "2026-07-23T00:00:00Z",
-  "oracle_sha256": "f21022727bb55089b8d0e8ff85852526b78d946f8d9146b39452490a59b1d077",
+  "oracle_sha256": "5a7b57437239698e2507549f626e726db8b170aa39a18a77879bfa0dc2869507",
   "expected_finding_ids": [
     "cross-tenant-payment-after-first-item",
     "global-refund-idempotency-collision",
@@ -12,7 +12,7 @@
   "exact_pass_rate": 0.6667,
   "acceptable_pass_rate": 0.6667,
   "false_positive_rate": 0.0,
-  "recall_known_bug": 1.0,
+  "recall_known_bug": 0.6667,
   "gate_pass": false,
   "scoring_gate": {
     "acceptable_pass_rate_min": 0.8,
@@ -34,7 +34,7 @@
     },
     {
       "name": "recall_known_bug_min",
-      "actual": 1.0,
+      "actual": 0.6667,
       "threshold": 0.66,
       "passed": true
     }
@@ -44,11 +44,19 @@
     "exact_pass": 2,
     "acceptable_pass": 2,
     "known_bug": 3,
-    "known_bug_matched": 3,
+    "known_bug_matched": 2,
     "known_false_positive_trap": 1,
     "false_positive_promoted": 0
   },
-  "unmatched_actuals": [],
+  "unmatched_actuals": [
+    {
+      "fingerprint": "f6034f7ffb1f87ecbac72a68e3a04c77aa8600b88ad6db974b3867b2699e2d58",
+      "severity": "must_fix",
+      "category": "bug",
+      "path": "src/auth/refund_service.py",
+      "title": "Refund idempotency keys now collide across tenants"
+    }
+  ],
   "breakdown": [
     {
       "expected_id": "cross-tenant-payment-after-first-item",
@@ -90,39 +98,39 @@
     {
       "expected_id": "global-refund-idempotency-collision",
       "expected_outcome": "known_bug",
-      "matched_actual_fingerprint": "f6034f7ffb1f87ecbac72a68e3a04c77aa8600b88ad6db974b3867b2699e2d58",
-      "match_status": "matched",
+      "matched_actual_fingerprint": null,
+      "match_status": "missed",
       "axes_diff": {
         "real": {
           "expected": "yes",
-          "actual": "yes",
-          "acceptable": true
+          "actual": null,
+          "acceptable": false
         },
         "triggerable": {
           "expected": "yes",
-          "actual": "yes",
-          "acceptable": true
+          "actual": null,
+          "acceptable": false
         },
         "impactful": {
           "expected": "yes",
-          "actual": "yes",
-          "acceptable": true
+          "actual": null,
+          "acceptable": false
         }
       },
       "blast_radius_diff": {
-        "expected": "isolated",
-        "actual": "component",
+        "expected": "component",
+        "actual": null,
         "acceptable": false
       },
       "severity_diff": {
         "expected": [
           "must_fix"
         ],
-        "actual": "must_fix",
-        "acceptable": true
+        "actual": null,
+        "acceptable": false
       },
-      "evidence_level_ok": true,
-      "notes": "matched by location/category"
+      "evidence_level_ok": false,
+      "notes": "expected finding was not detected"
     },
     {
       "expected_id": "timestamp-only-pagination-cursor",

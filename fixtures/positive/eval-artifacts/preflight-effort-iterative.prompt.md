@@ -7,10 +7,10 @@
 [
   {
     "source_agents": [
-      "codex-lean-v2-high-seq"
+      "fixed-final-round3"
     ],
     "merged_from": [
-      "eval:codex-lean-v2-high-seq"
+      "eval:fixed-final-round3"
     ],
     "location": {
       "path": "src/auth/refund_service.py",
@@ -19,10 +19,10 @@
     },
     "severity": "must_fix",
     "category": "security",
-    "title": "Only the first payment is checked for tenant ownership",
-    "problem": "The batch authorization check validates only `payments[0]`, but the loop refunds every captured payment returned by the repository. A batch whose first payment belongs to the actor and whose later payment belongs to another tenant passes authorization and refunds the other tenant's payment.",
-    "reason": "`get_many` is not tenant-scoped, and the supplied model explicitly permits payment IDs to overlap across tenants. Therefore a mixed-tenant result is reachable, and the later unvalidated entries flow directly to `record_refund`, causing a cross-tenant authorization and integrity violation.",
-    "suggestion": "Validate every returned payment's `tenant_id` before recording any refund, and reject the entire batch if any payment does not belong to the actor. Prefer a tenant-scoped repository lookup as an additional boundary.",
+    "title": "Batch authorization validates only the first payment",
+    "problem": "The service checks only `payments[0].tenant_id` before iterating over and refunding every captured payment returned by the unscoped batch lookup.",
+    "reason": "Payment IDs are tenant-local and `get_many` receives no tenant, so a returned batch can contain payments from different tenants. If the first payment belongs to the actor, every later payment bypasses ownership validation and reaches `record_refund`, enabling a cross-tenant refund and integrity violation.",
+    "suggestion": "Validate every payment's tenant before performing any refund, rejecting the whole batch if one does not belong to the actor. Also prefer a tenant-scoped repository lookup.",
     "evidence_level": "verified",
     "axes": {
       "real": "yes",
@@ -40,17 +40,17 @@
       "confidence": "high",
       "exploitability": "triggerable_from_changed_code",
       "disclosure_policy": "inline_safe",
-      "public_safe_summary": "Only the first payment is checked for tenant ownership"
+      "public_safe_summary": "Batch authorization validates only the first payment"
     },
-    "id": "78bd6795d21507b9c1e569466f69a5e810a0d8a61aa49e730e9370e4eaf663e3",
-    "fingerprint": "78bd6795d21507b9c1e569466f69a5e810a0d8a61aa49e730e9370e4eaf663e3"
+    "id": "f0689ec3fd819352f34f8c54583299f645a33f8729a3ed0b3b740d85c0022148",
+    "fingerprint": "f0689ec3fd819352f34f8c54583299f645a33f8729a3ed0b3b740d85c0022148"
   },
   {
     "source_agents": [
-      "codex-lean-v2-high-seq"
+      "fixed-final-round3"
     ],
     "merged_from": [
-      "eval:codex-lean-v2-high-seq"
+      "eval:fixed-final-round3"
     ],
     "location": {
       "path": "src/auth/refund_service.py",
@@ -58,11 +58,11 @@
       "side": "RIGHT"
     },
     "severity": "must_fix",
-    "category": "bug",
-    "title": "Removing the tenant from globally scoped idempotency keys creates cross-tenant collisions",
-    "problem": "The generated repository key is now only `{idempotency_key}:{payment.id}` even though repository idempotency keys share a global namespace and payment IDs are unique only within a tenant.",
-    "reason": "Two tenants can submit the same idempotency key for payments with the same tenant-local ID, producing an identical global repository key for distinct refunds. This incorrectly aliases one tenant's operation with another tenant's operation and violates cross-tenant refund integrity.",
-    "suggestion": "Retain the tenant namespace in the key, for example `f\"{actor.tenant_id}:{idempotency_key}:{payment.id}\"`.",
+    "category": "security",
+    "title": "Global refund idempotency keys can collide across tenants",
+    "problem": "The repository key omits the tenant even though idempotency keys use a global namespace and payment IDs are unique only within a tenant.",
+    "reason": "Distinct tenants can use the same client key for the same tenant-local payment ID, producing identical repository keys. The repository must then treat separate cross-tenant refund operations as the same idempotent operation, suppressing or misattributing a legitimate refund.",
+    "suggestion": "Include the tenant namespace in every repository key, such as `f\"{actor.tenant_id}:{idempotency_key}:{payment.id}\"`.",
     "evidence_level": "verified",
     "axes": {
       "real": "yes",
@@ -75,8 +75,15 @@
       "explanation_postable": true,
       "audience": "eval_harness"
     },
-    "id": "250cb9e585f4ae25b4d94c523cd638e05df61b36b8f77b4b06db066bff60b0fa",
-    "fingerprint": "250cb9e585f4ae25b4d94c523cd638e05df61b36b8f77b4b06db066bff60b0fa"
+    "security": {
+      "severity": "medium",
+      "confidence": "high",
+      "exploitability": "triggerable_from_changed_code",
+      "disclosure_policy": "inline_safe",
+      "public_safe_summary": "Global refund idempotency keys can collide across tenants"
+    },
+    "id": "48b812456c7ad5c91ba06c42f741108db1f2e70a438cf2ff107a29f1e069bac3",
+    "fingerprint": "48b812456c7ad5c91ba06c42f741108db1f2e70a438cf2ff107a29f1e069bac3"
   }
 ]
 ```

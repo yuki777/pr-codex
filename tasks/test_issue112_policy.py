@@ -237,9 +237,17 @@ class Issue112PolicyTest(unittest.TestCase):
                 self.assertIn(field, metrics)
 
         effort = fixtures["pr-codex-positive-seeded-001-preflight-effort"]
-        self.assertGreater(
-            effort["iterative"]["score_metrics"]["acceptable_pass_rate"],
-            effort["baseline"]["score_metrics"]["acceptable_pass_rate"],
+        self.assertEqual(
+            effort["baseline"]["score_metrics"],
+            effort["iterative"]["score_metrics"],
+        )
+        self.assertEqual(
+            effort["baseline"]["provenance"]["prompt_config"]["sha256"],
+            effort["iterative"]["provenance"]["prompt_config"]["sha256"],
+        )
+        self.assertEqual(
+            effort["baseline"]["provenance"]["findings_artifact"]["sha256"],
+            effort["iterative"]["provenance"]["findings_artifact"]["sha256"],
         )
         self.assertEqual(effort["baseline"]["execution"]["reasoning_effort"], "xhigh")
         self.assertEqual(effort["iterative"]["execution"]["reasoning_effort"], "high")

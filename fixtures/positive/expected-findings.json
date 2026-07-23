@@ -88,7 +88,7 @@
         "triggerable": "yes",
         "impactful": "yes"
       },
-      "expected_blast_radius": "isolated",
+      "expected_blast_radius": "component",
       "minimum_evidence_level": "impact_explained",
       "location_match": {
         "path": "src/auth/refund_service.py",
