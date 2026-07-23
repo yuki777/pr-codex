@@ -998,6 +998,11 @@ def validate_hunter_prompt_file_docs() -> None:
             "4a template must not allow gh commands; GitHub context comes from pr-context.md"
         )
 
+    if "--strict-mcp-config" not in claude_block:
+        raise AssertionError("4a template must pass --strict-mcp-config to drop user-config MCP servers")
+    if " --mcp-config" in claude_block.replace("--strict-mcp-config", ""):
+        raise AssertionError("4a template must not load any MCP config")
+
     if "--ignore-user-config" not in codex_block:
         raise AssertionError("4b template must pass --ignore-user-config to disable user-config MCP")
     if "/dev/null" in codex_block:
