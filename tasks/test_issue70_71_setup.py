@@ -48,11 +48,13 @@ class Issue70PluginRootSetupTest(unittest.TestCase):
 
         review_text = REVIEW_SKILL.read_text(encoding="utf-8")
         self.assertIn("この fallback block はセットアップのこの 1 箇所にだけ置き", review_text)
-        self.assertIn("解決済みの `$plugin_root` を参照する", review_text)
+        self.assertIn("置換対象変数として扱い、Bash ツールへ渡す前にセットアップで解決した絶対パスの実値へ置換する", review_text)
+        self.assertIn("test -d \"$plugin_root/tasks\" && test -d \"$plugin_root/schemas\" && printf '%s\\n' \"$plugin_root\"", review_text)
 
         send_text = SEND_SKILL.read_text(encoding="utf-8")
         self.assertIn("fallback block はこの 1 箇所にだけ置き", send_text)
-        self.assertIn("解決済みの `$plugin_root` を参照する", send_text)
+        self.assertIn("置換対象変数として扱い、Bash ツールへ渡す前に解決済みの絶対パス実値へ置換する", send_text)
+        self.assertIn("test -d \"$plugin_root/tasks\" && test -d \"$plugin_root/schemas\" && printf '%s\\n' \"$plugin_root\"", send_text)
 
     def test_readme_documents_no_manual_absolute_path_replacement_when_env_missing(self) -> None:
         text = README.read_text(encoding="utf-8")

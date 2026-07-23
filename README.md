@@ -39,7 +39,7 @@ venv を使わず user site に入れる場合だけ、環境によっては次�
 python3 -m pip install --user --break-system-packages 'jsonschema>=4,<5'
 ```
 
-`CLAUDE_PLUGIN_ROOT が未設定` の shell でも、SKILL.md の command template は `plugin_root="${CLAUDE_PLUGIN_ROOT:-...}"` で plugin root を自己解決する。fallback block は review のセットアップ / send の Step 1 common の 1 箇所だけに置かれ（#111 で各テンプレートへのコピペを廃止）、plugin cache の `pr-codex/tasks/validate_findings.py` marker から root を算出する。以降のテンプレートは解決済みの `$plugin_root` を参照するため、validator/tool 呼び出しを手動で絶対パスに置換しない（`run_in_background: true` の review Step 4a / 4b だけは、セットアップで解決済みの値をそのまま実値置換してよい）。
+`CLAUDE_PLUGIN_ROOT が未設定` の shell でも、SKILL.md の command template は `plugin_root="${CLAUDE_PLUGIN_ROOT:-...}"` で plugin root を自己解決する。fallback block は review のセットアップ / send の Step 1 common の 1 箇所だけに置かれ（#111 で各テンプレートへのコピペを廃止）、plugin cache の `pr-codex/tasks/validate_findings.py` marker から root を算出して解決値を標準出力に出す。以降のテンプレートの `$plugin_root` は置換対象変数であり、この fallback が解決した値を実値置換して使う。fallback の解決結果を使わず、validator/tool 呼び出しを手動で絶対パスに置換しない。
 
 ### インストール
 

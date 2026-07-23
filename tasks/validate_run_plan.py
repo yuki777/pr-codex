@@ -993,6 +993,11 @@ def validate_hunter_prompt_file_docs() -> None:
         if "GitHub PR をコードレビューしてください" in block:
             raise AssertionError(f"{name} template must not embed the prompt body in the bash command string")
 
+    if "Bash(gh pr view" in claude_block or "Bash(gh pr diff" in claude_block:
+        raise AssertionError(
+            "4a template must not allow gh commands; GitHub context comes from pr-context.md"
+        )
+
     if "--ignore-user-config" not in codex_block:
         raise AssertionError("4b template must pass --ignore-user-config to disable user-config MCP")
     if "/dev/null" in codex_block:
@@ -1020,7 +1025,11 @@ def validate_plugin_root_resolution_docs() -> None:
         raise AssertionError(
             f"plugin_root fallback block must appear exactly once in the setup section, got {count}"
         )
+    setup_block = extract_bash_block('plugin_root="${CLAUDE_PLUGIN_ROOT:-')
+    if "printf '%s\\n' \"$plugin_root\"" not in setup_block:
+        raise AssertionError("setup fallback block must print the resolved plugin root for later substitution")
     single_line_containing(text, "この fallback block はセットアップのこの 1 箇所にだけ置き")
+    single_line_containing(text, "置換対象変数として扱い、Bash ツールへ渡す前にセットアップで解決した絶対パスの実値へ置換する")
 
 
 def validate_schema_contract(schema: dict[str, object]) -> None:
