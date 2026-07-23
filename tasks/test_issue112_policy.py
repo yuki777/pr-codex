@@ -20,6 +20,7 @@ EVAL_SCHEMA = ROOT / "schemas" / "eval-report.v1.json"
 POSITIVE_EVAL = ROOT / "fixtures" / "positive" / "eval-report.json"
 HUNTER_CRITERIA = ROOT / "skills" / "review" / "HUNTER_CRITERIA.md"
 VERIFIER_POLICY = ROOT / "skills" / "review" / "VERIFIER_POLICY.md"
+README = ROOT / "README.md"
 
 
 class Issue112PolicyTest(unittest.TestCase):
@@ -77,6 +78,16 @@ class Issue112PolicyTest(unittest.TestCase):
             self.assertGreaterEqual(hunter_prompts.count(field), 2)
         self.assertIn("needs_evidence", hunter)
         self.assertIn("verified finding だけ", hunter)
+
+    def test_positive_fixture_is_in_manual_m1_m2_gate(self) -> None:
+        text = README.read_text(encoding="utf-8")
+        self.assertIn("3 個の既知バグ", text)
+        gate_command = text[
+            text.index("python3 tasks/m1_m2_gate.py") :
+            text.index("```", text.index("python3 tasks/m1_m2_gate.py"))
+        ]
+        self.assertIn("--out artifacts/score-positive.json", text)
+        self.assertIn("artifacts/score-positive.json", gate_command)
 
     def test_semantic_preflight_uses_evaluated_high_effort(self) -> None:
         text = SEND_SKILL.read_text(encoding="utf-8")

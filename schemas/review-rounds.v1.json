@@ -143,10 +143,15 @@
           "minimum": 0,
           "description": "Host-computed count of candidates whose disposition or disagreement state changed."
         },
+        "untargeted_candidate_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Host-computed unresolved candidates excluded by the next-round priority policy and transitioned out of ACTIVE loop state."
+        },
         "remaining_active_count": {
           "type": "integer",
           "minimum": 0,
-          "description": "Host-computed unresolved candidate count after this round."
+          "description": "Host-computed candidate count remaining ACTIVE for the next round after priority narrowing."
         },
         "contradiction_signatures": {
           "type": "array",

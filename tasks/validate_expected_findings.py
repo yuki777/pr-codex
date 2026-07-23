@@ -341,7 +341,7 @@ def validate_expected_findings(data: Any) -> list[str]:
         return errors
 
     seen_ids: set[str] = set()
-    finding_seed_ids: set[str] = set()
+    known_bug_seed_ids: set[str] = set()
     for index, finding in enumerate(expected_findings):
         fpath = f"$.expected_findings[{index}]"
         if not isinstance(finding, dict):
@@ -358,11 +358,18 @@ def validate_expected_findings(data: Any) -> list[str]:
             seen_ids.add(identifier)
         for key in ("title", "out_of_scope_reason", "oracle_notes"):
             validate_string(errors, fpath, finding, key)
+        outcome = finding.get("expected_outcome")
         if "seed_id" in finding:
             validate_string(errors, fpath, finding, "seed_id")
-            if isinstance(finding["seed_id"], str):
-                finding_seed_ids.add(finding["seed_id"])
-        if fixture_type == "positive_seeded" and finding.get("expected_outcome") == "known_bug" and "seed_id" not in finding:
+            seed_id = finding.get("seed_id")
+            if fixture_type == "positive_seeded" and non_empty_string(seed_id):
+                if outcome == "known_bug":
+                    known_bug_seed_ids.add(seed_id)
+                else:
+                    errors.append(
+                        f"{fpath}.seed_id: only known_bug rows may reference seeds"
+                    )
+        if fixture_type == "positive_seeded" and outcome == "known_bug" and "seed_id" not in finding:
             errors.append(f"{fpath}.seed_id: positive_seeded known_bug requires a seed id")
         if fixture_type != "positive_seeded" and "seed_id" in finding:
             errors.append(f"{fpath}.seed_id: only positive_seeded fixtures may reference seeds")
@@ -392,8 +399,8 @@ def validate_expected_findings(data: Any) -> list[str]:
             if not isinstance(values, list) or any(not non_empty_string(value) for value in values):
                 errors.append(f"{fpath}.should_be_caught_by: must be an array of non-empty strings")
     if fixture_type == "positive_seeded":
-        missing_seed_findings = sorted(seed_ids - finding_seed_ids)
-        unknown_seed_references = sorted(finding_seed_ids - seed_ids)
+        missing_seed_findings = sorted(seed_ids - known_bug_seed_ids)
+        unknown_seed_references = sorted(known_bug_seed_ids - seed_ids)
         if missing_seed_findings:
             errors.append(f"$.expected_findings: seeded bugs without known_bug rows: {', '.join(missing_seed_findings)}")
         if unknown_seed_references:

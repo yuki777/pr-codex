@@ -97,6 +97,37 @@ class ScoreFixtureTest(unittest.TestCase):
         self.assertEqual(report["recall_known_bug"], 1.0)
         self.assertEqual(report["unmatched_actuals"], [])
 
+    def test_known_bug_location_overlap_requires_semantic_match(self) -> None:
+        expected = load_json(ROOT / "fixtures" / "positive" / "expected-findings.json")
+        actual = copy.deepcopy(
+            load_json(ROOT / "fixtures" / "positive" / "scoring-stubs" / "perfect.findings.verified.json")
+        )
+        unrelated = next(
+            finding for finding in actual["findings"] if finding["location"]["start_line"] == 46
+        )
+        unrelated["title"] = "Cache allocation can be reduced"
+        unrelated["problem"] = "A cache entry allocates one extra object."
+
+        report = score_fixture(expected, actual, EVALUATED_AT)
+
+        row = next(
+            item
+            for item in report["breakdown"]
+            if item["expected_id"] == "cross-tenant-payment-after-first-item"
+        )
+        self.assertEqual(row["match_status"], "missed")
+        self.assertEqual(
+            report["unmatched_actuals"][0]["fingerprint"],
+            unrelated["fingerprint"],
+        )
+
+    def test_fixture_docs_describe_semantic_line_range_matching(self) -> None:
+        docs = (ROOT / "fixtures" / "README.md").read_text(encoding="utf-8")
+
+        self.assertIn("`line_range` がある `known_bug`", docs)
+        self.assertIn("位置の重複と title keyword の一致", docs)
+        self.assertIn("`line_range` がない旧 fixture", docs)
+
     def test_partial_axes_drift_separates_exact_from_acceptable(self) -> None:
         report = score("small", "partial-axes-drift")
         self.assertTrue(report["gate_pass"])

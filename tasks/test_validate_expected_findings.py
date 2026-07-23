@@ -77,6 +77,36 @@ class ValidateExpectedFindingsTest(unittest.TestCase):
         data["expected_findings"][0]["location_match"]["line_range"] = [20, 10]
         self.assert_invalid_cli(data, "end must be >= start")
 
+    def test_positive_seed_coverage_requires_known_bug_rows(self) -> None:
+        data = self.load_fixture("positive")
+        known_bugs = [
+            finding
+            for finding in data["expected_findings"]
+            if finding["expected_outcome"] == "known_bug"
+        ]
+        displaced_seed_id = known_bugs[0]["seed_id"]
+        known_bugs[0]["seed_id"] = known_bugs[1]["seed_id"]
+        non_bug = next(
+            finding
+            for finding in data["expected_findings"]
+            if finding["expected_outcome"] != "known_bug"
+        )
+        non_bug["seed_id"] = displaced_seed_id
+
+        errors = validate_expected_findings(data)
+
+        self.assertTrue(
+            any("seed_id: only known_bug rows may reference seeds" in error for error in errors),
+            errors,
+        )
+        self.assertTrue(
+            any(
+                f"seeded bugs without known_bug rows: {displaced_seed_id}" in error
+                for error in errors
+            ),
+            errors,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

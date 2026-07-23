@@ -154,6 +154,13 @@ class RefinementLoopTest(unittest.TestCase):
         relocated[0]["location"]["start_line"] = 11
         self.assertNotEqual(candidate_state_digest(candidates), candidate_state_digest(relocated))
 
+        expanded_blast_radius = copy.deepcopy(candidates)
+        expanded_blast_radius[0]["blast_radius"] = "systemic"
+        self.assertNotEqual(
+            candidate_state_digest(candidates),
+            candidate_state_digest(expanded_blast_radius),
+        )
+
     def test_candidate_state_delta_tracks_host_owned_round_metrics(self) -> None:
         before = [
             {
@@ -175,6 +182,27 @@ class RefinementLoopTest(unittest.TestCase):
         self.assertEqual(delta["evidence_added_count"], 1)
         self.assertEqual(delta["disposition_changed_count"], 0)
         self.assertEqual(delta["remaining_active_count"], 1)
+
+    def test_candidate_state_delta_counts_known_axis_value_changes_as_evidence(self) -> None:
+        before = [
+            {
+                "candidate_id": "counterexample",
+                "evidence_state": "supported",
+                "evidence_level": "verified",
+                "axes": {
+                    "real": "yes",
+                    "triggerable": "yes",
+                    "impactful": "yes",
+                },
+            }
+        ]
+        after = copy.deepcopy(before)
+        after[0]["axes"]["real"] = "no"
+
+        delta = candidate_state_delta(before, after)
+
+        self.assertEqual(delta["changed_candidate_count"], 1)
+        self.assertEqual(delta["evidence_added_count"], 1)
 
     def test_round_two_targets_only_high_risk_disputed_or_evidence_seeking_candidates(self) -> None:
         candidates = [
@@ -449,6 +477,45 @@ class RefinementLoopTest(unittest.TestCase):
         self.assertFalse(plan["should_run"])
         self.assertEqual(plan["halting"]["reason"], "no_active_candidates")
         self.assertEqual(plan["target_candidate_ids"], [])
+        self.assertEqual(plan["round_state"]["untargeted_candidate_count"], 1)
+        self.assertEqual(plan["round_state"]["remaining_active_count"], 0)
+
+    def test_review_rounds_records_untargeted_candidates_as_inactive(self) -> None:
+        artifact = build_review_rounds_artifact(
+            policy=policy(),
+            rounds=[
+                {
+                    "round_index": 1,
+                    "actions": ["refine", "challenge", "verify"],
+                    "input_candidates_count": 1,
+                    "output_candidates_count": 0,
+                    "new_evidence_count": 1,
+                    "verifier_pass_count": 0,
+                    "verifier_fail_count": 0,
+                    "insufficient_evidence_count": 0,
+                    "contradiction_signatures": [],
+                    "rejected_candidates": [],
+                    "target_candidate_ids": ["unresolved-low-risk"],
+                    "state_digest_before": "a" * 64,
+                    "state_digest_after": "b" * 64,
+                    "changed_candidate_ids": ["unresolved-low-risk"],
+                    "changed_candidate_count": 1,
+                    "evidence_added_count": 1,
+                    "disposition_changed_count": 0,
+                    "untargeted_candidate_count": 1,
+                    "remaining_active_count": 0,
+                }
+            ],
+            elapsed_ms=100,
+            active_candidates_count=0,
+        )
+        self.assertEqual(artifact["halting"]["reason"], "no_active_candidates")
+        self.assertEqual(artifact["metrics"]["suppressed_candidate_count"], 1)
+        schema = json.loads(ROUND_SCHEMA.read_text(encoding="utf-8"))
+        self.assertEqual(
+            validate_review_rounds_artifact(artifact, schema),
+            [],
+        )
 
     def test_controller_halts_when_no_unresolved_target_remains(self) -> None:
         verified = [
@@ -624,6 +691,23 @@ class RefinementLoopTest(unittest.TestCase):
         schema = json.loads(ROUND_SCHEMA.read_text(encoding="utf-8"))
         self.assertEqual(validate_review_rounds_artifact(artifact, schema), [])
 
+
+    def test_schema_subset_enforces_numeric_maximum(self) -> None:
+        schema = {"type": "number", "minimum": 0, "maximum": 1}
+
+        self.assertEqual(
+            validate_json_schema_subset(1, schema, path="$.completion_rate"),
+            [],
+        )
+        errors = validate_json_schema_subset(
+            1.01,
+            schema,
+            path="$.completion_rate",
+        )
+        self.assertTrue(
+            any("$.completion_rate: expected <= 1" in error for error in errors),
+            errors,
+        )
 
     def test_round_artifact_rejects_inconsistent_host_state_metrics(self) -> None:
         artifact = self.valid_review_rounds_artifact()

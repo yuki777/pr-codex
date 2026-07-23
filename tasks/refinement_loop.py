@@ -181,6 +181,10 @@ def _candidate_axes(candidate: dict[str, Any]) -> dict[str, Any]:
     return axes if isinstance(axes, dict) else {}
 
 
+def _normalise_candidate_label(value: Any) -> str:
+    return str(value or "").strip().casefold().replace("-", "_").replace(" ", "_")
+
+
 def _candidate_state(candidate: dict[str, Any]) -> dict[str, Any]:
     axes = _candidate_axes(candidate)
     raw_location = candidate.get("location")
@@ -212,6 +216,9 @@ def _candidate_state(candidate: dict[str, Any]) -> dict[str, Any]:
         "severity": candidate.get("severity")
         or candidate.get("severity_raw")
         or candidate.get("severity_suggestion"),
+        "blast_radius": _normalise_candidate_label(
+            candidate.get("blast_radius")
+        ),
         "decision": candidate.get("decision"),
         "disagreement": bool(
             candidate.get("disagreement")
@@ -278,20 +285,21 @@ def candidate_state_delta(
         }
         before_axes = before_state.get("axes")
         after_axes = after_state.get("axes")
-        before_known_axes = sum(
-            value in {"yes", "no"}
-            for value in before_axes.values()
-        ) if isinstance(before_axes, dict) else 0
-        after_known_axes = sum(
-            value in {"yes", "no"}
-            for value in after_axes.values()
-        ) if isinstance(after_axes, dict) else 0
+        axis_evidence_changed = (
+            isinstance(before_axes, dict)
+            and isinstance(after_axes, dict)
+            and any(
+                after_axes.get(key) in {"yes", "no"}
+                and after_axes.get(key) != before_axes.get(key)
+                for key in ("real", "triggerable", "impactful")
+            )
+        )
         return (
             evidence_state_rank.get(after_state.get("evidence_state"), -1)
             > evidence_state_rank.get(before_state.get("evidence_state"), -1)
             or evidence_level_rank.get(after_state.get("evidence_level"), -1)
             > evidence_level_rank.get(before_state.get("evidence_level"), -1)
-            or after_known_axes > before_known_axes
+            or axis_evidence_changed
         )
 
     def disposition_state(state: dict[str, Any] | None) -> tuple[Any, Any]:
@@ -465,8 +473,6 @@ def _candidate_requires_refinement(candidate: dict[str, Any]) -> bool:
     return any(axes.get(key) not in {"yes", "no"} for key in ("real", "triggerable", "impactful"))
 
 
-def _normalise_candidate_label(value: Any) -> str:
-    return str(value or "").strip().casefold().replace("-", "_").replace(" ", "_")
 
 
 def _candidate_has_disagreement(candidate: dict[str, Any]) -> bool:
@@ -619,12 +625,22 @@ def plan_next_round(
         elapsed_ms=elapsed_ms,
         active_candidates_count=unresolved_candidates_count,
     )
+    untargeted_candidate_count = max(
+        0,
+        unresolved_candidates_count - len(targets),
+    )
     if not decision.should_halt and unresolved_candidates_count > 0 and not targets:
         decision = HaltingDecision(
             True,
             "no_active_candidates",
             "unresolved candidates are outside the next-round priority scope",
         )
+    if round_state is not None and (
+        not decision.should_halt
+        or decision.reason == "no_active_candidates"
+    ):
+        round_state["untargeted_candidate_count"] = untargeted_candidate_count
+        round_state["remaining_active_count"] = len(targets)
     return {
         "round_index": round_index,
         "should_run": not decision.should_halt,
@@ -739,11 +755,35 @@ def evaluate_halting(
             )
 
     if active == 0:
-        verifier_failures = sum(_as_int(round_result.get("verifier_fail_count")) for round_result in rounds)
-        insufficient = sum(_as_int(round_result.get("insufficient_evidence_count")) for round_result in rounds)
+        untargeted = sum(
+            _as_int(round_result.get("untargeted_candidate_count"))
+            for round_result in rounds
+        )
+        verifier_failures = sum(
+            _as_int(round_result.get("verifier_fail_count"))
+            for round_result in rounds
+        )
+        insufficient = sum(
+            _as_int(round_result.get("insufficient_evidence_count"))
+            for round_result in rounds
+        )
+        if untargeted > 0:
+            return HaltingDecision(
+                True,
+                "no_active_candidates",
+                "unresolved candidates were excluded from later-round priority scope",
+            )
         if verifier_failures == 0 and insufficient == 0:
-            return HaltingDecision(True, "all_candidates_verified", "no active candidates remain after verification")
-        return HaltingDecision(True, "no_active_candidates", "all remaining candidates were suppressed locally")
+            return HaltingDecision(
+                True,
+                "all_candidates_verified",
+                "no active candidates remain after verification",
+            )
+        return HaltingDecision(
+            True,
+            "no_active_candidates",
+            "all remaining candidates were suppressed locally",
+        )
 
     trailing_empty = _trailing_no_new_evidence_rounds(rounds)
     if trailing_empty >= resolved_policy.no_new_evidence_rounds:
@@ -852,6 +892,7 @@ def sanitize_round_result(round_result: dict[str, Any], *, round_index: int) -> 
         "changed_candidate_count",
         "evidence_added_count",
         "disposition_changed_count",
+        "untargeted_candidate_count",
         "remaining_active_count",
     ):
         if key in round_result:
@@ -900,7 +941,14 @@ def round_metrics(rounds: list[dict[str, Any]], *, active_candidates_count: int)
         if count > 1
     )
     no_new_evidence_rounds = sum(1 for round_result in rounds if _round_new_evidence_count(round_result) == 0)
-    suppressed = max(rejected, verifier_failures + insufficient)
+    untargeted = sum(
+        _as_int(round_result.get("untargeted_candidate_count"))
+        for round_result in rounds
+    )
+    suppressed = max(
+        rejected,
+        verifier_failures + insufficient + untargeted,
+    )
     changed_candidates = sum(
         _as_int(round_result.get("changed_candidate_count"))
         for round_result in rounds
@@ -1029,8 +1077,8 @@ def validate_json_schema_subset(
 
     This is intentionally small and stdlib-only, but it covers the declared
     runtime contract: $ref, type, const, enum, required, properties,
-    additionalProperties=false, items, minItems, minLength, minimum, pattern,
-    and date-time format.  It prevents the bundled runtime gate from drifting
+    additionalProperties=false, items, minItems, minLength, minimum, maximum,
+    pattern, and date-time format.  It prevents the bundled runtime gate from drifting
     from schemas/review-rounds.v1.json.
     """
 
@@ -1080,6 +1128,9 @@ def validate_json_schema_subset(
     if isinstance(value, (int, float)) and not isinstance(value, bool) and "minimum" in schema:
         if value < schema["minimum"]:
             errors.append(f"{path}: expected >= {schema['minimum']}")
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and "maximum" in schema:
+        if value > schema["maximum"]:
+            errors.append(f"{path}: expected <= {schema['maximum']}")
 
     if isinstance(value, list):
         if "minItems" in schema and len(value) < int(schema["minItems"]):
@@ -1154,6 +1205,7 @@ def validate_review_rounds_artifact(data: dict[str, Any], schema: dict[str, Any]
             "evidence_added_count",
             "disposition_changed_count",
             "remaining_active_count",
+            "untargeted_candidate_count",
         }
         extra_round_keys = sorted(set(round_result) - allowed_round_keys)
         if extra_round_keys:
@@ -1182,6 +1234,7 @@ def validate_review_rounds_artifact(data: dict[str, Any], schema: dict[str, Any]
             "evidence_added_count",
             "disposition_changed_count",
             "remaining_active_count",
+            "untargeted_candidate_count",
         ):
             if key not in round_result:
                 continue

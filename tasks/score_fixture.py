@@ -128,6 +128,7 @@ def location_candidate_indexes(
         index
         for index, actual in enumerate(actuals)
         if location_matches(expected, actual)
+        and title_keyword_match(expected.get("title"), actual.get("title"))
     ]
 
 
@@ -285,9 +286,9 @@ def match_expected_to_actuals(expected_findings: list[dict[str, Any]], actuals: 
         key = expected_key(expected)
         candidate_indexes = groups.get(key, []) if key is not None else []
         if expected.get("expected_outcome") == "known_bug":
-            candidate_indexes = list(
-                dict.fromkeys(candidate_indexes + location_candidate_indexes(expected, actuals))
-            )
+            expected_location = expected.get("location_match")
+            if isinstance(expected_location, dict) and "line_range" in expected_location:
+                candidate_indexes = location_candidate_indexes(expected, actuals)
         elif expected.get("expected_outcome") == "acceptable_risk":
             candidate_indexes = list(
                 dict.fromkeys(candidate_indexes + keyword_candidate_indexes(expected, actuals))

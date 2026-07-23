@@ -268,7 +268,7 @@ python3 $CLAUDE_PLUGIN_ROOT/tasks/episode_memory.py retrieve \
 
 ## Regression eval / fixture scoring (F11)
 
-CI では LLM を起動せず、固定 fixture と stub artifact だけで schema / runner の deterministic smoke test を行う。small / medium / large の既存 oracle に加え、Issue #112 の `fixtures/positive/` は 2 個の既知バグと 1 個の既知 false-positive trap を持つ positive-seeded fixture として検証する。手動 deep eval では実レビューで生成した `findings.verified.json` を fixture oracle と比較し、既存 3 fixture は M1→M2 gate report に集約する。
+CI では LLM を起動せず、固定 fixture と stub artifact だけで schema / runner の deterministic smoke test を行う。small / medium / large の既存 oracle に加え、Issue #112 の `fixtures/positive/` は 3 個の既知バグと 1 個の既知 false-positive trap を持つ positive-seeded fixture として検証する。手動 deep eval では実レビューで生成した `findings.verified.json` を fixture oracle と比較し、4 fixture すべてを M1→M2 gate report に集約する。
 
 ### CI-safe smoke
 
@@ -299,6 +299,11 @@ python3 tasks/score_fixture.py \
   --expected fixtures/large/expected-findings.json \
   --actual /path/to/large/findings.verified.json \
   --out artifacts/score-large.json
+
+python3 tasks/score_fixture.py \
+  --expected fixtures/positive/expected-findings.json \
+  --actual /path/to/positive/findings.verified.json \
+  --out artifacts/score-positive.json
 ```
 
 M1→M2 gate は運用実測値を `m1-m2-inputs.v1` として外部供給する。未計測項目は省略でき、省略された criteria は `unknown` として記録される（unknown は fail にはしない）。
@@ -322,7 +327,7 @@ M1→M2 gate は運用実測値を `m1-m2-inputs.v1` として外部供給する
 
 ```bash
 python3 tasks/m1_m2_gate.py \
-  --score-reports artifacts/score-small.json artifacts/score-medium.json artifacts/score-large.json \
+  --score-reports artifacts/score-small.json artifacts/score-medium.json artifacts/score-large.json artifacts/score-positive.json \
   --inputs artifacts/m1-m2-inputs.json \
   --out artifacts/m1-m2-gate.json
 ```
