@@ -38,14 +38,14 @@
       "axes": {
         "real": "yes",
         "triggerable": "yes",
-        "impactful": "unknown",
-        "general": "no"
+        "impactful": "unknown"
       },
       "posting": {
         "post_policy": "local_only",
         "explanation_postable": true,
         "audience": "human_reviewer"
-      }
+      },
+      "blast_radius": "isolated"
     },
     {
       "id": "fa3d98b3713c0efcbccf9f93b646cec81cd6867838d625f56fff43eea4558534",
@@ -71,13 +71,13 @@
       "axes": {
         "real": "yes",
         "triggerable": "yes",
-        "impactful": "yes",
-        "general": "yes"
+        "impactful": "yes"
       },
       "posting": {
         "post_policy": "inline",
         "explanation_postable": true
-      }
+      },
+      "blast_radius": "isolated"
     }
   ]
 }

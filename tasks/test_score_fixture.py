@@ -35,7 +35,7 @@ def score(size: str, stub: str) -> dict[str, object]:
 
 class ScoreFixtureTest(unittest.TestCase):
     def test_perfect_stubs_pass_all_fixture_gates(self) -> None:
-        for size in ("small", "medium", "large"):
+        for size in ("small", "medium", "large", "positive"):
             with self.subTest(size=size):
                 report = score(size, "perfect")
                 self.assertTrue(report["gate_pass"])
@@ -82,6 +82,21 @@ class ScoreFixtureTest(unittest.TestCase):
         trap_rows = [row for row in report["breakdown"] if row["expected_id"] == trap["id"]]
         self.assertEqual(trap_rows[0]["match_status"], "false_positive_promoted")
 
+    def test_known_bug_matches_by_changed_line_when_category_drifts(self) -> None:
+        expected = load_json(ROOT / "fixtures" / "positive" / "expected-findings.json")
+        actual = copy.deepcopy(
+            load_json(ROOT / "fixtures" / "positive" / "scoring-stubs" / "perfect.findings.verified.json")
+        )
+        idempotency = next(
+            finding for finding in actual["findings"] if finding["location"]["start_line"] == 53
+        )
+        idempotency["category"] = "bug"
+
+        report = score_fixture(expected, actual, EVALUATED_AT)
+
+        self.assertEqual(report["recall_known_bug"], 1.0)
+        self.assertEqual(report["unmatched_actuals"], [])
+
     def test_partial_axes_drift_separates_exact_from_acceptable(self) -> None:
         report = score("small", "partial-axes-drift")
         self.assertTrue(report["gate_pass"])
@@ -118,7 +133,7 @@ class ScoreFixtureTest(unittest.TestCase):
         overpromotion["title"] = "Reviewer suggests adding @since / @removed-in tags"
         overpromotion["problem"] = "Reviewer suggests adding @since / @removed-in tags"
         overpromotion["evidence_level"] = "corroborated"
-        overpromotion["axes"] = {"real": "yes", "triggerable": "no", "impactful": "no", "general": "yes"}
+        overpromotion["axes"] = {"real": "yes", "triggerable": "no", "impactful": "no"}
         overpromotion["fingerprint"] = "1" * 64
         overpromotion["id"] = "1" * 64
         actual["findings"].append(overpromotion)
@@ -139,7 +154,7 @@ class ScoreFixtureTest(unittest.TestCase):
         overpromotion["title"] = risk["title"]
         overpromotion["problem"] = risk["title"]
         overpromotion["evidence_level"] = "corroborated"
-        overpromotion["axes"] = {"real": "yes", "triggerable": "no", "impactful": "no", "general": "yes"}
+        overpromotion["axes"] = {"real": "yes", "triggerable": "no", "impactful": "no"}
         overpromotion["fingerprint"] = "3" * 64
         overpromotion["id"] = "3" * 64
         actual["findings"].append(overpromotion)

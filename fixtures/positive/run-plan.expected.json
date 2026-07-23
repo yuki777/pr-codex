@@ -1,10 +1,10 @@
 {
   "files_changed": 2,
-  "hunks": 2,
-  "lines_added": 7,
-  "lines_removed": 2,
+  "hunks": 5,
+  "lines_added": 27,
+  "lines_removed": 21,
   "risk_tags": [
-    "dependency"
+    "security"
   ],
   "selected_hunters": [
     "claude",
@@ -19,22 +19,24 @@
   "recommended_mode": "standard",
   "skip_reason": null,
   "routing_decision": {
-    "budget_class": "small",
+    "budget_class": "medium",
     "route": "claude+codex",
     "model_profile": "standard",
-    "rationale": "files_changed=2, total_lines=9, risk_tags=[dependency], depth=standard, mode=standard"
+    "rationale": "files_changed=2, total_lines=48, risk_tags=[security], depth=standard, mode=standard"
   },
   "pr_classification": {
-    "primary_type": "mixed",
-    "all_types": [],
-    "selected_specialists": [
-      "generic"
+    "primary_type": "security-sensitive",
+    "all_types": [
+      "security-sensitive"
     ],
-    "rationale": "types=[], specialists=[generic], read_only=true",
+    "selected_specialists": [
+      "security"
+    ],
+    "rationale": "types=[security-sensitive], specialists=[security], read_only=true",
     "read_only": true
   },
   "estimated_stages": 4,
-  "estimated_timeout_ms": 390900,
+  "estimated_timeout_ms": 529800,
   "actual_duration_ms": null,
   "actual_tokens": null,
   "cost": {
@@ -45,8 +47,8 @@
   },
   "review_loop": {
     "halting_policy": {
-      "max_rounds": 2,
-      "time_budget_ms": 390900,
+      "max_rounds": 3,
+      "time_budget_ms": 529800,
       "no_new_evidence_rounds": 1,
       "repeated_contradiction_limit": 2,
       "verifier_fail_policy": "local_artifact_only",

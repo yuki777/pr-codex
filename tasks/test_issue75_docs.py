@@ -21,8 +21,9 @@ class Issue75DocsTest(unittest.TestCase):
         section = self._run_plan_section()
         self.assertIn("判定ロジックの canonical source は直後の `jq` テンプレート", section)
         self.assertIn("| 条件 | depth_actual | recommended_mode | budget_class | model_profile |", section)
-        self.assertIn("| `risk_tags` に `security` または `data_migration` を含み、`files_changed <= 20` かつ `total_lines <= 1500` | `deep`（auto） | file-count rules | line-count rules | mode/depth rules |", section)
-        self.assertIn("| `files_changed > 100` | depth rules | `skip` | `large` | `focused-fallback` |", section)
+        self.assertIn("| ranker 初期判定（全 PR） | `standard` | file-count rules | line-count rules | mode/depth rules |", section)
+        self.assertIn("| hunter 後に `recommended_mode=standard` / `budget_class=small`、全候補 `verified`・3軸既知・severity 矛盾なし | `deep`（auto） | `standard` | `small` | `deep` |", section)
+        self.assertIn("| `files_changed > 100` | `standard` | `skip` | `large` | `focused-fallback` |", section)
 
     def test_deprecated_prose_rule_headings_are_removed(self) -> None:
         section = self._run_plan_section()

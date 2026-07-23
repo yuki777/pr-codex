@@ -52,7 +52,7 @@ oracle 評価結果は4指標を出す:
 - `false_positive_rate` — `expected_outcome=known_false_positive_trap` を Must Fix にしてしまった率
 - `recall_known_bug` — `expected_outcome=known_bug` が location/category matching で検出された率
 
-F11 eval report (`schemas/eval-report.v1.json`) は、baseline と iterative run の差分を比較するため各 run に `round_metrics` を必ず含める。最低限の round metrics は `rounds_completed` / `max_rounds` / `halt_reason` / `elapsed_ms` / `time_budget_ms` / `verifier_fail_candidates` / `suppressed_candidate_count` / `no_new_evidence_rounds` / `repeated_contradiction_events` / `insufficient_evidence_events` / `oscillation_detected`。これにより F5 の round 有無で timeout 内完了率、false positive 率、oscillation 抑止の差分を fixture ごとに比較できる。
+F11 eval report (`schemas/eval-report.v1.json`) は、baseline と iterative run の差分を比較するため各 run に `round_metrics` を必ず含める。最低限の round metrics は `rounds_completed` / `max_rounds` / `halt_reason` / `elapsed_ms` / `time_budget_ms` / `verifier_fail_candidates` / `suppressed_candidate_count` / `no_new_evidence_rounds` / `repeated_contradiction_events` / `insufficient_evidence_events` / `changed_candidate_count` / `evidence_added_count` / `disposition_changed_count` / `remaining_active_count` / `oscillation_detected`。これにより F5 の round 有無で timeout 内完了率、false positive 率、state 変化、oscillation 抑止の差分を fixture ごとに比較できる。host state metrics を採取していない過去の record だけは推測せず `null` とする。
 
 **M1 gate**: `acceptable_pass_rate ≥ 0.8`, `false_positive_rate ≤ 0.1`
 matching は actual の `id` ではなく `(location_match.path, category)` で行う。同一 key に複数候補がある場合は `expected_axes` との Hamming 距離が最小の actual を貪欲に選ぶ。`known_false_positive_trap` は fixture 全体にかかる罠として扱い、title keyword または path/category で該当 actual を検出する。title keyword による trap / acceptable-risk promotion 検出は、model 出力の category が揺れても検出できるよう category には依存しない。

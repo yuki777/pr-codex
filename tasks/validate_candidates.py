@@ -32,6 +32,7 @@ CANDIDATE_KEYS = {
     "candidate_id",
     "source_agent",
     "source_ref",
+    "evidence_state",
     "location",
     "severity_raw",
     "category_raw",
@@ -43,13 +44,16 @@ CANDIDATE_KEYS = {
     "fingerprint",
     "evidence_level",
     "axes",
+    "blast_radius",
     "verification_hint",
     "posting",
 }
 LOCATION_KEYS = {"path", "start_line", "end_line", "side", "diff_hunk_ref"}
-AXES_KEYS = {"real", "triggerable", "impactful", "general"}
+AXES_KEYS = {"real", "triggerable", "impactful"}
 POSTING_KEYS = {"post_policy", "explanation_postable", "not_postable_reason", "audience"}
 AXIS_VALUES = {"yes", "no", "unknown"}
+BLAST_RADII = {"isolated", "component", "systemic", "unknown"}
+EVIDENCE_STATES = {"supported", "needs_evidence"}
 EVIDENCE_LEVELS = {"suspicion", "corroborated", "trigger_path_identified", "impact_explained", "verified"}
 POST_POLICIES = {"inline", "body_summary", "local_only", "suppress"}
 NOT_POSTABLE_REASONS = {"depends_on_pr_external_context", "security_detail", "too_long", "low_evidence_suspicion", "private_dependency", "other_explained"}
@@ -212,7 +216,7 @@ def validate_candidates(data: Any, metadata: Any | None = None) -> list[str]:
             errors,
             cpath,
             candidate,
-            {"source_agent", "location", "severity_raw", "category_raw", "title", "problem", "reason", "suggestion"},
+            {"source_agent", "evidence_state", "location", "severity_raw", "category_raw", "title", "problem", "reason", "suggestion"},
         )
         for key in (
             "candidate_id",
@@ -229,8 +233,12 @@ def validate_candidates(data: Any, metadata: Any | None = None) -> list[str]:
             "verification_hint",
         ):
             validate_string_field(errors, cpath, candidate, key)
+        if candidate.get("evidence_state") not in EVIDENCE_STATES:
+            errors.append(f"{cpath}.evidence_state: invalid value")
         if "evidence_level" in candidate and candidate["evidence_level"] not in EVIDENCE_LEVELS:
             errors.append(f"{cpath}.evidence_level: invalid value")
+        if "blast_radius" in candidate and candidate["blast_radius"] not in BLAST_RADII:
+            errors.append(f"{cpath}.blast_radius: invalid value")
 
         location = candidate.get("location")
         if not isinstance(location, dict):

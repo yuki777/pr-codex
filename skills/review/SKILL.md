@@ -521,26 +521,26 @@ jq -n --arg org "$org" --arg repository "$repository" --arg repository_full_name
 - 判定条件: `run-plan.json` が作成され、`files_changed` / `hunks` / `lines_added` / `lines_removed` / `risk_tags` / `selected_hunters` / `depth_actual` / `recommended_mode` / `skip_reason` / `estimated_stages` / `estimated_timeout_ms` / `actual_duration_ms` / `actual_tokens` / `review_loop` (halting policy と round metrics 初期値) が埋まる
 - 次アクション: Step 4 前処理へ進む
 
-`run-plan.json` は Step 2b の `files[]` と Step 3 の `pr.diff` を使う preflight artifact。`review_loop.halting_policy` には F5 の `max_rounds=3` / `time_budget_ms=estimated_timeout_ms` / `no_new_evidence_rounds=1` / `repeated_contradiction_limit=2` / `verifier_fail_policy=local_artifact_only` / `insufficient_evidence_policy=suppress_to_local_artifact` を固定で埋め、Step 4c が `review-rounds.json` と Step 5 の round metrics に引き継ぐ。M1 では `selected_hunters` は常に `["claude","codex"]` を出力し、将来 F4 の選定ロジックに差し替える前提で固定値とする。`recommended_mode == "skip"` は「/loop では skip 推奨、手動では警告のみ」の**提案値**であり、M1 の既定では実際のレビューを止めず `focused fallback` で継続する。
+`run-plan.json` は Step 2b の `files[]` と Step 3 の `pr.diff` を使う preflight artifact。`review_loop.halting_policy` には F5 の `max_rounds`（通常 2、`depth_actual=deep` または `risk_tags` に `security` / `data_migration` がある場合 3、hard cap 3）/ `time_budget_ms=estimated_timeout_ms` / `no_new_evidence_rounds=1` / `repeated_contradiction_limit=2` / `verifier_fail_policy=local_artifact_only` / `insufficient_evidence_policy=suppress_to_local_artifact` を決定論的に埋め、Step 4c の host controller が `review-rounds.json` と Step 5 の round metrics に引き継ぐ。M1 では `selected_hunters` は常に `["claude","codex"]` とする。
 - 判定条件: `run-plan.json` が作成され、`files_changed` / `hunks` / `lines_added` / `lines_removed` / `risk_tags` / `selected_hunters` / `depth_actual` / `depth_source` / `depth_reason` / `depth_requested` / `depth_downgraded` / `depth_downgrade_reason` / `recommended_mode` / `skip_reason` / `routing_decision` / `estimated_stages` / `estimated_timeout_ms` / `actual_duration_ms` / `actual_tokens` / `cost` が埋まる
 - 次アクション: Step 4 前処理へ進む
 
-`run-plan.json` は Step 2b の `files[]` と Step 3 の `pr.diff` を使う preflight artifactで、**logical stage: ranker** の正式な出力である。レビュー深度は引数で受け付けず、`risk_tags` / PR サイズ / 大規模ガードから決定論的に自動判定する。M2 では `routing_decision` に token/duration/file-count/risk proxy 由来の `budget_class` と logical `model_profile` を残す。M3 では `cost` に provider/CLI が実際に報告した actual USD cost だけを記録し、pricing table や token からの USD 推定は持たない。`cost.source="unavailable"` の場合は推測せず null のまま残す。実プロバイダ名・実モデル名・private config は絶対に書かない。`selected_hunters` は ranker 出力の interface として配列のまま維持するが、F4 では常に `["claude","codex"]` を出力し、`routing_decision.route` も M2 では常に `"claude+codex"` とする。route enum は将来 F4 の specialist routing で拡張できるよう、ここでは固定値の hook のみ残す。`recommended_mode == "skip"` は「/loop では skip 推奨、手動では警告のみ」の**提案値**であり、M1/F4/M2 の既定では実際のレビューを止めず `focused fallback` で継続する。
+`run-plan.json` は Step 2b の `files[]` と Step 3 の `pr.diff` を使う preflight artifactで、**logical stage: ranker** の正式な出力である。レビュー深度は引数で受け付けず、ranker では全 PR を `standard` で開始し、hunter 後の small / fully verified / conflict-free gate を host controller が通過した場合だけ `deep` へ上げる。`risk_tags` / PR サイズ / 大規模ガードは budget / recommended mode / timeout / レビュー優先度に使う。M2 では `routing_decision` に token/duration/file-count/risk proxy 由来の `budget_class` と logical `model_profile` を残す。M3 では `cost` に provider/CLI が実際に報告した actual USD cost だけを記録し、pricing table や token からの USD 推定は持たない。`cost.source="unavailable"` の場合は推測せず null のまま残す。実プロバイダ名・実モデル名・private config は絶対に書かない。`selected_hunters` は ranker 出力の interface として配列のまま維持するが、F4 では常に `["claude","codex"]` を出力し、`routing_decision.route` も M2 では常に `"claude+codex"` とする。`recommended_mode == "skip"` は提案値であり、M1/F4/M2 の既定では実際のレビューを止めず `focused fallback` で継続する。
 
-`depth_actual`（`standard` / `deep`）と `recommended_mode`（`standard` / `focused` / `skip`）は直交した軸として扱う。depth は「1観点あたりの掘り下げ深さ」、recommended_mode は「対象観点の絞り込み」を表すため、`depth_actual="deep"` かつ `recommended_mode="focused"` のような組み合わせも有効である。
+`depth_actual`（`standard` / `deep`）と `recommended_mode`（`standard` / `focused` / `skip`）は直交した軸として schema に記録するが、現行 auto-deep gate は安全側に `recommended_mode="standard"` を必須とする。focused / skip fallback をモデル判断で deep へ上げてはならない。
 
-判定ロジックの canonical source は直後の `jq` テンプレート内の `def auto_deep` / `def depth_actual` / `def recommended_mode` / `def budget_class` / `def model_profile` とし、散文はその読み取り補助に限定する。条件が重なる場合は `jq` の評価順を優先し、表の `file-count rules` / `line-count rules` / `mode/depth rules` は同じ canonical def を参照する。`total_lines > 5000` では `depth_actual = "standard"` に強制する。
+初期判定ロジックの canonical source は直後の `jq` テンプレート内の `def depth_actual` / `def recommended_mode` / `def budget_class` / `def model_profile`、hunter 後の auto-deep は `tasks/refinement_loop.py` の `auto_deep_eligible` / `apply_auto_deep` とする。散文はその読み取り補助に限定する。
 
 | 条件 | depth_actual | recommended_mode | budget_class | model_profile |
 |---|---|---|---|---|
-| `risk_tags` に `security` または `data_migration` を含み、`files_changed <= 20` かつ `total_lines <= 1500` | `deep`（auto） | file-count rules | line-count rules | mode/depth rules |
-| 上記以外 | `standard` | file-count rules | line-count rules | mode/depth rules |
-| `files_changed > 100` | depth rules | `skip` | `large` | `focused-fallback` |
-| `50 < files_changed <= 100` | depth rules | `focused` | line-count rules | `focused-fallback` |
-| `files_changed <= 50` | depth rules | `standard` | line-count rules | `deep` if `depth_actual == "deep"`, else `standard` |
-| `files_changed <= 10` かつ `total_lines <= 500` かつ `sensitive_risk_count == 0` | depth rules | file-count rules | `small` | mode/depth rules |
-| `files_changed <= 50` かつ `total_lines <= 5000`（small 以外） | depth rules | file-count rules | `medium` | mode/depth rules |
-| 上記以外 | depth rules | file-count rules | `large` | mode/depth rules |
+| ranker 初期判定（全 PR） | `standard` | file-count rules | line-count rules | mode/depth rules |
+| hunter 後に `recommended_mode=standard` / `budget_class=small`、全候補 `verified`・3軸既知・severity 矛盾なし | `deep`（auto） | `standard` | `small` | `deep` |
+| `files_changed > 100` | `standard` | `skip` | `large` | `focused-fallback` |
+| `50 < files_changed <= 100` | `standard` | `focused` | line-count rules | `focused-fallback` |
+| `files_changed <= 50` | `standard` | `standard` | line-count rules | `standard`（candidate gate 通過後だけ `deep`） |
+| `files_changed <= 10` かつ `total_lines <= 500` かつ `sensitive_risk_count == 0` | `standard` | file-count rules | `small` | mode/depth rules |
+| `files_changed <= 50` かつ `total_lines <= 5000`（small 以外） | `standard` | file-count rules | `medium` | mode/depth rules |
+| 上記以外 | `standard` | file-count rules | `large` | mode/depth rules |
 
 推定 timeout は `min(1200000, 300000 + files_changed*30000 + hunks*15000 + total_lines*100 + sensitive_risk_count*90000)` を使う。`sensitive_risk_count` は `risk_tags` のうち `security` / `data_migration` の件数。`rationale` は `files_changed` / `total_lines` / `risk_tags` / `depth_actual` / `recommended_mode` の決定論的な事実列のみとし、LLM 自由生成文や provider/model 名を入れない。
 
@@ -595,22 +595,17 @@ jq -n --slurpfile metadata ~/claude-loop-pr-codex/$org-$repository-$pr_number/me
   def files_changed: (files | length);
   def total_lines: (lines_added + lines_removed);
   def sensitive_risk_count: (risk_tags | map(select(. == "security" or . == "data_migration")) | length);
-  def auto_deep: (sensitive_risk_count > 0 and files_changed <= 20 and total_lines <= 1500);
   def depth_downgraded: false;
   def depth_requested_out: null;
   def depth_source:
-    if auto_deep then "auto"
-    else "default"
-    end;
+    "default";
   def depth_actual:
-    if total_lines > 5000 then "standard"
-    elif auto_deep then "deep"
-    else "standard"
-    end;
+    "standard";
+  def max_rounds:
+    if depth_actual == "deep" or sensitive_risk_count > 0 then 3 else 2 end;
   def depth_reason:
     if total_lines > 5000 then "changed lines > 5000; selected standard to preserve the 20 minute timeout"
-    elif auto_deep then "risk_tags include security or data_migration and PR size is <= 20 files / <= 1500 changed lines; selected deep"
-    else "no high-risk small-PR signal; selected default standard"
+    else "automatic deep deferred until the initial candidate gate; selected default standard"
     end;
   def depth_downgrade_reason:
     null;
@@ -678,7 +673,7 @@ jq -n --slurpfile metadata ~/claude-loop-pr-codex/$org-$repository-$pr_number/me
     },
     review_loop: {
       halting_policy: {
-        max_rounds: 3,
+        max_rounds: max_rounds,
         time_budget_ms: estimated_timeout_ms,
         no_new_evidence_rounds: 1,
         repeated_contradiction_limit: 2,
@@ -693,6 +688,10 @@ jq -n --slurpfile metadata ~/claude-loop-pr-codex/$org-$repository-$pr_number/me
         no_new_evidence_rounds: null,
         repeated_contradiction_events: null,
         insufficient_evidence_events: null,
+        changed_candidate_count: null,
+        evidence_added_count: null,
+        disposition_changed_count: null,
+        remaining_active_count: null,
         oscillation_detected: null
       }
     }
@@ -702,7 +701,7 @@ jq -n --slurpfile metadata ~/claude-loop-pr-codex/$org-$repository-$pr_number/me
 
 ### Step 4 前処理: レビュー観点の読み込み
 
-Step 4a / 4b 共通のレビュー観点本文（分析範囲と投稿範囲の二層 / 追加文脈（pr-context.md）の利用 / 7観点 / 行番号規約 / severity_suggestion 基準 / 重要）は、このスキルディレクトリ内の `HUNTER_CRITERIA.md` に外出ししている。verifier 向けの 4軸 / evidence ladder / clustering / security extension は `VERIFIER_POLICY.md`、explainer / send 向けの review.md 構成 / Should Fix inline 整形 / SARIF 公開境界は `EXPLAINER_POLICY.md` に分離しており、hunter prompt にはどちらも注入しない。加えて Step 3 で生成した `run-plan.json` と Step 3b の BEAR.Sunday 判定結果を読み、preflight に応じた `{RUN_PLAN_GUIDANCE}` / `{DEPTH_GUIDANCE}` / `{BEAR_REVIEW_GUIDANCE}` を組み立てる。4a / 4b の prompt file には `{REVIEW_CRITERIA}` / `{RUN_PLAN_GUIDANCE}` / `{DEPTH_GUIDANCE}` / `{BEAR_REVIEW_GUIDANCE}` の 4 プレースホルダを Claude 側で置換した完全体の本文を Write ツールで書き出す。
+Step 4a / 4b 共通のレビュー観点本文（分析範囲と投稿範囲の二層 / 追加文脈（pr-context.md）の利用 / 7観点 / 行番号規約 / severity_suggestion 基準 / 重要）は、このスキルディレクトリ内の `HUNTER_CRITERIA.md` に外出ししている。verifier 向けの 3軸 gate / blast_radius metadata / evidence ladder / clustering / security extension は `VERIFIER_POLICY.md`、explainer / send 向けの review.md 構成 / Should Fix inline 整形 / SARIF 公開境界は `EXPLAINER_POLICY.md` に分離している。4a / 4b の prompt には hunter 用のレビュー観点だけを注入し、verifier / explainer policy を混ぜない。
 
 - いつ使うか: Step 3 完了後、Step 4a / 4b 起動前に必ず実行する
 - 判定条件: `HUNTER_CRITERIA.md` の全文、`run-plan.json`、Step 3b の BEAR.Sunday 判定終了コードを取得できる
@@ -806,7 +805,7 @@ severity_suggestion が must_fix / should_fix の candidate の start_line / end
 ## 出力 schema（Output schema — 必ず厳守）
 最終出力は hunter-result.v1 schema に従う JSON オブジェクト 1 個だけです。Markdown 見出し、コードフェンス、前置き・後置きの文章を出力してはいけません。
 - status: 'findings'（指摘あり）/ 'clean'（指摘 0 件）/ 'diff_unavailable'
-- candidates[]: 指摘 1 件ごとに title / severity_suggestion (must_fix|should_fix|nit|note) / category_suggestion / path / start_line / end_line（単一行なら null）/ side（head 基準のため通常 'RIGHT'）/ problem / reason / suggestion を埋める
+- candidates[]: 指摘 1 件ごとに title / severity_suggestion (must_fix|should_fix|nit|note) / category_suggestion / path / start_line / end_line（単一行なら null）/ side（head 基準のため通常 'RIGHT'）/ problem / reason / suggestion / evidence_state (supported|needs_evidence) / evidence_level_suggestion / axes_suggestion (real, triggerable, impactful) / blast_radius_suggestion を埋める。needs_evidence は未確認事項を reason に明示し、確定事実のように断定しない
 - coverage: high_risk_paths_checked に重点確認したファイル、checks_run に実施した確認内容、limitations に確認できなかった事項を短い平文で記録する
 
 ## 停止条件（Stop conditions）
@@ -895,7 +894,7 @@ severity_suggestion が must_fix / should_fix の candidate の start_line / end
 ## 出力 schema（Output schema — 必ず厳守）
 最終メッセージは hunter-result.v1 schema に従う JSON オブジェクト 1 個だけです。Markdown 見出し、コードフェンス、前置き・後置きの文章を出力してはいけません。
 - status: 'findings'（指摘あり）/ 'clean'（指摘 0 件）/ 'diff_unavailable'
-- candidates[]: 指摘 1 件ごとに title / severity_suggestion (must_fix|should_fix|nit|note) / category_suggestion / path / start_line / end_line（単一行なら null）/ side（head 基準のため通常 'RIGHT'）/ problem / reason / suggestion を埋める
+- candidates[]: 指摘 1 件ごとに title / severity_suggestion (must_fix|should_fix|nit|note) / category_suggestion / path / start_line / end_line（単一行なら null）/ side（head 基準のため通常 'RIGHT'）/ problem / reason / suggestion / evidence_state (supported|needs_evidence) / evidence_level_suggestion / axes_suggestion (real, triggerable, impactful) / blast_radius_suggestion を埋める。needs_evidence は未確認事項を reason に明示し、確定事実のように断定しない
 - coverage: high_risk_paths_checked に重点確認したファイル、checks_run に実施した確認内容、limitations に確認できなかった事項を短い平文で記録する
 
 ## 停止条件（Stop conditions）
@@ -956,21 +955,44 @@ MCP と外部文脈について:
 
 **logical stage: verifier / logical stage: explainer**。両方の hunter 出力が完了したら、メインコンテキスト（自分自身）が前半で verifier、後半で explainer を行う。Step 4c は **現行の新フロー（candidates + verified + review-rounds + SARIF）だけ**を使う。旧フロー（candidates / SARIF なし）は廃止済みであり、手順・validator・`mv` テンプレートを併記しない。Step 4c を物理的に複数 Bash 実行へ分割せず、既存の temp → validator → `mv` による atomicity を維持する:
 
-1. `pr.diff.ranges.txt` / `metadata.json` / `run-plan.json` / verifier policy (`$plugin_root/skills/review/VERIFIER_POLICY.md`) / explainer policy (`$plugin_root/skills/review/EXPLAINER_POLICY.md`) を読み、さらに candidate schema (`$plugin_root/schemas/findings.candidates.v1.json`)、canonical schema (`$plugin_root/schemas/findings.v1.json`)、round artifact schema (`$plugin_root/schemas/review-rounds.v1.json`)、SARIF schema (`$plugin_root/schemas/sarif-2.1.0.json`) を Read する（パス解決は Step 4 前処理の `HUNTER_CRITERIA.md` と同じく `$CLAUDE_PLUGIN_ROOT` 基準で行う）。4軸 gate・evidence ladder・二者一致の扱い・security extension・root-cause clustering は `VERIFIER_POLICY.md` に、review.md セクション構成・Should Fix inline 整形・SARIF 公開境界は `EXPLAINER_POLICY.md` に従う。`claude-review.json` / `codex-review.json` は次の手順の `merge_hunter_results.py` が検証するため、メインコンテキストで生 JSON を読み直して候補を再構築してはならない。
-2. **hunter 結果の検証と candidates 合成 (必須)**: 以下のテンプレートで `merge_hunter_results.py` を実行し、両 hunter の structured output (`schemas/hunter-result.v1.json`) を検証したうえで `findings.candidates.json.tmp` を決定論的に生成する。これは verifier 入力を debug 可能に残す中間 artifact であり、`schemas/findings.candidates.v1.json` に従う。candidate では `id != fingerprint`、4軸未確定、`evidence_level` 未確定、`posting` 未決定を許し、GitHub 投稿判断には使わない。終了コード 1（hunter JSON の欠落・parse 失敗・schema 不適合）の場合は、stderr が示す側の hunter (4a または 4b) を **1 回だけ** 再実行してから本テンプレートを再実行する。再実行しても終了コード 0 にならない場合は Step 5 の **failed 更新** (`failed_stage=hunter`) へ遷移する。終了コード 2（`--schema` に渡した `schemas/hunter-result.v1.json` の欠落・wiring 異常 = plugin 配布物の破損）は hunter の再実行では解消しないため、4a / 4b を再実行せず、過去実行の stale な `findings.candidates.json.tmp` も使わずに、直ちに Step 5 の **failed 更新** (`failed_stage=hunter`) へ遷移して stderr をユーザーに報告する。
+1. `pr.diff.ranges.txt` / `metadata.json` / `run-plan.json` / verifier policy (`$plugin_root/skills/review/VERIFIER_POLICY.md`) / explainer policy (`$plugin_root/skills/review/EXPLAINER_POLICY.md`) を読み、さらに candidate schema (`$plugin_root/schemas/findings.candidates.v1.json`)、canonical schema (`$plugin_root/schemas/findings.v1.json`)、round artifact schema (`$plugin_root/schemas/review-rounds.v1.json`)、SARIF schema (`$plugin_root/schemas/sarif-2.1.0.json`) を Read する（パス解決はセットアップ済み `$plugin_root` を使う）。
+2. **hunter 結果の検証と candidates 合成 (必須)**: 以下のテンプレートで `merge_hunter_results.py` を実行し、両 hunter の structured output (`schemas/hunter-result.v1.json`) を検証したうえで `findings.candidates.json.tmp` を決定論的に生成する。これは verifier 入力を debug 可能に残す中間 artifact であり、`schemas/findings.candidates.v1.json` に従う。candidate では `id != fingerprint`、3軸未確定、`evidence_level` 未確定、`posting` 未確定を許容する一方、`evidence_state` と `blast_radius` metadata は保持する。
 
 ```bash
 python3 "$plugin_root/tasks/merge_hunter_results.py" --schema "$plugin_root/schemas/hunter-result.v1.json" --claude ~/claude-loop-pr-codex/$org-$repository-$pr_number/claude-review.json --codex ~/claude-loop-pr-codex/$org-$repository-$pr_number/codex-review.json --metadata ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json --producer-version "$plugin_version" --output ~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.candidates.json.tmp
 ```
 
 3. **スコープ検証 (必須)**: 上のテンプレートが終了コード 3 (`HUNTER_DIFF_UNAVAILABLE`) を返した場合、どちらかの hunter が `status="diff_unavailable"`（pr.diff 不在／空）を報告している。統合成果物は作成せず Step 5 の **failed 更新** へ遷移する（`findings.candidates.json` / `findings.verified.json` / `review-rounds.json` / `findings.sarif` / `review.md` は生成しない）。
-4. **F5 反復精緻化ループ (必須)**: 手順 2 で生成した `findings.candidates.json.tmp` を Read し、その candidates を入力として、`review_loop.halting_policy` に従い `refine` → `challenge` → `verify` の round を最大 `max_rounds` 回だけ回す。各 round はメモリ上で候補を更新し、最終的に `review-rounds.json.tmp` (`schema_version="review-rounds.v1"`) としてローカルにだけ残す。halting 判定は決定論的に `time_budget` → `max_rounds` → `repeated_contradiction` → `all_candidates_verified/no_active_candidates` → `no_new_evidence` の優先順で行い、`time_budget_ms` に達したら次 round を開始しない。`new_evidence_count == 0` の round が `no_new_evidence_rounds` 連続した場合は `halt_reason="no_new_evidence"`、同じ contradiction signature が `repeated_contradiction_limit` 回出た場合は `halt_reason="repeated_contradiction"` として oscillation を止める。
-   - `refine`: 同一原因・同一箇所・同一影響の候補を fingerprint 入力 (`path` / `category` / 正規化 title / primary_symbol) で寄せ、重複候補は `review-rounds.json.rounds[].rejected_candidates[]` に `reason="duplicate"` / `local_only=true` で残す。
-   - `challenge`: 各候補について「この指摘が誤りである可能性」を 1 つだけ探索し、反証が成立した場合は `reason="verifier_fail"` で local artifact に残し、`findings.verified.json` / `review.md` / GitHub 投稿対象には含めない。
-   - `verify`: `metadata.json.files[]`、`pr.diff.ranges.txt`、4軸 gate、`evidence_level`、投稿ポリシーを確認し、根拠不足は `reason="insufficient_evidence"` で `local_only=true` として抑止する。`verifier FAIL` 候補は local artifact に残すだけで GitHub へ投稿してはならない。
-   - `review-rounds.json` には raw log / secret / token / authorization / private key など sensitive な生ログを残さず、candidate id・title・path・line・reason・短い detail だけを保存する。許可済み string 値でも raw-log marker、`Authorization: Bearer ***` 代入、private-key header 形式を含む場合は redaction または validator rejection の対象にする。candidate id / fingerprint が sensitive pattern に該当する場合は、投稿抑止 matching に使える安定 surrogate（raw 値ではない digest）だけを保存し、共通 placeholder にはしない。
-   - **review-rounds カウンタ定義**: `input_candidates_count` は round 開始時点の ACTIVE 候補数、`output_candidates_count` は round 終了後も loop に残る ACTIVE 候補数であり、`input_candidates_count - (verifier_pass_count + verifier_fail_count + insufficient_evidence_count) + 新規 ACTIVE 候補数` で算出する。例: `input_candidates_count=2`、`verifier_pass_count=2`、`verifier_fail_count=0`、`insufficient_evidence_count=0`、新規 ACTIVE 候補なしなら `output_candidates_count=0`。`metrics.posted_candidate_count` は最終 round の `output_candidates_count`（残存 ACTIVE 候補数）で、`posted_candidate_count=0` は「canonical findings に載った数ではない」。GitHub に投稿された件数や `findings.verified.json` の件数として解釈してはならない。
-   - 最終 round の `metrics` から `$rounds_completed` / `$halt_reason` / `$verifier_fail_candidates` / `$suppressed_candidate_count` / `$no_new_evidence_rounds` / `$repeated_contradiction_events` / `$insufficient_evidence_events` / `$oscillation_detected` を保持し、Step 5 の `run-plan.json.review_loop.round_metrics` に反映する。
+4. **F5 反復精緻化ループ (必須)**: 手順 2 で生成した `findings.candidates.json.tmp` を候補 state とし、メインコンテキストが推論を始める前に、同梱 controller (`$plugin_root/tasks/refinement_loop.py`) へ `review_loop.halting_policy`・現在の candidates・完了済み round・実測経過時間を渡す。モデル自身に「続けるか」を判断させてはならない。
+   - 最初に monotonic clock（壁時計補正の影響を受けない単調増加時計）で refinement 開始時刻を記録し、Write ツールで `refinement-state.json` を `{"rounds":[]}` として作る。各判定の `$actual_refinement_elapsed_ms` は、この開始時刻との差からホスト側で算出した 0 以上の整数とする。推測値、モデル申告値、run-plan の見積値を使ってはならない。
+   - round 1 の直前は次を一字一句変えずに実行し、終了コード 0 と `refinement-plan.json` の生成を確認してから Read する。`--policy` は `run-plan.json.review_loop.halting_policy` を controller が抽出する。
+
+```bash
+python3 "$plugin_root/tasks/refinement_loop.py" --plan-next --policy ~/claude-loop-pr-codex/$org-$repository-$pr_number/run-plan.json --candidates ~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.candidates.json.tmp --rounds ~/claude-loop-pr-codex/$org-$repository-$pr_number/refinement-state.json --run-plan ~/claude-loop-pr-codex/$org-$repository-$pr_number/run-plan.json --elapsed-ms $actual_refinement_elapsed_ms > ~/claude-loop-pr-codex/$org-$repository-$pr_number/refinement-plan.json
+```
+
+   - `should_run == true` の各 round は、候補を変更する前に `findings.candidates.json.tmp` を `refinement-candidates-before.json` へそのまま複製する。round 終了後は現在の candidates と round 結果を保存してから、次の判定（最終 round 後の停止判定を含む）を次のコマンドで実行する。controller は開始 snapshot と現在の candidates を比較し、`round_state` の digest / changed candidate ids / 件数をホスト側で算出する。
+
+```bash
+python3 "$plugin_root/tasks/refinement_loop.py" --plan-next --policy ~/claude-loop-pr-codex/$org-$repository-$pr_number/run-plan.json --previous-candidates ~/claude-loop-pr-codex/$org-$repository-$pr_number/refinement-candidates-before.json --candidates ~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.candidates.json.tmp --rounds ~/claude-loop-pr-codex/$org-$repository-$pr_number/refinement-state.json --run-plan ~/claude-loop-pr-codex/$org-$repository-$pr_number/run-plan.json --elapsed-ms $actual_refinement_elapsed_ms > ~/claude-loop-pr-codex/$org-$repository-$pr_number/refinement-plan.json
+```
+
+   - `refinement-plan.json.should_run == false` なら、`halting.reason` を採用して直ちに停止する。`should_run == true` の場合だけ、`target_candidate_ids[]` に列挙された候補だけを、その順序を保って `refine` → `challenge` → `verify` する。round 1 は全候補、round 2 は未解決のうち high-risk（Must Fix / security / runtime error / systemic blast radius / security・data migration PR）、hunter 間不一致、または `evidence_state=needs_evidence` の候補、round 3 は **round 2 で host-owned state が変化した high-risk 候補だけ**とする。後続 round で対象を再拡大してはならない。
+   - **small auto-deep gate**: round 1 前の controller 結果で `auto_deep_eligible == true` の場合だけ、次を実行する。controller は `budget_class=small`、全候補 `evidence_level=verified`、3 軸既知、同一箇所の severity 矛盾なしを要求する。更新後の `depth_actual=deep` / `depth_source=auto` / `depth_reason` / `routing_decision.model_profile` / `routing_decision.rationale` / `review_loop.halting_policy.max_rounds=3` を Read し、以後の保持変数も更新する。false の場合にモデル判断で deep へ上げてはならない。
+
+```bash
+python3 "$plugin_root/tasks/refinement_loop.py" --apply-auto-deep --run-plan ~/claude-loop-pr-codex/$org-$repository-$pr_number/run-plan.json --controller-plan ~/claude-loop-pr-codex/$org-$repository-$pr_number/refinement-plan.json > ~/claude-loop-pr-codex/$org-$repository-$pr_number/run-plan.json.tmp && test -s ~/claude-loop-pr-codex/$org-$repository-$pr_number/run-plan.json.tmp && mv ~/claude-loop-pr-codex/$org-$repository-$pr_number/run-plan.json.tmp ~/claude-loop-pr-codex/$org-$repository-$pr_number/run-plan.json
+```
+
+   - `refine`: 同一原因・同一箇所・同一影響の候補を fingerprint 入力 (`path` / `category` / 正規化 title / primary_symbol) で寄せ、重複候補は round の `rejected_candidates[]` に `reason="duplicate"` / `local_only=true` として残す。
+   - `challenge`: 各対象候補について「この指摘が誤りである可能性」を 1 つだけ探索し、反証が成立した場合は `reason="verifier_fail"` で local artifact に残し、`findings.verified.json` / `review.md` / GitHub 投稿対象には含めない。
+   - `verify`: `metadata.json.files[]`、`pr.diff.ranges.txt`、3軸 gate、非ゲート `blast_radius` metadata、`evidence_level`、投稿ポリシーを確認し、根拠不足は `reason="insufficient_evidence"` / `local_only=true` として抑止する。`verifier FAIL` 候補を文章の言い換えだけで復活させてはならない。
+   - round 終了ごとに、現在の host-owned candidate state を `findings.candidates.json.tmp` へ、round 結果を `refinement-state.json.rounds[]` へ Write する。次の controller 呼び出し後、返された `round_state.state_digest_before` / `state_digest_after` / `changed_candidate_ids` / `changed_candidate_count` / `evidence_added_count` / `disposition_changed_count` / `remaining_active_count` を最新 round へ**一字一句そのまま**反映する。これらをモデル申告値から作らない。同一 digest なら、モデルが新規根拠ありと申告しても controller は `no_new_evidence` で停止する。
+   - controller は `max_rounds` / `time_budget_ms` / `no_new_evidence_rounds` / `repeated_contradiction_limit` / 全候補解決 / 対象なしを決定論的に評価する。`max_rounds` は通常 2、`depth_actual=deep` または `risk_tags` に `security` / `data_migration` がある場合だけ 3、全フローの hard cap（絶対上限）は 3 とする。停止後、`refinement-state.json.rounds[]` と最終 controller 判定から `review-rounds.json.tmp` を構築する。
+   - `review-rounds.json` には raw log / secret / token / authorization / private key など sensitive な生ログを残さず、candidate id・title・path・line・reason・短い detail だけを保存する。許可済み string 値でも raw-log marker、`Authorization:`、秘密鍵 header、credential assignment、長い opaque token は同梱 validator が拒否する。
+   - **review-rounds カウンタ定義**: `input_candidates_count` は round の `target_candidate_ids[]` 件数、`output_candidates_count` は round 終了後も loop に残る ACTIVE 候補数であり、controller の `round_state.remaining_active_count` と一致させる。`changed_candidate_count == len(changed_candidate_ids)`、`evidence_added_count <= changed_candidate_count`、`disposition_changed_count <= changed_candidate_count` を守る。`suppressed_candidate_count` は canonical findings の件数ではなく `local_only=true` の rejected candidates 件数。`verifier_fail_candidates` は `reason="verifier_fail"` の件数。
+   - 例: `input_candidates_count=2` の 2 件が `verifier_pass_count=2` で確定した場合、loop に残る候補は `output_candidates_count=0`、最終 `posted_candidate_count=0` とする。これは canonical findings に載った数ではない。
+   - 最終 round の `metrics` から `$rounds_completed` / `$halt_reason` / `$verifier_fail_candidates` / `$suppressed_candidate_count` / `$no_new_evidence_rounds` / `$repeated_contradiction_events` / `$insufficient_evidence_events` / `$oscillation_detected` を取得し、全 round の host state metrics から `$changed_candidate_count` / `$evidence_added_count` / `$disposition_changed_count` / `$remaining_active_count` を取得して、Step 4 の `run-plan.json.tmp` 更新と F11 eval report へ引き継ぐ。
 5. ループ通過後、verifier が candidates を絞り込み、**`findings.verified.json` をメモリ上で構築する**。`findings.verified.json` は `schemas/findings.v1.json` に従い、最低限以下を満たす:
    - top-level: `schema_version = "findings.v1"`, `producer`, `pr`, `generated_at`, `findings[]`
    - `producer.name` は `pr-codex`、`producer.version` は Step 4 前処理で `$CLAUDE_PLUGIN_ROOT/.claude-plugin/plugin.json` から読んだ `$plugin_version`、`producer.run_id` は `<org>-<repository>-<pr_number>-<head_sha>` のような再生成可能な値にする
@@ -985,15 +1007,15 @@ python3 "$plugin_root/tasks/validate_findings.py" --emit-fingerprints --data ~/c
    - `location` は `{path, start_line, end_line?, side, diff_hunk_ref?}`。本 workflow では head 基準のため `side` は通常 `RIGHT` を使う
    - `category` は schema enum の `bug` / `security` / `performance` / `tests` / `design` / `code_quality` / `consistency` / `runtime_error` のいずれかだけを使う。`bugs` や `security_issue` のような自由ラベルは禁止。人間向けの細分類が必要な場合だけ、`fingerprint` 入力外の `category_label` に入れる
    - `title` は短い見出し、`problem` / `reason` / `suggestion` は review.md の 3 点組にそのまま再利用できる粒度で書く
-   - `axes` は `{real, triggerable, impactful, general}` の 4 軸を必ず埋める。各軸は `yes` / `no` / `unknown` のいずれかだけを使い、severity だけから `yes` を推測してはならない。4軸判定では、採用したい理由ではなく**落とす理由を優先探索**し、`unknown` を `yes` 扱いしない
+   - `axes` は `{real, triggerable, impactful}` の 3 軸を必ず埋める。各軸は `yes` / `no` / `unknown` のいずれかだけを使い、severity だけから `yes` を推測してはならない。採用したい理由ではなく**落とす理由を優先探索**し、`unknown` を `yes` 扱いしない。`blast_radius` は `isolated` / `component` / `systemic` / `unknown` の非ゲート metadata として別に必ず埋め、Must Fix 判定には使わない
    - `evidence_level` は `suspicion` / `corroborated` / `trigger_path_identified` / `impact_explained` / `verified` から根拠の強さに応じて 1 つだけ決定論的に選ぶ。CI / type system / 既存 lint で検出される類の「明白な静的解析的バグ」は、trigger path が再現できなくても `corroborated` かつ `impact_explained` の両方が成立し、`evidence[]` に `type` が `static_analysis` / `ci_log` / `test` のいずれかで含まれる場合に限り、`verified` に昇格させてよい。`type: manual_review` のみでの昇格は禁止
    - `posting` は verifier の責務として、M1 の `/pr-codex:send` が **Must Fix のみ自動投稿**する前提に合わせ、`{post_policy, explanation_postable, not_postable_reason?, audience?}` を severity ごとに固定する。explainer はこの焼き付け済み `posting` を読むだけで、posting policy を再判断しない
-   - 4 軸 gate 不通過で Must Fix から降格する finding は、`severity="should_fix"` / `posting.post_policy="local_only"` / `posting.audience="human_reviewer"` とし、`severity_disputed=true` / `merger_rule_applied="conservative_min_until_verifier_available"` / `verifier_required=true` / `severity_by_source` を必ず付ける。降格された finding は `review.md` の `## 補足` に「(参考: 4軸ゲート不通過)」付きで残し、`## 改善提案 (Should Fix)` には載せない
+   - 3軸 gate 不通過で Must Fix から降格する finding は、`severity="should_fix"` / `posting.post_policy="local_only"` / `posting.audience="human_reviewer"` とし、`severity_disputed=true` / `merger_rule_applied="conservative_min_until_verifier_available"` / `verifier_required=true` / `severity_by_source` を必ず付ける。降格された finding は `review.md` の `## 補足` に「(参考: 3軸ゲート不通過)」付きで残し、`## 改善提案 (Should Fix)` には載せない
    - `fingerprint` の入力は README 記載どおり `path` / `category` / `normalized_title` / `primary_symbol` に固定し、`line` は含めない
    - **`created_at` は finding 個別には書かない**。Issue #16 の最新 comment と参照 gist を優先し、canonical runtime artifact では top-level `generated_at` に集約する
 6. **破棄ルール (必須)**: `metadata.json.files[]` に含まれないパスへの指摘は canonical findings に採用しない。ファイルパスが `.md` の見出しやコードブロックで言及されていたら、そのパスが `files[]` 配列に属するかを必ず照合する。有益な一般的指摘で残す価値があるものだけ、`severity=note` + `posting.post_policy=local_only` もしくは `review.md` の `## 補足` 末尾に「参考（範囲外）」として残す。`must_fix` / `should_fix` には絶対に採用しない。
 7. **コメント可能行範囲の自己検証 (必須)**: `must_fix` として採用する各 finding について、`location.path` と `location.start_line` / `location.end_line` が `pr.diff.ranges.txt` の同一 `path` の範囲内に収まるかをメインコンテキストで検証する。範囲外なら、同一ファイルの最も近いコメント可能行へ `location` を差し替え、`problem` または `reason` に `(参考: 元の行 path:L<行番号>)` を補足する。同一ファイルにコメント可能行がない場合は `must_fix` には採用せず、`note` / `local_only` または `## 補足` に退避する。
-8. **4軸 gate (必須)**: `must_fix` として採用する各 finding は、temp 書き出し前に `axes.real == "yes"` / `axes.triggerable == "yes"` / `axes.impactful == "yes"` / (`axes.general == "yes"` または `evidence_level in {"impact_explained", "verified"}`) / `evidence_level == "verified"` をメインコンテキストで検証する。通過しない finding は上記の降格ポリシーを適用する。`validation-report.json` を出す場合は unknown 軸数 / unknown または no を理由に降格した件数 / gate 後の Must Fix 件数 / ladder 分布 (`evidence_level_counts: {suspicion, corroborated, trigger_path_identified, impact_explained, verified}`) / `must_fix_verified_ratio` / `exception_promotion_count` を記録する。
+8. **3軸 gate (必須)**: `must_fix` として採用する各 finding は、temp 書き出し前に `axes.real == "yes"` / `axes.triggerable == "yes"` / `axes.impactful == "yes"` / `evidence_level == "verified"` をメインコンテキストで検証する。`blast_radius` は必須 metadata だが gate 条件に含めない。通過しない finding は上記の降格ポリシーを適用する。`validation-report.json` を出す場合は unknown 軸数 / unknown または no を含む finding 数を同 report へ記録する
 9. 両 hunter の candidates を内部的に比較し、最終 findings へ統合する。この比較過程は `review.md` に書かない。役割が非対称なため、**二者の同一指摘は独立した証拠として扱わず、challenge / verify の検証優先度を上げるシグナルとしてのみ使う**（`VERIFIER_POLICY.md`）。`evidence_level` は一致の有無ではなく一致以外の根拠だけで決め、二者一致だけを理由に `corroborated` 以上へ上げない。severity が衝突した場合は **conservative min** を採用し、`severity_disputed=true`, `severity_by_source`, `merger_rule_applied="conservative_min_until_verifier_available"`, `verifier_required=true` を記録する。validation status (`metadata_files_member`, `diff_range_valid`) は canonical findings には入れず、必要なら副成果物 `validation-report.json` に分離する。
 10. `review.md` と `findings.sarif` は **`findings.verified.json` から派生生成** する。`review.md` は `must_fix` → `## 重大な問題 (Must Fix)`, `should_fix` かつ `post_policy=body_summary` → `## 改善提案 (Should Fix)`, `nit` → `## 軽微な指摘 (Nit)`, `note` や `post_policy=local_only/suppress` の項目 → `## 補足` に対応させる。`findings.sarif` は `tasks/generate_findings_sarif.py` で canonical から一方向生成し、M2 では local-only artifact として保存する（GitHub Code Scanning upload はしない）。`## 総評` と `## 良い点` は人間向け要約として記述してよいが、Must Fix / Should Fix の件数や内容が canonical findings と矛盾してはならない。
 11. `run-plan.json` で `skip_reason != null`、`recommended_mode != "standard"`、`depth_actual != "standard"`、`depth_source != "default"`、または `depth_reason` が `changed lines > 5000` で始まる場合のいずれかに該当する場合は、`review.md` の `## 補足` に preflight 情報を最低限残す。`files_changed` / `lines_added` / `lines_removed` / `depth_reason` / `risk_tags` を明記し、`routing_decision` はローカル artifact 専用であり、`review.md` や GitHub 投稿 body へコピーしない。
@@ -1077,12 +1099,12 @@ mv ~/claude-loop-pr-codex/$org-$repository-$pr_number/validation-report.json.tmp
 - 問題: （何が問題か）
 - 理由: （なぜ問題か）
 - 提案: （どう修正すべきか）
-- 軸: REAL=yes / TRIGGERABLE=yes / IMPACTFUL=yes / GENERAL=yes
-- Must Fix 昇格根拠: （4軸 gate を満たす理由。GENERAL が yes でない場合は specific-impact 説明済である理由）
+- 軸: REAL=yes / TRIGGERABLE=yes / IMPACTFUL=yes
+- 影響範囲: blast_radius=isolated|component|systemic|unknown（Must Fix gate には使わない）
 
 ## 改善提案 (Should Fix)
 
-修正が強く推奨される問題。`findings.verified.json` の `severity=should_fix` かつ `posting.post_policy=body_summary` から導出し、同じフォーマットで記載する。4軸 gate 不通過で `post_policy=local_only` に降格した finding はここに載せず `## 補足` に置く。M1 の `/pr-codex:send` では inline 自動投稿対象外のため、canonical finding の `posting.post_policy` は `body_summary` とする。見出し行番号は可能な限り `pr.diff.ranges.txt` の同一 path の範囲内に収める。
+修正が強く推奨される問題。`findings.verified.json` の `severity=should_fix` かつ `posting.post_policy=body_summary` から導出し、同じフォーマットで記載する。3軸 gate 不通過で `post_policy=local_only` に降格した finding はここに載せず `## 補足` に置く。M1 の `/pr-codex:send` では inline 自動投稿対象外のため、canonical finding の `posting.post_policy` は `body_summary` とする。見出し行番号は可能な限り `pr.diff.ranges.txt` の範囲内に寄せる
 
 ### `path/to/file.ext:L<行番号>` (もしくは `path/to/file.ext:L<開始>-L<終了>`)
 
@@ -1107,7 +1129,7 @@ mv ~/claude-loop-pr-codex/$org-$repository-$pr_number/validation-report.json.tmp
 
 レビュー完了後、Bash で `jq -n --arg` を使って `run-plan.json` と `status.json` を更新する。`run-plan.json` は同一ディレクトリ内の一時ファイルへ先に書き出し、`mv` で原子的に差し替えてから `status.json` を `completed` にする。
 
-まず現在時刻を取得する（出力を `$finished_at` として保持する）。続けて `review-rounds.json` を Read し、Step 4c で保持した round metrics を `$rounds_completed` / `$halt_reason` / `$verifier_fail_candidates` / `$suppressed_candidate_count` / `$no_new_evidence_rounds` / `$repeated_contradiction_events` / `$insufficient_evidence_events` / `$oscillation_detected` として `jq --argjson` に渡せる形で保持する。さらに provider/CLI がログに出力した actual USD cost だけを `tasks/extract_actual_cost.py` で抽出し、`$cost_json` として保持する。pricing table による推定は行わず、取得できない場合は `source="unavailable"` とする。
+まず現在時刻を取得する（出力を `$finished_at` として保持する）。続けて `review-rounds.json` を Read し、Step 4c で保持した round metrics を `$rounds_completed` / `$halt_reason` / `$verifier_fail_candidates` / `$suppressed_candidate_count` / `$no_new_evidence_rounds` / `$repeated_contradiction_events` / `$insufficient_evidence_events` / `$changed_candidate_count` / `$evidence_added_count` / `$disposition_changed_count` / `$remaining_active_count` / `$oscillation_detected` として `jq --argjson` に渡せる形で保持する。さらに provider/CLI がログに出力した actual USD cost だけを `tasks/extract_actual_cost.py` で抽出し、`$cost_json` として保持する。pricing table による推定は行わず、取得できない場合は `source="unavailable"` とする。
 
 ```bash
 date -u +%Y-%m-%dT%H:%M:%S+00:00
@@ -1125,7 +1147,7 @@ cost_json=$(python3 "$plugin_root/tasks/extract_actual_cost.py" --component clau
 
 ```bash
 tmp_run_plan=~/claude-loop-pr-codex/$org-$repository-$pr_number/run-plan.json.tmp
-jq -n --argjson files_changed "$files_changed" --argjson hunks "$hunks" --argjson lines_added "$lines_added" --argjson lines_removed "$lines_removed" --argjson risk_tags "$risk_tags_json" --argjson selected_hunters "$selected_hunters_json" --argjson pr_classification "$pr_classification_json" --arg depth_actual "$depth_actual" --arg depth_source "$depth_source" --arg depth_reason "$depth_reason" --arg depth_requested "$depth_requested" --argjson depth_downgraded "$depth_downgraded" --arg depth_downgrade_reason "$depth_downgrade_reason" --arg recommended_mode "$recommended_mode" --arg skip_reason "$skip_reason" --arg budget_class "$budget_class" --arg model_profile "$model_profile" --arg route "$route" --arg rationale "$rationale" --argjson estimated_stages "$estimated_stages" --argjson estimated_timeout_ms "$estimated_timeout_ms" --argjson review_loop "$review_loop_json" --argjson cost "$cost_json" --argjson rounds_completed "$rounds_completed" --arg halt_reason "$halt_reason" --argjson verifier_fail_candidates "$verifier_fail_candidates" --argjson suppressed_candidate_count "$suppressed_candidate_count" --argjson no_new_evidence_rounds "$no_new_evidence_rounds" --argjson repeated_contradiction_events "$repeated_contradiction_events" --argjson insufficient_evidence_events "$insufficient_evidence_events" --argjson oscillation_detected "$oscillation_detected" --arg started_at "$started_at" --arg finished_at "$finished_at" '{
+jq -n --argjson files_changed "$files_changed" --argjson hunks "$hunks" --argjson lines_added "$lines_added" --argjson lines_removed "$lines_removed" --argjson risk_tags "$risk_tags_json" --argjson selected_hunters "$selected_hunters_json" --argjson pr_classification "$pr_classification_json" --arg depth_actual "$depth_actual" --arg depth_source "$depth_source" --arg depth_reason "$depth_reason" --arg depth_requested "$depth_requested" --argjson depth_downgraded "$depth_downgraded" --arg depth_downgrade_reason "$depth_downgrade_reason" --arg recommended_mode "$recommended_mode" --arg skip_reason "$skip_reason" --arg budget_class "$budget_class" --arg model_profile "$model_profile" --arg route "$route" --arg rationale "$rationale" --argjson estimated_stages "$estimated_stages" --argjson estimated_timeout_ms "$estimated_timeout_ms" --argjson review_loop "$review_loop_json" --argjson cost "$cost_json" --argjson rounds_completed "$rounds_completed" --arg halt_reason "$halt_reason" --argjson verifier_fail_candidates "$verifier_fail_candidates" --argjson suppressed_candidate_count "$suppressed_candidate_count" --argjson no_new_evidence_rounds "$no_new_evidence_rounds" --argjson repeated_contradiction_events "$repeated_contradiction_events" --argjson insufficient_evidence_events "$insufficient_evidence_events" --argjson changed_candidate_count "$changed_candidate_count" --argjson evidence_added_count "$evidence_added_count" --argjson disposition_changed_count "$disposition_changed_count" --argjson remaining_active_count "$remaining_active_count" --argjson oscillation_detected "$oscillation_detected" --arg started_at "$started_at" --arg finished_at "$finished_at" '{
   files_changed: $files_changed,
   hunks: $hunks,
   lines_added: $lines_added,
@@ -1160,6 +1182,10 @@ jq -n --argjson files_changed "$files_changed" --argjson hunks "$hunks" --argjso
     no_new_evidence_rounds: $no_new_evidence_rounds,
     repeated_contradiction_events: $repeated_contradiction_events,
     insufficient_evidence_events: $insufficient_evidence_events,
+    changed_candidate_count: $changed_candidate_count,
+    evidence_added_count: $evidence_added_count,
+    disposition_changed_count: $disposition_changed_count,
+    remaining_active_count: $remaining_active_count,
     oscillation_detected: $oscillation_detected
   })
 }' > "$tmp_run_plan" && test -s "$tmp_run_plan" && mv "$tmp_run_plan" ~/claude-loop-pr-codex/$org-$repository-$pr_number/run-plan.json
@@ -1174,7 +1200,7 @@ jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" --arg head
 ```
 
 - いつ使うか: Step 4a または 4b が timeout / 非ゼロ終了した場合、権限不足などで処理継続不可の場合、**または Step 4c の `merge_hunter_results.py` が `HUNTER_DIFF_UNAVAILABLE`（終了コード 3）を返した場合、もしくは hunter result の schema 不適合が 1 回の再実行でも解消しなかった場合**に実行する
-- 事前条件: `$failed_stage` を `ranker` / `hunter` / `verifier` / `explainer` のいずれか 1 つに設定する。metadata/files/diff/run-plan 生成失敗は `ranker`、4a/4b timeout/非ゼロ/`HUNTER_DIFF_UNAVAILABLE`/hunter result schema 不適合/candidate validation 失敗は `hunter`、4軸/range/fingerprint/Must Fix 件数/`findings.verified.json` validator 失敗は `verifier`、temp write または temp→final `mv` 失敗は `explainer` とする
+- 事前条件: `$failed_stage` を `ranker` / `hunter` / `verifier` / `explainer` のいずれか 1 つに設定する。metadata/files/diff/run-plan 生成失敗は `ranker`、4a/4b timeout/非ゼロ/`HUNTER_DIFF_UNAVAILABLE`/hunter result schema 不適合/candidate validation 失敗は `hunter`、3軸/range/fingerprint/Must Fix 件数/`findings.verified.json` validator 失敗は `verifier`、temp write または temp→final `mv` 失敗は `explainer` とする
 - 判定条件: `status.json` の `state` が `failed` かつ `failed_stage` が `$failed_stage` と一致し、`tasks/validate_status.py` を通過する
 - 次アクション: Step 6 の結果報告へ進む
 
@@ -1318,7 +1344,7 @@ F4 stage reporting として、failed 分岐では必ず `$failed_stage` を 1 �
 $CLAUDE_PLUGIN_ROOT/skills/review/
   ├── SKILL.md                ← 本ファイル
   ├── HUNTER_CRITERIA.md      ← 4a / 4b 共通の hunter 観点本文。Step 4 前処理で Read し、{REVIEW_CRITERIA} プレースホルダに置換
-  ├── VERIFIER_POLICY.md      ← Step 4c 前半 (verifier) の 4軸 / evidence ladder / 二者一致 / security extension / clustering ポリシー
+  ├── VERIFIER_POLICY.md      ← Step 4c 前半 (verifier) の 3軸 gate / blast_radius / evidence ladder / 二者一致 / security extension / clustering ポリシー
   ├── EXPLAINER_POLICY.md     ← Step 4c 後半 (explainer) / send の review.md 構成 / Should Fix inline 整形 / SARIF 公開境界
   └── STAGES.md               ← ranker / hunter / verifier / explainer の責務・artifact・halting 条件
 $CLAUDE_PLUGIN_ROOT/tasks/

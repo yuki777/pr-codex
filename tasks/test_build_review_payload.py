@@ -789,7 +789,7 @@ class BuildReviewPayloadTest(unittest.TestCase):
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
         self.assertEqual(payload["event"], "APPROVE")
-        self.assertIn("- 検証観点: 2者レビュー (Claude/Codex hunter) + verifier 4軸 gate", payload["body"])
+        self.assertIn("- 検証観点: 2者レビュー (Claude/Codex hunter) + verifier 3軸 gate", payload["body"])
         self.assertIn("- CI 状態: 未取得", payload["body"])
         self.assertTrue(all(role not in manifest["files"] for role in ("ci_status", "run_plan", "ci_summary", "sarif", "diff")))
 

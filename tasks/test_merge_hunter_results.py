@@ -40,6 +40,14 @@ def valid_metadata(include_merge_commit_sha: bool = True) -> dict[str, Any]:
 def valid_candidate(**overrides: Any) -> dict[str, Any]:
     candidate: dict[str, Any] = {
         "title": "Unsafe value reaches command execution",
+        "evidence_state": "supported",
+        "evidence_level_suggestion": "verified",
+        "axes_suggestion": {
+            "real": "yes",
+            "triggerable": "yes",
+            "impactful": "yes",
+        },
+        "blast_radius_suggestion": "isolated",
         "severity_suggestion": "must_fix",
         "category_suggestion": "security",
         "path": "tasks/example.py",
@@ -186,6 +194,14 @@ class MergeHunterResultsTests(unittest.TestCase):
                     "candidate_id": "claude-001",
                     "source_agent": "claude",
                     "source_ref": "claude-review.json#candidates[0]",
+                    "evidence_state": "supported",
+                    "evidence_level": "verified",
+                    "axes": {
+                        "real": "yes",
+                        "triggerable": "yes",
+                        "impactful": "yes",
+                    },
+                    "blast_radius": "isolated",
                     "location": {"path": "tasks/example.py", "start_line": 10, "side": "RIGHT"},
                     "severity_raw": "must_fix",
                     "category_raw": "security",
@@ -198,6 +214,14 @@ class MergeHunterResultsTests(unittest.TestCase):
                     "candidate_id": "codex-001",
                     "source_agent": "codex",
                     "source_ref": "codex-review.json#candidates[0]",
+                    "evidence_state": "supported",
+                    "evidence_level": "verified",
+                    "axes": {
+                        "real": "yes",
+                        "triggerable": "yes",
+                        "impactful": "yes",
+                    },
+                    "blast_radius": "isolated",
                     "location": {
                         "path": "tasks/range.py",
                         "start_line": 21,

@@ -40,7 +40,7 @@ class ValidateExpectedFindingsTest(unittest.TestCase):
         self.assertNotIn("Traceback", completed.stderr)
 
     def test_existing_fixture_oracles_are_valid(self) -> None:
-        for name in ("small", "medium", "large"):
+        for name in ("small", "medium", "large", "positive"):
             with self.subTest(name=name):
                 self.assertEqual(validate_expected_findings(self.load_fixture(name)), [])
 

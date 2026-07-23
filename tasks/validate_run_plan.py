@@ -68,10 +68,9 @@ RISK_TAG_CASES = [
 
 
 DEPTH_REASON_LARGE_DEFAULT = "changed lines > 5000; selected standard to preserve the 20 minute timeout"
-DEPTH_REASON_AUTO_DEEP = (
-    "risk_tags include security or data_migration and PR size is <= 20 files / <= 1500 changed lines; selected deep"
+DEPTH_REASON_INITIAL_STANDARD = (
+    "automatic deep deferred until the initial candidate gate; selected default standard"
 )
-DEPTH_REASON_DEFAULT_STANDARD = "no high-risk small-PR signal; selected default standard"
 
 
 def load_json(path: Path) -> object:
@@ -266,6 +265,18 @@ def run_duration_template(plan: dict[str, object], started_at: str, finished_at:
             "0",
             "--argjson",
             "insufficient_evidence_events",
+            "0",
+            "--argjson",
+            "changed_candidate_count",
+            "1",
+            "--argjson",
+            "evidence_added_count",
+            "1",
+            "--argjson",
+            "disposition_changed_count",
+            "1",
+            "--argjson",
+            "remaining_active_count",
             "0",
             "--argjson",
             "oscillation_detected",
@@ -633,17 +644,19 @@ def validate_threshold_behavior(schema: dict[str, object]) -> None:
     assert compact_default["depth_actual"] == "standard"
     assert compact_default["depth_source"] == "default"
     assert compact_default["depth_requested"] is None
-    assert compact_default["depth_reason"] == DEPTH_REASON_DEFAULT_STANDARD
+    assert compact_default["depth_reason"] == DEPTH_REASON_INITIAL_STANDARD
     assert compact_default["depth_downgraded"] is False
     assert compact_default["depth_downgrade_reason"] is None
     validate_schema(schema, compact_default)
 
     security_auto = synthetic_plan(["src/auth/login.go"], 2, 100, 50)
     assert security_auto["risk_tags"] == ["security"]
-    assert security_auto["depth_actual"] == "deep"
-    assert security_auto["depth_source"] == "auto"
+    assert security_auto["depth_actual"] == "standard"
+    assert security_auto["depth_source"] == "default"
     assert security_auto["depth_requested"] is None
-    assert security_auto["depth_reason"] == DEPTH_REASON_AUTO_DEEP
+    assert security_auto["depth_reason"] == DEPTH_REASON_INITIAL_STANDARD
+    assert security_auto["review_loop"]["halting_policy"]["max_rounds"] == 3
+    assert compact_default["review_loop"]["halting_policy"]["max_rounds"] == 2
     validate_schema(schema, security_auto)
 
     line_heavy = synthetic_plan([f"src/module_{index}.ts" for index in range(20)], 80, 5001, 0)
@@ -749,8 +762,8 @@ def validate_routing_matrix(schema: dict[str, object]) -> None:
             0,
             "medium",
             "standard",
-            "deep",
-            "deep",
+            "standard",
+            "standard",
         ),
     ]
     for files, hunks, lines_added, lines_removed, budget_class, recommended_mode, depth_actual, model_profile in cases:
@@ -1053,7 +1066,16 @@ def validate_schema_contract(schema: dict[str, object]) -> None:
     for key in ("max_rounds", "time_budget_ms", "no_new_evidence_rounds", "repeated_contradiction_limit"):
         assert key in halting_policy["properties"], f"halting_policy missing {key}"
     round_metrics = review_loop_schema["properties"]["round_metrics"]
-    for key in ("rounds_completed", "halt_reason", "verifier_fail_candidates", "repeated_contradiction_events"):
+    for key in (
+        "rounds_completed",
+        "halt_reason",
+        "verifier_fail_candidates",
+        "repeated_contradiction_events",
+        "changed_candidate_count",
+        "evidence_added_count",
+        "disposition_changed_count",
+        "remaining_active_count",
+    ):
         assert key in round_metrics["properties"], f"round_metrics missing {key}"
     assert schema["properties"]["depth_actual"]["enum"] == ["deep", "standard"]
     assert schema["properties"]["depth_source"]["enum"] == ["auto", "default"]
@@ -1128,7 +1150,11 @@ def validate_schema_contract(schema: dict[str, object]) -> None:
     if schema_matches(schema, default_with_deep_actual):
         raise AssertionError("schema must reject depth_source=default with depth_actual=deep")
 
-    auto_with_standard_actual = dict(synthetic_plan(["src/auth/login.go"], 1, 1, 0), depth_actual="standard")
+    auto_with_standard_actual = dict(
+        synthetic_plan(["src/auth/login.go"], 1, 1, 0),
+        depth_source="auto",
+        depth_actual="standard",
+    )
     if schema_matches(schema, auto_with_standard_actual):
         raise AssertionError("schema must reject depth_source=auto with depth_actual=standard")
 
@@ -1145,7 +1171,7 @@ def main() -> None:
     validate_schema_contract(schema)
     validate_paginated_files_template()
     validate_paginated_files_pipefail()
-    for fixture in ("small", "medium", "large"):
+    for fixture in ("small", "medium", "large", "positive"):
         validate_fixture(fixture, schema)
     validate_threshold_behavior(schema)
     validate_routing_matrix(schema)

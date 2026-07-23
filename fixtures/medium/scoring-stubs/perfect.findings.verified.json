@@ -38,14 +38,14 @@
       "axes": {
         "real": "yes",
         "triggerable": "unknown",
-        "impactful": "yes",
-        "general": "no"
+        "impactful": "yes"
       },
       "posting": {
         "post_policy": "local_only",
         "explanation_postable": true,
         "audience": "human_reviewer"
-      }
+      },
+      "blast_radius": "isolated"
     }
   ]
 }

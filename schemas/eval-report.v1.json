@@ -33,12 +33,16 @@
         "no_new_evidence_rounds",
         "repeated_contradiction_events",
         "insufficient_evidence_events",
+        "changed_candidate_count",
+        "evidence_added_count",
+        "disposition_changed_count",
+        "remaining_active_count",
         "oscillation_detected"
       ],
       "properties": {
         "enabled": {"type": "boolean"},
         "rounds_completed": {"type": "integer", "minimum": 0},
-        "max_rounds": {"type": "integer", "minimum": 1},
+        "max_rounds": {"type": "integer", "minimum": 1, "maximum": 3},
         "halt_reason": {
           "type": ["string", "null"],
           "enum": [
@@ -58,25 +62,43 @@
         "no_new_evidence_rounds": {"type": "integer", "minimum": 0},
         "repeated_contradiction_events": {"type": "integer", "minimum": 0},
         "insufficient_evidence_events": {"type": "integer", "minimum": 0},
+        "changed_candidate_count": {"type": ["integer", "null"], "minimum": 0},
+        "evidence_added_count": {"type": ["integer", "null"], "minimum": 0},
+        "disposition_changed_count": {"type": ["integer", "null"], "minimum": 0},
+        "remaining_active_count": {"type": ["integer", "null"], "minimum": 0},
         "oscillation_detected": {"type": "boolean"}
       }
     },
     "score_metrics": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["exact_pass_rate", "acceptable_pass_rate", "false_positive_rate"],
+      "required": ["exact_pass_rate", "acceptable_pass_rate", "false_positive_rate", "recall_known_bug"],
       "properties": {
         "exact_pass_rate": {"$ref": "#/$defs/rate"},
         "acceptable_pass_rate": {"$ref": "#/$defs/rate"},
-        "false_positive_rate": {"$ref": "#/$defs/rate"}
+        "false_positive_rate": {"$ref": "#/$defs/rate"},
+        "recall_known_bug": {"$ref": "#/$defs/rate"}
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "reasoning_effort", "completion_rate", "avg_duration_ms", "avg_tokens"],
+      "properties": {
+        "model": {"type": "string", "minLength": 1},
+        "reasoning_effort": {"enum": ["default", "high", "xhigh", "max", "mixed"]},
+        "completion_rate": {"$ref": "#/$defs/rate"},
+        "avg_duration_ms": {"$ref": "#/$defs/non_negative_number"},
+        "avg_tokens": {"type": ["number", "null"], "minimum": 0}
       }
     },
     "run_result": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["score_metrics", "round_metrics"],
+      "required": ["score_metrics", "execution", "round_metrics"],
       "properties": {
         "score_metrics": {"$ref": "#/$defs/score_metrics"},
+        "execution": {"$ref": "#/$defs/execution"},
         "round_metrics": {"$ref": "#/$defs/round_metrics"}
       }
     },

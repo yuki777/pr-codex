@@ -1,0 +1,286 @@
+{
+  "schema_version": "eval-report.v1",
+  "generated_at": "2026-07-23T00:00:00Z",
+  "aggregate": {
+    "baseline": {
+      "score_metrics": {
+        "exact_pass_rate": 1.0,
+        "acceptable_pass_rate": 0.7778,
+        "false_positive_rate": 0.0,
+        "recall_known_bug": 1.0
+      },
+      "execution": {
+        "model": "mixed",
+        "reasoning_effort": "mixed",
+        "completion_rate": 1.0,
+        "avg_duration_ms": 51504.3333,
+        "avg_tokens": null
+      },
+      "round_metrics": {
+        "enabled": true,
+        "rounds_completed": 2,
+        "max_rounds": 3,
+        "halt_reason": "max_rounds",
+        "elapsed_ms": 51504,
+        "time_budget_ms": 1200000,
+        "verifier_fail_candidates": 0,
+        "suppressed_candidate_count": 0,
+        "no_new_evidence_rounds": 0,
+        "repeated_contradiction_events": 0,
+        "insufficient_evidence_events": 0,
+        "changed_candidate_count": null,
+        "evidence_added_count": null,
+        "disposition_changed_count": null,
+        "remaining_active_count": null,
+        "oscillation_detected": false
+      }
+    },
+    "iterative": {
+      "score_metrics": {
+        "exact_pass_rate": 1.0,
+        "acceptable_pass_rate": 1.0,
+        "false_positive_rate": 0.0,
+        "recall_known_bug": 1.0
+      },
+      "execution": {
+        "model": "mixed",
+        "reasoning_effort": "mixed",
+        "completion_rate": 1.0,
+        "avg_duration_ms": 34831.3333,
+        "avg_tokens": null
+      },
+      "round_metrics": {
+        "enabled": true,
+        "rounds_completed": 1,
+        "max_rounds": 3,
+        "halt_reason": "all_candidates_verified",
+        "elapsed_ms": 34831,
+        "time_budget_ms": 1200000,
+        "verifier_fail_candidates": 0,
+        "suppressed_candidate_count": 0,
+        "no_new_evidence_rounds": 0,
+        "repeated_contradiction_events": 0,
+        "insufficient_evidence_events": 0,
+        "changed_candidate_count": null,
+        "evidence_added_count": null,
+        "disposition_changed_count": null,
+        "remaining_active_count": null,
+        "oscillation_detected": false
+      }
+    },
+    "delta": {
+      "acceptable_pass_rate": 0.2222,
+      "false_positive_rate": 0.0,
+      "avg_rounds_completed": -0.6667
+    }
+  },
+  "fixtures": [
+    {
+      "fixture_id": "pr-codex-positive-seeded-001-round-policy",
+      "baseline": {
+        "score_metrics": {
+          "exact_pass_rate": 1.0,
+          "acceptable_pass_rate": 1.0,
+          "false_positive_rate": 0.0,
+          "recall_known_bug": 1.0
+        },
+        "execution": {
+          "model": "gpt-5.6-sol",
+          "reasoning_effort": "high",
+          "completion_rate": 1.0,
+          "avg_duration_ms": 86460,
+          "avg_tokens": 66327
+        },
+        "round_metrics": {
+          "enabled": true,
+          "rounds_completed": 3,
+          "max_rounds": 3,
+          "halt_reason": "max_rounds",
+          "elapsed_ms": 86460,
+          "time_budget_ms": 1200000,
+          "verifier_fail_candidates": 0,
+          "suppressed_candidate_count": 0,
+          "no_new_evidence_rounds": 0,
+          "repeated_contradiction_events": 0,
+          "insufficient_evidence_events": 0,
+          "changed_candidate_count": null,
+          "evidence_added_count": null,
+          "disposition_changed_count": null,
+          "remaining_active_count": null,
+          "oscillation_detected": false
+        }
+      },
+      "iterative": {
+        "score_metrics": {
+          "exact_pass_rate": 1.0,
+          "acceptable_pass_rate": 1.0,
+          "false_positive_rate": 0.0,
+          "recall_known_bug": 1.0
+        },
+        "execution": {
+          "model": "gpt-5.6-sol",
+          "reasoning_effort": "high",
+          "completion_rate": 1.0,
+          "avg_duration_ms": 43452,
+          "avg_tokens": 23285
+        },
+        "round_metrics": {
+          "enabled": true,
+          "rounds_completed": 1,
+          "max_rounds": 3,
+          "halt_reason": "all_candidates_verified",
+          "elapsed_ms": 43452,
+          "time_budget_ms": 1200000,
+          "verifier_fail_candidates": 0,
+          "suppressed_candidate_count": 0,
+          "no_new_evidence_rounds": 0,
+          "repeated_contradiction_events": 0,
+          "insufficient_evidence_events": 0,
+          "changed_candidate_count": null,
+          "evidence_added_count": null,
+          "disposition_changed_count": null,
+          "remaining_active_count": null,
+          "oscillation_detected": false
+        }
+      }
+    },
+    {
+      "fixture_id": "pr-codex-positive-seeded-001-preflight-effort",
+      "baseline": {
+        "score_metrics": {
+          "exact_pass_rate": 1.0,
+          "acceptable_pass_rate": 1.0,
+          "false_positive_rate": 0.0,
+          "recall_known_bug": 1.0
+        },
+        "execution": {
+          "model": "gpt-5.6-sol",
+          "reasoning_effort": "xhigh",
+          "completion_rate": 1.0,
+          "avg_duration_ms": 32205,
+          "avg_tokens": 21091
+        },
+        "round_metrics": {
+          "enabled": false,
+          "rounds_completed": 1,
+          "max_rounds": 1,
+          "halt_reason": "all_candidates_verified",
+          "elapsed_ms": 32205,
+          "time_budget_ms": 1200000,
+          "verifier_fail_candidates": 0,
+          "suppressed_candidate_count": 0,
+          "no_new_evidence_rounds": 0,
+          "repeated_contradiction_events": 0,
+          "insufficient_evidence_events": 0,
+          "changed_candidate_count": null,
+          "evidence_added_count": null,
+          "disposition_changed_count": null,
+          "remaining_active_count": null,
+          "oscillation_detected": false
+        }
+      },
+      "iterative": {
+        "score_metrics": {
+          "exact_pass_rate": 1.0,
+          "acceptable_pass_rate": 1.0,
+          "false_positive_rate": 0.0,
+          "recall_known_bug": 1.0
+        },
+        "execution": {
+          "model": "gpt-5.6-sol",
+          "reasoning_effort": "high",
+          "completion_rate": 1.0,
+          "avg_duration_ms": 14173,
+          "avg_tokens": 19690
+        },
+        "round_metrics": {
+          "enabled": false,
+          "rounds_completed": 1,
+          "max_rounds": 1,
+          "halt_reason": "all_candidates_verified",
+          "elapsed_ms": 14173,
+          "time_budget_ms": 1200000,
+          "verifier_fail_candidates": 0,
+          "suppressed_candidate_count": 0,
+          "no_new_evidence_rounds": 0,
+          "repeated_contradiction_events": 0,
+          "insufficient_evidence_events": 0,
+          "changed_candidate_count": null,
+          "evidence_added_count": null,
+          "disposition_changed_count": null,
+          "remaining_active_count": null,
+          "oscillation_detected": false
+        }
+      }
+    },
+    {
+      "fixture_id": "pr-codex-positive-seeded-001-fable-prompt",
+      "baseline": {
+        "score_metrics": {
+          "exact_pass_rate": 1.0,
+          "acceptable_pass_rate": 0.3333,
+          "false_positive_rate": 0.0,
+          "recall_known_bug": 1.0
+        },
+        "execution": {
+          "model": "claude-fable-5",
+          "reasoning_effort": "default",
+          "completion_rate": 1.0,
+          "avg_duration_ms": 35848,
+          "avg_tokens": null
+        },
+        "round_metrics": {
+          "enabled": false,
+          "rounds_completed": 1,
+          "max_rounds": 1,
+          "halt_reason": "all_candidates_verified",
+          "elapsed_ms": 35848,
+          "time_budget_ms": 1200000,
+          "verifier_fail_candidates": 0,
+          "suppressed_candidate_count": 0,
+          "no_new_evidence_rounds": 0,
+          "repeated_contradiction_events": 0,
+          "insufficient_evidence_events": 0,
+          "changed_candidate_count": null,
+          "evidence_added_count": null,
+          "disposition_changed_count": null,
+          "remaining_active_count": null,
+          "oscillation_detected": false
+        }
+      },
+      "iterative": {
+        "score_metrics": {
+          "exact_pass_rate": 1.0,
+          "acceptable_pass_rate": 1.0,
+          "false_positive_rate": 0.0,
+          "recall_known_bug": 1.0
+        },
+        "execution": {
+          "model": "claude-fable-5",
+          "reasoning_effort": "default",
+          "completion_rate": 1.0,
+          "avg_duration_ms": 46869,
+          "avg_tokens": null
+        },
+        "round_metrics": {
+          "enabled": false,
+          "rounds_completed": 1,
+          "max_rounds": 1,
+          "halt_reason": "all_candidates_verified",
+          "elapsed_ms": 46869,
+          "time_budget_ms": 1200000,
+          "verifier_fail_candidates": 0,
+          "suppressed_candidate_count": 0,
+          "no_new_evidence_rounds": 0,
+          "repeated_contradiction_events": 0,
+          "insufficient_evidence_events": 0,
+          "changed_candidate_count": null,
+          "evidence_added_count": null,
+          "disposition_changed_count": null,
+          "remaining_active_count": null,
+          "oscillation_detected": false
+        }
+      }
+    }
+  ]
+}

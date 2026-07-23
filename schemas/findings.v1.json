@@ -66,6 +66,14 @@
         "unknown"
       ]
     },
+    "blast_radius": {
+      "enum": [
+        "isolated",
+        "component",
+        "systemic",
+        "unknown"
+      ]
+    },
     "evidence_level": {
       "enum": [
         "suspicion",
@@ -212,8 +220,7 @@
       "required": [
         "real",
         "triggerable",
-        "impactful",
-        "general"
+        "impactful"
       ],
       "properties": {
         "real": {
@@ -223,9 +230,6 @@
           "$ref": "#/$defs/axis_value"
         },
         "impactful": {
-          "$ref": "#/$defs/axis_value"
-        },
-        "general": {
           "$ref": "#/$defs/axis_value"
         }
       }
@@ -366,6 +370,7 @@
         "suggestion",
         "evidence_level",
         "axes",
+        "blast_radius",
         "posting"
       ],
       "properties": {
@@ -417,6 +422,10 @@
         },
         "axes": {
           "$ref": "#/$defs/axes"
+        },
+        "blast_radius": {
+          "$ref": "#/$defs/blast_radius",
+          "description": "Non-gating metadata describing how broadly the verified impact can spread. It never participates in Must Fix eligibility."
         },
         "posting": {
           "$ref": "#/$defs/posting"

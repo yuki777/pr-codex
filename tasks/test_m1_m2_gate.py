@@ -22,12 +22,17 @@ from validate_m1_m2_gate import validate_m1_m2_gate  # noqa: E402
 from validate_score_report import validate_score_report  # noqa: E402
 
 EVALUATED_AT = "2026-05-06T00:00:00Z"
+FIXTURE_NAMES = ("small", "medium", "large", "positive")
 
 
 def perfect_score(size: str = "small") -> dict[str, object]:
     expected = load_json(ROOT / "fixtures" / size / "expected-findings.json")
     actual = load_json(ROOT / "fixtures" / size / "scoring-stubs" / "perfect.findings.verified.json")
     return score_fixture(expected, actual, EVALUATED_AT)
+
+
+def perfect_scores() -> list[dict[str, object]]:
+    return [perfect_score(name) for name in FIXTURE_NAMES]
 
 
 def passing_inputs() -> dict[str, object]:
@@ -49,7 +54,7 @@ class M1M2GateTest(unittest.TestCase):
 
     def test_fixture_gate_threshold_table_matches_fixture_oracles(self) -> None:
         actual = {}
-        for size in ("small", "medium", "large"):
+        for size in FIXTURE_NAMES:
             expected = load_json(ROOT / "fixtures" / size / "expected-findings.json")
             actual[expected["fixture_id"]] = expected["scoring_gate"]
         self.assertEqual(actual, EXPECTED_FIXTURE_SCORING_GATES)
@@ -58,14 +63,14 @@ class M1M2GateTest(unittest.TestCase):
             self.assertEqual(len(contract["expected_finding_ids"]), len(contract["expected_breakdown_rows"]))
 
     def test_all_pass_when_operational_inputs_and_fixture_scores_pass(self) -> None:
-        report = build_report([perfect_score("small"), perfect_score("medium"), perfect_score("large")], passing_inputs(), EVALUATED_AT)
+        report = build_report(perfect_scores(), passing_inputs(), EVALUATED_AT)
         self.assertEqual(validate_m1_m2_gate(report), [])
         self.assertEqual(report["overall_status"], "pass")
         self.assertTrue(all(item["status"] == "pass" for item in report["criteria"]))
 
     def test_missing_operational_inputs_are_unknown_not_fail(self) -> None:
         report = build_report(
-            [perfect_score("small"), perfect_score("medium"), perfect_score("large")],
+            perfect_scores(),
             {"schema_version": "m1-m2-inputs.v1"},
             EVALUATED_AT,
         )
@@ -86,7 +91,7 @@ class M1M2GateTest(unittest.TestCase):
             with self.subTest(criterion=criterion):
                 inputs = passing_inputs()
                 inputs.update(mutation)
-                report = build_report([perfect_score("small"), perfect_score("medium"), perfect_score("large")], inputs, EVALUATED_AT)
+                report = build_report(perfect_scores(), inputs, EVALUATED_AT)
                 by_name = self.criteria_by_name(report)
                 self.assertEqual(by_name[criterion]["status"], "fail")
                 self.assertEqual(report["overall_status"], "fail")
@@ -95,7 +100,11 @@ class M1M2GateTest(unittest.TestCase):
         expected = load_json(ROOT / "fixtures" / "small" / "expected-findings.json")
         actual = load_json(ROOT / "fixtures" / "small" / "scoring-stubs" / "missed-known-bug.findings.verified.json")
         failing_score = score_fixture(expected, actual, EVALUATED_AT)
-        report = build_report([failing_score, perfect_score("medium"), perfect_score("large")], passing_inputs(), EVALUATED_AT)
+        report = build_report(
+            [failing_score, perfect_score("medium"), perfect_score("large"), perfect_score("positive")],
+            passing_inputs(),
+            EVALUATED_AT,
+        )
         by_name = self.criteria_by_name(report)
         self.assertEqual(by_name["fixture_scoring_gate"]["status"], "fail")
         self.assertEqual(report["overall_status"], "fail")
@@ -110,7 +119,11 @@ class M1M2GateTest(unittest.TestCase):
                 check["passed"] = True
         edited["gate_pass"] = True
         self.assertFalse(score_report_gate_consistent(edited))
-        report = build_report([edited, perfect_score("medium"), perfect_score("large")], passing_inputs(), EVALUATED_AT)
+        report = build_report(
+            [edited, perfect_score("medium"), perfect_score("large"), perfect_score("positive")],
+            passing_inputs(),
+            EVALUATED_AT,
+        )
         by_name = self.criteria_by_name(report)
         self.assertEqual(by_name["fixture_scoring_gate"]["status"], "fail")
         self.assertEqual(report["overall_status"], "fail")
@@ -124,7 +137,11 @@ class M1M2GateTest(unittest.TestCase):
         ]
         edited["gate_pass"] = True
         self.assertFalse(score_report_gate_consistent(edited))
-        report = build_report([edited, perfect_score("medium"), perfect_score("large")], passing_inputs(), EVALUATED_AT)
+        report = build_report(
+            [edited, perfect_score("medium"), perfect_score("large"), perfect_score("positive")],
+            passing_inputs(),
+            EVALUATED_AT,
+        )
         by_name = self.criteria_by_name(report)
         self.assertEqual(by_name["fixture_scoring_gate"]["status"], "fail")
         self.assertEqual(report["overall_status"], "fail")
@@ -140,7 +157,11 @@ class M1M2GateTest(unittest.TestCase):
                 check["passed"] = True
         edited["gate_pass"] = True
         self.assertFalse(score_report_gate_consistent(edited))
-        report = build_report([edited, perfect_score("medium"), perfect_score("large")], passing_inputs(), EVALUATED_AT)
+        report = build_report(
+            [edited, perfect_score("medium"), perfect_score("large"), perfect_score("positive")],
+            passing_inputs(),
+            EVALUATED_AT,
+        )
         by_name = self.criteria_by_name(report)
         self.assertEqual(by_name["fixture_scoring_gate"]["status"], "fail")
         self.assertEqual(report["overall_status"], "fail")
@@ -148,7 +169,7 @@ class M1M2GateTest(unittest.TestCase):
     def test_fixture_gate_rejects_relabelled_score_reports(self) -> None:
         small_report = perfect_score("small")
         score_reports = []
-        for size in ("small", "medium", "large"):
+        for size in FIXTURE_NAMES:
             expected = load_json(ROOT / "fixtures" / size / "expected-findings.json")
             report = copy.deepcopy(small_report)
             report["fixture_id"] = expected["fixture_id"]
@@ -174,9 +195,14 @@ class M1M2GateTest(unittest.TestCase):
 
     def test_fixture_scoring_requires_exact_expected_fixture_set(self) -> None:
         cases = {
-            "missing": [perfect_score("small"), perfect_score("medium")],
-            "duplicate": [perfect_score("small"), perfect_score("small"), perfect_score("large")],
-            "unknown": [dict(perfect_score("small"), fixture_id="unknown-fixture"), perfect_score("medium"), perfect_score("large")],
+            "missing": [perfect_score("small"), perfect_score("medium"), perfect_score("large")],
+            "duplicate": [*perfect_scores(), perfect_score("small")],
+            "unknown": [
+                dict(perfect_score("small"), fixture_id="unknown-fixture"),
+                perfect_score("medium"),
+                perfect_score("large"),
+                perfect_score("positive"),
+            ],
         }
         for name, score_reports in cases.items():
             with self.subTest(name=name):
@@ -191,7 +217,7 @@ class M1M2GateTest(unittest.TestCase):
         inputs["step_4_5_pass_rate_current"] = 1.46
         inputs["loop_completion_rate_baseline"] = -0.1
         inputs["loop_completion_rate_current"] = -0.05
-        report = build_report([perfect_score("small"), perfect_score("medium"), perfect_score("large")], inputs, EVALUATED_AT)
+        report = build_report(perfect_scores(), inputs, EVALUATED_AT)
         by_name = self.criteria_by_name(report)
         self.assertEqual(by_name["step_4_5_pass_rate"]["status"], "unknown")
         self.assertEqual(by_name["loop_completion_rate"]["status"], "unknown")
@@ -207,7 +233,7 @@ class M1M2GateTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             score_paths = []
-            for size in ("small", "medium", "large"):
+            for size in FIXTURE_NAMES:
                 score_path = tmp_path / f"score-{size}.json"
                 score_path.write_text(json.dumps(perfect_score(size), ensure_ascii=True), encoding="utf-8")
                 score_paths.append(score_path)

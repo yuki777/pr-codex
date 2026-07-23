@@ -43,8 +43,8 @@ def valid_artifact() -> dict[str, object]:
             "real": "yes",
             "triggerable": "yes",
             "impactful": "yes",
-            "general": "yes",
         },
+        "blast_radius": "component",
         "posting": {
             "post_policy": "inline",
             "explanation_postable": True,
@@ -307,54 +307,25 @@ class ValidateFindingsTest(unittest.TestCase):
                 mutate(artifact["findings"][0])
                 self.assertEqual(validate_artifact(self.schema, artifact), [])
 
-    def test_must_fix_four_axes_gate_is_validator_enforced(self) -> None:
-        gate_message = (
-            "must_fix requires axes={real,triggerable,impactful}=yes "
-            "and (general=yes or evidence_level in {impact_explained, verified})"
-        )
+    def test_must_fix_truth_axes_gate_is_validator_enforced(self) -> None:
+        gate_message = "must_fix requires axes={real,triggerable,impactful}=yes"
         mutations = {
-            "real-no": (
-                lambda f: f["axes"].update(real="no"),
-                gate_message,
-            ),
-            "triggerable-unknown": (
-                lambda f: f["axes"].update(triggerable="unknown"),
-                gate_message,
-            ),
-            "impactful-unknown": (
-                lambda f: f["axes"].update(impactful="unknown"),
-                gate_message,
-            ),
-            "general-unknown-without-specific-impact": (
-                lambda f: (f["axes"].update(general="unknown"), f.update(evidence_level="trigger_path_identified")),
-                gate_message,
-            ),
-            "specific-general-without-impact-evidence": (
-                lambda f: (f["axes"].update(general="no"), f.update(evidence_level="trigger_path_identified")),
-                gate_message,
-            ),
-            "suspicion": (
-                lambda f: f.update(evidence_level="suspicion"),
-                "must_fix findings must not use evidence_level=suspicion",
-            ),
+            "real-no": lambda f: f["axes"].update(real="no"),
+            "triggerable-unknown": lambda f: f["axes"].update(triggerable="unknown"),
+            "impactful-unknown": lambda f: f["axes"].update(impactful="unknown"),
         }
-        for name, (mutate, expected_fragment) in mutations.items():
+        for name, mutate in mutations.items():
             with self.subTest(name=name):
                 artifact = copy.deepcopy(valid_artifact())
                 mutate(artifact["findings"][0])
-                self.assert_invalid_without_crash(artifact, expected_fragment)
+                self.assert_invalid_without_crash(artifact, gate_message)
 
-    def test_general_no_must_fix_passes_when_verified_specific_impact_is_explained(self) -> None:
-        artifact = copy.deepcopy(valid_artifact())
-        artifact["findings"][0]["axes"]["general"] = "no"
-        artifact["findings"][0]["evidence_level"] = "verified"
-        self.assertEqual(validate_artifact(self.schema, artifact), [])
-
-    def test_general_unknown_must_fix_passes_when_verified_specific_impact_is_explained(self) -> None:
-        artifact = copy.deepcopy(valid_artifact())
-        artifact["findings"][0]["axes"]["general"] = "unknown"
-        artifact["findings"][0]["evidence_level"] = "verified"
-        self.assertEqual(validate_artifact(self.schema, artifact), [])
+    def test_blast_radius_is_non_gating_metadata_for_must_fix(self) -> None:
+        for blast_radius in ("isolated", "component", "systemic", "unknown"):
+            with self.subTest(blast_radius=blast_radius):
+                artifact = copy.deepcopy(valid_artifact())
+                artifact["findings"][0]["blast_radius"] = blast_radius
+                self.assertEqual(validate_artifact(self.schema, artifact), [])
 
     def test_unknown_axes_are_allowed_below_must_fix(self) -> None:
         artifact = copy.deepcopy(valid_artifact())

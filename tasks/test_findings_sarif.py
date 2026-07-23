@@ -47,7 +47,8 @@ def make_finding(
         "reason": "The generated artifact must preserve review context without leaking host absolute paths.",
         "suggestion": "Keep repository-relative paths and redact host-local details.",
         "evidence_level": evidence_level,
-        "axes": {"real": "yes", "triggerable": "yes", "impactful": "yes", "general": "yes"},
+        "axes": {"real": "yes", "triggerable": "yes", "impactful": "yes"},
+        "blast_radius": "component",
         "posting": {"post_policy": post_policy, "explanation_postable": explanation_postable},
     }
     if category == "security":

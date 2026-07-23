@@ -249,7 +249,7 @@ def validate_axes_diff(errors: list[str], path: str, value: Any) -> None:
         return
     for axis, diff in value.items():
         item_path = f"{path}.{axis}"
-        if axis not in {"real", "triggerable", "impactful", "general"}:
+        if axis not in {"real", "triggerable", "impactful"}:
             errors.append(f"{item_path}: invalid axis")
         if not isinstance(diff, dict):
             errors.append(f"{item_path}: must be an object")

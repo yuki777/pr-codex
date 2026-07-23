@@ -95,7 +95,7 @@ class Issue109DocsTest(unittest.TestCase):
         self.assertIn("EXPLAINER_POLICY.md", step4c)
 
         verifier = VERIFIER_POLICY.read_text(encoding="utf-8")
-        for snippet in ("## 4軸ゲート", "エビデンスラダー", "## security extension", "## Root-cause clustering"):
+        for snippet in ("## 3軸ゲート", "エビデンスラダー", "## security extension", "## Root-cause clustering"):
             self.assertIn(snippet, verifier)
 
         explainer = EXPLAINER_POLICY.read_text(encoding="utf-8")

@@ -1,0 +1,20 @@
+{
+  "fixture_id": "pr-codex-positive-seeded-001",
+  "size": "small",
+  "fixture_type": "positive_seeded",
+  "source": {
+    "repository": "pr-codex/synthetic-fixtures",
+    "pr_number": 1,
+    "pr_title": "Add batch refunds and compact pagination cursors",
+    "base_sha": "447a8d428c2a0a503cc21cb288c6ef46f42edde1f1d4cf61afe918eb1d2bfd96",
+    "head_sha": "456d082d6c19cd5118e79e0431687ef6383b7bdd590cfe8724d9aa4492703e06",
+    "source_url": "urn:pr-codex:fixture:positive-seeded-001",
+    "additions": 27,
+    "deletions": 21,
+    "changed_files": 2,
+    "license": "CC0-1.0",
+    "frozen_patch_path": "diff.patch",
+    "base_snapshot_path": "base",
+    "authored_at": "2026-07-23T00:00:00Z"
+  }
+}

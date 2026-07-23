@@ -21,6 +21,10 @@ TOP_LEVEL_KEYS = {"schema_version", "status", "candidates", "coverage"}
 COVERAGE_KEYS = {"high_risk_paths_checked", "checks_run", "limitations"}
 CANDIDATE_KEYS = {
     "title",
+    "evidence_state",
+    "evidence_level_suggestion",
+    "axes_suggestion",
+    "blast_radius_suggestion",
     "severity_suggestion",
     "category_suggestion",
     "path",
@@ -41,6 +45,17 @@ METADATA_REQUIRED_KEYS = {
 }
 HUNTER_STATUSES = {"findings", "clean", "diff_unavailable"}
 SEVERITY_SUGGESTIONS = {"must_fix", "should_fix", "nit", "note"}
+EVIDENCE_STATES = {"supported", "needs_evidence"}
+EVIDENCE_LEVELS = {
+    "suspicion",
+    "corroborated",
+    "trigger_path_identified",
+    "impact_explained",
+    "verified",
+}
+AXIS_VALUES = {"yes", "no", "unknown"}
+AXES_KEYS = {"real", "triggerable", "impactful"}
+BLAST_RADII = {"isolated", "component", "systemic", "unknown"}
 SIDES = {"LEFT", "RIGHT"}
 
 
@@ -150,6 +165,24 @@ def validate_candidate(errors: list[str], candidate: Any, index: int) -> None:
         errors.append(
             f"{path}.severity_suggestion: must be one of must_fix, should_fix, nit, note"
         )
+    evidence_state = candidate.get("evidence_state")
+    if not isinstance(evidence_state, str) or evidence_state not in EVIDENCE_STATES:
+        errors.append(f"{path}.evidence_state: must be one of supported, needs_evidence")
+    evidence_level = candidate.get("evidence_level_suggestion")
+    if not isinstance(evidence_level, str) or evidence_level not in EVIDENCE_LEVELS:
+        errors.append(f"{path}.evidence_level_suggestion: invalid value")
+    axes = candidate.get("axes_suggestion")
+    if not isinstance(axes, dict):
+        errors.append(f"{path}.axes_suggestion: must be an object")
+    else:
+        add_unexpected(errors, f"{path}.axes_suggestion", axes, AXES_KEYS)
+        require_keys(errors, f"{path}.axes_suggestion", axes, AXES_KEYS)
+        for key in AXES_KEYS:
+            if axes.get(key) not in AXIS_VALUES:
+                errors.append(f"{path}.axes_suggestion.{key}: invalid value")
+    blast_radius = candidate.get("blast_radius_suggestion")
+    if not isinstance(blast_radius, str) or blast_radius not in BLAST_RADII:
+        errors.append(f"{path}.blast_radius_suggestion: invalid value")
     side = candidate.get("side")
     if not isinstance(side, str) or side not in SIDES:
         errors.append(f"{path}.side: must be LEFT or RIGHT")
@@ -230,6 +263,10 @@ def merge_candidate(agent: str, candidate: dict[str, Any], index: int) -> dict[s
         "candidate_id": f"{agent}-{index + 1:03d}",
         "source_agent": agent,
         "source_ref": f"{agent}-review.json#candidates[{index}]",
+        "evidence_state": candidate["evidence_state"],
+        "evidence_level": candidate["evidence_level_suggestion"],
+        "axes": candidate["axes_suggestion"],
+        "blast_radius": candidate["blast_radius_suggestion"],
         "location": location,
         "severity_raw": candidate["severity_suggestion"],
         "category_raw": candidate["category_suggestion"],

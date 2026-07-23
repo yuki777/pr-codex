@@ -615,6 +615,7 @@ static stage の rule 語彙（`schema_validation`: `schema_version_mismatch` / 
 codex \
   --ask-for-approval never \
   -m gpt-5.6-sol \
+  -c 'model_reasoning_effort="high"' \
   -c sandbox_mode=read-only \
   exec \
   --ignore-user-config \
@@ -632,6 +633,7 @@ codex \
 
 - `--ask-for-approval never` / `-m gpt-5.6-sol` / `-c ...` は global flag のため、すべて `exec` の前に置く
 - `-m gpt-5.6-sol` — semantic preflight の実行モデルを GPT-5.6 に固定する（#110 の担当替え。hunter の `-m gpt-5.5` とは独立）。素の `gpt-5.6` slug は ChatGPT アカウントの Codex では 400 で拒否されるため、動作確認済みの `gpt-5.6-sol` を使う
+- `-c 'model_reasoning_effort="high"'` — positive fixture の high / xhigh 比較で exact / acceptable / false-positive / recall が同値、かつ high の実行時間と token 数が小さかったため、semantic preflight は high に固定する
 - `-c sandbox_mode=read-only` — シェル実行を read-only サンドボックスに固定する。`--sandbox read-only` と等価だが、config override として明示するため `-c` に統一する
 - `--ignore-user-config` — 投稿前検証中のみ `$CODEX_HOME/config.toml` / `~/.codex/config.toml` を読み込まない。auth は引き続き `CODEX_HOME` を使うため、古い MCP 設定や無効な `model_reasoning_effort` による config 検証エラーから Step 4.5 preflight を切り離せる
 - `--skip-git-repo-check` / `-C, --cd` は `exec` サブコマンド側の option のため、`exec` の後ろ、かつ prompt の前に置く

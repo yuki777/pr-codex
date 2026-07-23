@@ -27,7 +27,7 @@ from validate_expected_findings import validate_expected_findings  # noqa: E402
 from validate_findings import validate_artifact as validate_findings_artifact  # noqa: E402
 from validate_score_report import validate_score_report  # noqa: E402
 
-AXES = ("real", "triggerable", "impactful", "general")
+AXES = ("real", "triggerable", "impactful")
 SEVERITY_RANK = {"note": 0, "nit": 1, "should_fix": 2, "must_fix": 3}
 EVIDENCE_RANK = {
     "suspicion": 0,
@@ -98,6 +98,39 @@ def expected_key(expected: dict[str, Any]) -> tuple[str, str] | None:
     return location["path"], category
 
 
+def location_matches(expected: dict[str, Any], actual: dict[str, Any]) -> bool:
+    expected_location = expected.get("location_match")
+    actual_location = actual.get("location")
+    if not isinstance(expected_location, dict) or not isinstance(actual_location, dict):
+        return False
+    if expected_location.get("path") != actual_location.get("path"):
+        return False
+    line_range = expected_location.get("line_range")
+    start_line = actual_location.get("start_line")
+    end_line = actual_location.get("end_line", start_line)
+    if (
+        not isinstance(line_range, list)
+        or len(line_range) != 2
+        or not all(isinstance(line, int) and not isinstance(line, bool) for line in line_range)
+        or not isinstance(start_line, int)
+        or isinstance(start_line, bool)
+        or not isinstance(end_line, int)
+        or isinstance(end_line, bool)
+    ):
+        return False
+    return start_line <= line_range[1] and end_line >= line_range[0]
+
+
+def location_candidate_indexes(
+    expected: dict[str, Any], actuals: list[dict[str, Any]]
+) -> list[int]:
+    return [
+        index
+        for index, actual in enumerate(actuals)
+        if location_matches(expected, actual)
+    ]
+
+
 def axes_hamming(expected: dict[str, Any], actual: dict[str, Any]) -> int:
     expected_axes = expected.get("expected_axes") if isinstance(expected.get("expected_axes"), dict) else {}
     actual_axes = actual.get("axes") if isinstance(actual.get("axes"), dict) else {}
@@ -110,6 +143,8 @@ def choose_best_actual(expected: dict[str, Any], actuals: list[dict[str, Any]], 
         return None
     available.sort(
         key=lambda index: (
+            0 if location_matches(expected, actuals[index]) else 1,
+            0 if expected_key(expected) == actual_key(actuals[index]) else 1,
             axes_hamming(expected, actuals[index]),
             -SEVERITY_RANK.get(str(actuals[index].get("severity")), -1),
             str(actuals[index].get("fingerprint") or actuals[index].get("id") or ""),
@@ -249,8 +284,14 @@ def match_expected_to_actuals(expected_findings: list[dict[str, Any]], actuals: 
             continue
         key = expected_key(expected)
         candidate_indexes = groups.get(key, []) if key is not None else []
-        if key is None and expected.get("expected_outcome") == "acceptable_risk":
-            candidate_indexes = keyword_candidate_indexes(expected, actuals)
+        if expected.get("expected_outcome") == "known_bug":
+            candidate_indexes = list(
+                dict.fromkeys(candidate_indexes + location_candidate_indexes(expected, actuals))
+            )
+        elif expected.get("expected_outcome") == "acceptable_risk":
+            candidate_indexes = list(
+                dict.fromkeys(candidate_indexes + keyword_candidate_indexes(expected, actuals))
+            )
         best = choose_best_actual(expected, actuals, candidate_indexes, used)
         if best is not None:
             matches[expected_index] = best

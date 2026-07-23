@@ -58,7 +58,7 @@ class ValidateRunPlanRoutingTest(unittest.TestCase):
     def test_budget_and_profile_matrix_uses_section2_rules(self) -> None:
         cases = [
             ("line-heavy", [f"src/line_heavy_{index}.ts" for index in range(5)], 6000, 0, "large", "standard"),
-            ("security-medium", ["src/auth/login.ts", *[f"src/small_{index}.ts" for index in range(7)]], 400, 0, "medium", "deep"),
+            ("security-medium", ["src/auth/login.ts", *[f"src/small_{index}.ts" for index in range(7)]], 400, 0, "medium", "standard"),
             ("focused-large", [f"src/focused_{index}.ts" for index in range(60)], 3000, 0, "large", "focused-fallback"),
             ("skip-large", ["db/migrations/001.sql", *[f"src/skip_{index}.ts" for index in range(119)]], 5000, 3000, "large", "focused-fallback"),
         ]

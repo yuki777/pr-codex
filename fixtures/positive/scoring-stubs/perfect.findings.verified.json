@@ -1,0 +1,130 @@
+{
+  "schema_version": "findings.v1",
+  "producer": {
+    "name": "pr-codex-eval-stub",
+    "version": "1.8.0",
+    "run_id": "positive-scoring-stub"
+  },
+  "pr": {
+    "repository": "pr-codex/synthetic-fixtures",
+    "number": 1,
+    "base_sha": "447a8d428c2a0a503cc21cb288c6ef46f42edde1f1d4cf61afe918eb1d2bfd96",
+    "head_sha": "456d082d6c19cd5118e79e0431687ef6383b7bdd590cfe8724d9aa4492703e06"
+  },
+  "generated_at": "2026-07-23T00:00:00Z",
+  "findings": [
+    {
+      "id": "c8d9e719fe47ae0ef398bb202b40904cf90e2bf584c4c5e516a87807cb3e8d1a",
+      "fingerprint": "c8d9e719fe47ae0ef398bb202b40904cf90e2bf584c4c5e516a87807cb3e8d1a",
+      "source_agents": [
+        "eval_stub"
+      ],
+      "merged_from": [
+        "fixtures/positive/scoring-stubs"
+      ],
+      "location": {
+        "path": "src/auth/refund_service.py",
+        "start_line": 46,
+        "side": "RIGHT"
+      },
+      "severity": "must_fix",
+      "category": "security",
+      "title": "Bulk refund authorizes only the first payment in the batch",
+      "problem": "Only payments[0] is checked against actor.tenant_id before every payment is refunded.",
+      "reason": "A batch whose first item is authorized can include a later foreign-tenant payment that reaches record_refund().",
+      "suggestion": "Validate tenant_id for every payment before performing any refund.",
+      "evidence_level": "verified",
+      "axes": {
+        "real": "yes",
+        "triggerable": "yes",
+        "impactful": "yes"
+      },
+      "blast_radius": "component",
+      "posting": {
+        "post_policy": "inline",
+        "explanation_postable": true,
+        "audience": "eval_harness"
+      },
+      "security": {
+        "severity": "medium",
+        "confidence": "high",
+        "exploitability": "triggerable_from_changed_code",
+        "disclosure_policy": "inline_safe",
+        "public_safe_summary": "Batch authorization does not cover every payment."
+      }
+    },
+    {
+      "id": "107cdf609cd5eafc8e272bd11030442830b3cbaaf747bd5a65cb33414c46deed",
+      "fingerprint": "107cdf609cd5eafc8e272bd11030442830b3cbaaf747bd5a65cb33414c46deed",
+      "source_agents": [
+        "eval_stub"
+      ],
+      "merged_from": [
+        "fixtures/positive/scoring-stubs"
+      ],
+      "location": {
+        "path": "src/auth/refund_service.py",
+        "start_line": 53,
+        "side": "RIGHT"
+      },
+      "severity": "must_fix",
+      "category": "security",
+      "title": "Batch refund drops tenant scope from the global idempotency key",
+      "problem": "The new repository key omits actor.tenant_id even though payment ids are tenant-local.",
+      "reason": "Equal request ids and payment ids from two tenants collide in the repository global namespace.",
+      "suggestion": "Keep the tenant prefix in the batch refund idempotency key.",
+      "evidence_level": "verified",
+      "axes": {
+        "real": "yes",
+        "triggerable": "yes",
+        "impactful": "yes"
+      },
+      "blast_radius": "isolated",
+      "posting": {
+        "post_policy": "inline",
+        "explanation_postable": true,
+        "audience": "eval_harness"
+      },
+      "security": {
+        "severity": "medium",
+        "confidence": "high",
+        "exploitability": "triggerable_from_changed_code",
+        "disclosure_policy": "inline_safe",
+        "public_safe_summary": "Refund idempotency is no longer tenant-scoped."
+      }
+    },
+    {
+      "id": "39b2388b35fdb3c2ed4ad648bf52277a92f3284933b3c5c196d6670a4baa6134",
+      "fingerprint": "39b2388b35fdb3c2ed4ad648bf52277a92f3284933b3c5c196d6670a4baa6134",
+      "source_agents": [
+        "eval_stub"
+      ],
+      "merged_from": [
+        "fixtures/positive/scoring-stubs"
+      ],
+      "location": {
+        "path": "src/billing/pagination.py",
+        "start_line": 59,
+        "side": "RIGHT"
+      },
+      "severity": "should_fix",
+      "category": "bug",
+      "title": "Timestamp-only cursor skips rows that share a created_at value",
+      "problem": "The compact cursor no longer preserves the id tie-breaker used by repository ordering.",
+      "reason": "Resuming with created_at alone jumps past remaining rows with the same timestamp.",
+      "suggestion": "Encode both created_at and id and pass both back to page_before().",
+      "evidence_level": "trigger_path_identified",
+      "axes": {
+        "real": "yes",
+        "triggerable": "yes",
+        "impactful": "yes"
+      },
+      "blast_radius": "component",
+      "posting": {
+        "post_policy": "body_summary",
+        "explanation_postable": true,
+        "audience": "eval_harness"
+      }
+    }
+  ]
+}

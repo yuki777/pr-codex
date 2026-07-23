@@ -30,12 +30,15 @@ REPOSITORY_RE = re.compile(r"^[^/\s]+/[^/\s]+$")
 SEVERITIES = {"must_fix", "should_fix", "nit", "note"}
 CATEGORIES = {"bug", "security", "performance", "tests", "design", "code_quality", "consistency", "runtime_error"}
 AXIS_VALUES = {"yes", "no", "unknown"}
-AXES = ("real", "triggerable", "impactful", "general")
+AXES = ("real", "triggerable", "impactful")
+BLAST_RADII = {"isolated", "component", "systemic", "unknown"}
 EVIDENCE_LEVELS = ("suspicion", "corroborated", "trigger_path_identified", "impact_explained", "verified")
 EVIDENCE_LEVEL_SET = set(EVIDENCE_LEVELS)
 EXPECTED_OUTCOMES = {"known_bug", "known_false_positive_trap", "acceptable_risk", "out_of_scope", "no_expected_finding"}
 STRICTNESS_PROFILES = {"must_fix_strict", "should_fix_lax", "noise_filter"}
-TOP_KEYS = {"schema_version", "fixture_id", "source", "pr_intent", "scoring_gate", "expected_findings"}
+FIXTURE_TYPES = {"negative_real_world", "positive_seeded"}
+PROVENANCE_METHODS = {"frozen_merged_pr", "synthetic_overlay"}
+TOP_KEYS = {"schema_version", "fixture_id", "fixture_type", "provenance", "source", "pr_intent", "scoring_gate", "expected_findings"}
 SOURCE_KEYS = {
     "repository",
     "pr_number",
@@ -49,9 +52,12 @@ SOURCE_KEYS = {
     "frozen_patch_path",
     "retrieved_at",
 }
+PROVENANCE_KEYS = {"method", "base_snapshot_path", "authored_at", "seeded_bugs"}
+SEEDED_BUG_KEYS = {"id", "path", "line", "bug_class", "trigger", "impact"}
 SCORING_GATE_KEYS = {"exact_pass_rate_min", "acceptable_pass_rate_min", "false_positive_rate_max", "recall_known_bug_min"}
 EXPECTED_FINDING_KEYS = {
     "id",
+    "seed_id",
     "expected_outcome",
     "title",
     "category",
@@ -60,6 +66,7 @@ EXPECTED_FINDING_KEYS = {
     "strictness_profile",
     "expected_axes",
     "acceptable_overrides",
+    "expected_blast_radius",
     "minimum_evidence_level",
     "location_match",
     "acceptable_alternatives",
@@ -75,19 +82,16 @@ PROFILE_RELAXED_AXES: dict[str, dict[str, set[str]]] = {
         "real": {"yes", "unknown"},
         "triggerable": {"yes", "unknown"},
         "impactful": {"yes", "unknown"},
-        "general": {"yes", "unknown", "no"},
     },
     "should_fix_lax": {
         "real": {"yes", "unknown"},
         "triggerable": {"yes", "unknown", "no"},
         "impactful": {"yes", "unknown", "no"},
-        "general": {"yes", "unknown", "no"},
     },
     "noise_filter": {
         "real": {"no", "unknown"},
         "triggerable": {"no", "unknown"},
         "impactful": {"no", "unknown"},
-        "general": {"yes", "no", "unknown"},
     },
 }
 
@@ -239,16 +243,65 @@ def validate_alternatives(errors: list[str], path: str, value: Any) -> None:
             validate_line_range(errors, f"{item_path}.line_range", item["line_range"])
 
 
+def validate_provenance(errors: list[str], fixture_type: Any, value: Any) -> set[str]:
+    if not isinstance(value, dict):
+        errors.append("$.provenance: must be an object")
+        return set()
+    add_unexpected(errors, "$.provenance", value, PROVENANCE_KEYS)
+    require(errors, "$.provenance", value, {"method"})
+    method = value.get("method")
+    validate_enum(errors, "$.provenance.method", method, PROVENANCE_METHODS)
+    if fixture_type == "negative_real_world":
+        if method != "frozen_merged_pr":
+            errors.append("$.provenance.method: negative_real_world requires frozen_merged_pr")
+        if any(key in value for key in ("base_snapshot_path", "authored_at", "seeded_bugs")):
+            errors.append("$.provenance: negative_real_world must not declare synthetic seed fields")
+        return set()
+    if fixture_type != "positive_seeded":
+        return set()
+    if method != "synthetic_overlay":
+        errors.append("$.provenance.method: positive_seeded requires synthetic_overlay")
+    require(errors, "$.provenance", value, {"base_snapshot_path", "authored_at", "seeded_bugs"})
+    validate_string(errors, "$.provenance", value, "base_snapshot_path")
+    if "authored_at" in value and not is_rfc3339(value["authored_at"]):
+        errors.append("$.provenance.authored_at: must be RFC3339 date-time with timezone")
+    seeded_bugs = value.get("seeded_bugs")
+    if not isinstance(seeded_bugs, list) or not seeded_bugs:
+        errors.append("$.provenance.seeded_bugs: must be a non-empty array")
+        return set()
+    seed_ids: set[str] = set()
+    for index, seed in enumerate(seeded_bugs):
+        path = f"$.provenance.seeded_bugs[{index}]"
+        if not isinstance(seed, dict):
+            errors.append(f"{path}: must be an object")
+            continue
+        add_unexpected(errors, path, seed, SEEDED_BUG_KEYS)
+        require(errors, path, seed, SEEDED_BUG_KEYS)
+        for key in ("id", "path", "bug_class", "trigger", "impact"):
+            validate_string(errors, path, seed, key)
+        if not positive_int(seed.get("line")):
+            errors.append(f"{path}.line: must be an integer >= 1")
+        seed_id = seed.get("id")
+        if isinstance(seed_id, str):
+            if seed_id in seed_ids:
+                errors.append(f"{path}.id: duplicate seed id {seed_id}")
+            seed_ids.add(seed_id)
+    return seed_ids
+
+
 def validate_expected_findings(data: Any) -> list[str]:
     errors: list[str] = []
     if not isinstance(data, dict):
         return ["$: must be an object"]
 
     add_unexpected(errors, "$", data, TOP_KEYS)
-    require(errors, "$", data, {"schema_version", "fixture_id", "source", "pr_intent", "expected_findings"})
+    require(errors, "$", data, {"schema_version", "fixture_id", "fixture_type", "provenance", "source", "pr_intent", "expected_findings"})
     if data.get("schema_version") != SCHEMA_VERSION:
         errors.append(f"$.schema_version: must equal {SCHEMA_VERSION}")
     validate_string(errors, "$", data, "fixture_id")
+    fixture_type = data.get("fixture_type")
+    validate_enum(errors, "$.fixture_type", fixture_type, FIXTURE_TYPES)
+    seed_ids = validate_provenance(errors, fixture_type, data.get("provenance"))
     validate_string(errors, "$", data, "pr_intent")
 
     source = data.get("source")
@@ -288,13 +341,14 @@ def validate_expected_findings(data: Any) -> list[str]:
         return errors
 
     seen_ids: set[str] = set()
+    finding_seed_ids: set[str] = set()
     for index, finding in enumerate(expected_findings):
         fpath = f"$.expected_findings[{index}]"
         if not isinstance(finding, dict):
             errors.append(f"{fpath}: must be an object")
             continue
         add_unexpected(errors, fpath, finding, EXPECTED_FINDING_KEYS)
-        require(errors, fpath, finding, {"id", "expected_outcome", "title", "category", "expected_axes", "strictness_profile", "minimum_evidence_level"})
+        require(errors, fpath, finding, {"id", "expected_outcome", "title", "category", "expected_axes", "expected_blast_radius", "strictness_profile", "minimum_evidence_level"})
         identifier = finding.get("id")
         if not non_empty_string(identifier):
             errors.append(f"{fpath}.id: must be a non-empty string")
@@ -304,10 +358,19 @@ def validate_expected_findings(data: Any) -> list[str]:
             seen_ids.add(identifier)
         for key in ("title", "out_of_scope_reason", "oracle_notes"):
             validate_string(errors, fpath, finding, key)
+        if "seed_id" in finding:
+            validate_string(errors, fpath, finding, "seed_id")
+            if isinstance(finding["seed_id"], str):
+                finding_seed_ids.add(finding["seed_id"])
+        if fixture_type == "positive_seeded" and finding.get("expected_outcome") == "known_bug" and "seed_id" not in finding:
+            errors.append(f"{fpath}.seed_id: positive_seeded known_bug requires a seed id")
+        if fixture_type != "positive_seeded" and "seed_id" in finding:
+            errors.append(f"{fpath}.seed_id: only positive_seeded fixtures may reference seeds")
         validate_enum(errors, f"{fpath}.expected_outcome", finding.get("expected_outcome"), EXPECTED_OUTCOMES)
         validate_enum(errors, f"{fpath}.category", finding.get("category"), CATEGORIES)
         validate_enum(errors, f"{fpath}.strictness_profile", finding.get("strictness_profile"), STRICTNESS_PROFILES)
         validate_enum(errors, f"{fpath}.minimum_evidence_level", finding.get("minimum_evidence_level"), EVIDENCE_LEVEL_SET)
+        validate_enum(errors, f"{fpath}.expected_blast_radius", finding.get("expected_blast_radius"), BLAST_RADII)
         if "severity" in finding:
             validate_enum(errors, f"{fpath}.severity", finding["severity"], SEVERITIES)
         if "acceptable_severities" in finding:
@@ -328,6 +391,13 @@ def validate_expected_findings(data: Any) -> list[str]:
             values = finding["should_be_caught_by"]
             if not isinstance(values, list) or any(not non_empty_string(value) for value in values):
                 errors.append(f"{fpath}.should_be_caught_by: must be an array of non-empty strings")
+    if fixture_type == "positive_seeded":
+        missing_seed_findings = sorted(seed_ids - finding_seed_ids)
+        unknown_seed_references = sorted(finding_seed_ids - seed_ids)
+        if missing_seed_findings:
+            errors.append(f"$.expected_findings: seeded bugs without known_bug rows: {', '.join(missing_seed_findings)}")
+        if unknown_seed_references:
+            errors.append(f"$.expected_findings: unknown seed references: {', '.join(unknown_seed_references)}")
     return errors
 
 
