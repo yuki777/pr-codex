@@ -70,7 +70,7 @@ Skill 起動直後に `$ARGUMENTS` を shell 風に空白分割して解釈し�
 
 #### common: plugin root / validator path の早期解決
 
-direct mode / auto mode のどちらでも Step 2.5 と Step 3 の validator path 解決に使うため、対象 directory の選定前に plugin root を解決する。
+direct mode / auto mode のどちらでも Step 2.5 と Step 3 の validator path 解決に使うため、対象 directory の選定前に plugin root を解決する。fallback block はこの 1 箇所にだけ置き、以降のフロー内テンプレートは fallback block を繰り返さず、解決済みの `$plugin_root` を参照する。`$plugin_root` 参照が失敗した・値を確定できない場合は、この fallback block を単独で再実行してから当該テンプレートをやり直す。
 
 ```bash
 plugin_root="${CLAUDE_PLUGIN_ROOT:-$(python3 - <<'PY'
@@ -386,28 +386,10 @@ GitHub Reviews API は PR diff の新ファイル側 hunk 範囲外の `line` �
 - 次アクション: 作成後、Step 3.75 のフラグ確認を経て Step 4 の builder テンプレートへ進む。builder は `$must_fix` / `$should_fix_candidates` / `$nit_inline_candidates` の各エントリを下記の範囲判定ルールで検証する
 
 ```bash
-plugin_root="${CLAUDE_PLUGIN_ROOT:-$(python3 - <<'PY'
-import os
-from pathlib import Path
-roots = []
-if os.environ.get("CLAUDE_CODE_PLUGIN_CACHE_DIR"):
-    roots.append(Path(os.environ["CLAUDE_CODE_PLUGIN_CACHE_DIR"]).expanduser())
-if os.environ.get("CLAUDE_CONFIG_DIR"):
-    roots.append(Path(os.environ["CLAUDE_CONFIG_DIR"]).expanduser() / "plugins" / "cache")
-roots.append(Path.home() / ".claude" / "plugins" / "cache")
-markers = []
-for root in roots:
-    markers.extend(root.glob("**/pr-codex/tasks/validate_findings.py"))
-if not markers:
-    raise SystemExit("CLAUDE_PLUGIN_ROOT is unset and pr-codex plugin root was not found")
-marker = max((m.resolve() for m in markers), key=lambda p: (p.stat().st_mtime_ns, str(p)))
-print(marker.parents[1])
-PY
-)}"
 test -f "$plugin_root/skills/lib/extract-diff-ranges.awk" && awk -f "$plugin_root/skills/lib/extract-diff-ranges.awk" ~/claude-loop-pr-codex/$dir_name/pr.diff > ~/claude-loop-pr-codex/$dir_name/pr.diff.ranges.txt
 ```
 
-`plugin_root` は冒頭で自己解決済みの値を使う。`test -f` が失敗した場合は、同じ fallback block を再実行して plugin root を再解決し、まだ root を確定できない場合は silent な空ファイル生成を避けるため中断する。
+`plugin_root` は Step 1 common で自己解決済みの値を使う。`test -f` が失敗した場合は、Step 1 common の fallback block を再実行して plugin root を再解決し、まだ root を確定できない場合は silent な空ファイル生成を避けるため中断する。
 
 `pr.diff.ranges.txt` は builder が `--ranges` 入力として読む。Claude 側で Read して手動検証する必要はない。
 

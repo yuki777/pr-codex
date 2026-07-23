@@ -66,7 +66,6 @@ RISK_TAG_CASES = [
     ("myschema.graphql.bak", set()),
 ]
 
-ESCAPE_RULE_TEXT = '`\\` → `\\\\`、`"` → `\\"`、`$` → `\\$`、`` ` `` → `\\``'
 
 DEPTH_REASON_LARGE_DEFAULT = "changed lines > 5000; selected standard to preserve the 20 minute timeout"
 DEPTH_REASON_AUTO_DEEP = (
@@ -965,48 +964,63 @@ def single_line_containing(text: str, marker: str) -> str:
     return matches[0]
 
 
-def extract_escape_rule(line: str, pattern: str, name: str) -> str:
-    match = re.search(pattern, line)
-    if not match:
-        raise AssertionError(f"{name} escape rule not found in line: {line}")
-    return match.group("rule")
-
-
-def validate_escape_rule_docs() -> None:
+def validate_hunter_prompt_file_docs() -> None:
     text = SKILL_PATH.read_text()
-    criteria_line = single_line_containing(
-        text,
-        "4a / 4b の Bash コマンド文字列中の `{REVIEW_CRITERIA}`",
-    )
-    if "バッククォート (`) を" in criteria_line:
-        raise AssertionError("{REVIEW_CRITERIA} preprocessing must not keep the old backtick-only escape rule")
-    if ESCAPE_RULE_TEXT not in criteria_line or "共通のエスケープ規則" not in criteria_line:
-        raise AssertionError("{REVIEW_CRITERIA} preprocessing must reference the common 4-character escape rule")
 
-    preprocessing_line = single_line_containing(
+    for stale in (
+        "共通のエスケープ規則",
+        "の順でエスケープする",
+        "bash double-quote 内へ差し込む前",
+        "Bash ツールに渡す完全体のコマンド文字列",
+    ):
+        if stale in text:
+            raise AssertionError(f"stale escape-rule wording must be removed: {stale}")
+
+    single_line_containing(text, "廃止済みであり適用しない")
+    single_line_containing(text, "廃止済みのため適用しない")
+
+    claude_block = extract_bash_block("env -u CLAUDECODE claude -p")
+    codex_block = extract_bash_block(
+        "--output-last-message ~/claude-loop-pr-codex/$org-$repository-$pr_number/codex-review.json"
+    )
+
+    for name, block, prompt_file in (
+        ("4a", claude_block, "hunter-claude-prompt.md"),
+        ("4b", codex_block, "hunter-codex-prompt.md"),
+    ):
+        if f"<  ~/claude-loop-pr-codex/$org-$repository-$pr_number/{prompt_file}" not in block:
+            raise AssertionError(f"{name} template must read {prompt_file} via stdin redirection")
+        if "GitHub PR をコードレビューしてください" in block:
+            raise AssertionError(f"{name} template must not embed the prompt body in the bash command string")
+
+    if "--ignore-user-config" not in codex_block:
+        raise AssertionError("4b template must pass --ignore-user-config to disable user-config MCP")
+    if "/dev/null" in codex_block:
+        raise AssertionError("4b template must not redirect stdin from /dev/null anymore")
+    if "\n  - \\\n" not in codex_block:
+        raise AssertionError("4b template must pass '-' positional argument to read the prompt from stdin")
+
+    for marker in (
+        "hunter-claude-prompt.md` に以下の prompt 本文を書き出す",
+        "hunter-codex-prompt.md` に以下の prompt 本文を書き出す",
+    ):
+        if marker not in text:
+            raise AssertionError(f"hunter prompt file write instruction missing: {marker}")
+
+    single_line_containing(
         text,
-        "{REVIEW_CRITERIA}` / `{RUN_PLAN_GUIDANCE}` / `{DEPTH_GUIDANCE}` / `{BEAR_REVIEW_GUIDANCE}` を bash double-quote 内へ差し込む前",
+        "Write ツールで `hunter-claude-prompt.md` / `hunter-codex-prompt.md` へ書き出し、テンプレートの stdin redirection で子プロセスへ渡す",
     )
-    constraint_line = single_line_containing(
-        text,
-        "10. Step 4a / 4b のプロンプト中に含まれる `{REVIEW_CRITERIA}`",
-    )
-    preprocessing_rule = extract_escape_rule(
-        preprocessing_line,
-        r"4つとも (?P<rule>.+?) の順でエスケープする",
-        "Step 4 preprocessing",
-    )
-    constraint_rule = extract_escape_rule(
-        constraint_line,
-        r"差し込み前に \*\*(?P<rule>.+?)\*\* の順でエスケープする",
-        "allowlist rule #10",
-    )
-    if preprocessing_rule != ESCAPE_RULE_TEXT:
-        raise AssertionError(f"Step 4 preprocessing escape rule mismatch: {preprocessing_rule}")
-    if constraint_rule != ESCAPE_RULE_TEXT:
-        raise AssertionError(f"allowlist rule #10 escape rule mismatch: {constraint_rule}")
-    if preprocessing_rule != constraint_rule:
-        raise AssertionError("Step 4 preprocessing and allowlist rule #10 escape rules must match")
+
+
+def validate_plugin_root_resolution_docs() -> None:
+    text = SKILL_PATH.read_text()
+    count = text.count('plugin_root="${CLAUDE_PLUGIN_ROOT:-')
+    if count != 1:
+        raise AssertionError(
+            f"plugin_root fallback block must appear exactly once in the setup section, got {count}"
+        )
+    single_line_containing(text, "この fallback block はセットアップのこの 1 箇所にだけ置き")
 
 
 def validate_schema_contract(schema: dict[str, object]) -> None:
@@ -1121,7 +1135,8 @@ def main() -> None:
     validate_review_argument_docs()
     validate_review_preflight_supplement_docs()
     validate_step5_write_order()
-    validate_escape_rule_docs()
+    validate_hunter_prompt_file_docs()
+    validate_plugin_root_resolution_docs()
     print("run-plan validation passed")
 
 
