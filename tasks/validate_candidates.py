@@ -33,6 +33,10 @@ CANDIDATE_KEYS = {
     "source_agent",
     "source_ref",
     "evidence_state",
+    "decision",
+    "disagreement",
+    "severity_disputed",
+    "contradiction",
     "location",
     "severity_raw",
     "category_raw",
@@ -55,6 +59,7 @@ AXIS_VALUES = {"yes", "no", "unknown"}
 BLAST_RADII = {"isolated", "component", "systemic", "unknown"}
 EVIDENCE_STATES = {"supported", "needs_evidence"}
 EVIDENCE_LEVELS = {"suspicion", "corroborated", "trigger_path_identified", "impact_explained", "verified"}
+TERMINAL_DECISIONS = {"verified", "refuted", "suppressed"}
 POST_POLICIES = {"inline", "body_summary", "local_only", "suppress"}
 NOT_POSTABLE_REASONS = {"depends_on_pr_external_context", "security_detail", "too_long", "low_evidence_suspicion", "private_dependency", "other_explained"}
 AUDIENCES = {"human_reviewer", "eval_harness", "future_memory"}
@@ -237,6 +242,11 @@ def validate_candidates(data: Any, metadata: Any | None = None) -> list[str]:
             errors.append(f"{cpath}.evidence_state: invalid value")
         if "evidence_level" in candidate and candidate["evidence_level"] not in EVIDENCE_LEVELS:
             errors.append(f"{cpath}.evidence_level: invalid value")
+        if "decision" in candidate and candidate["decision"] not in TERMINAL_DECISIONS:
+            errors.append(f"{cpath}.decision: invalid value")
+        for key in ("disagreement", "severity_disputed", "contradiction"):
+            if key in candidate and not isinstance(candidate[key], bool):
+                errors.append(f"{cpath}.{key}: must be boolean")
         if "blast_radius" in candidate and candidate["blast_radius"] not in BLAST_RADII:
             errors.append(f"{cpath}.blast_radius: invalid value")
 

@@ -47,10 +47,12 @@ python3 tasks/score_fixture.py \
 
 oracle 評価結果は4指標を出す:
 
-- `exact_pass_rate` — `axes` が完全一致
-- `acceptable_pass_rate` — `expected_axes ∪ acceptable_overrides` と `acceptable_severities` 内に収まる
+- `exact_pass_rate` — `axes` と `blast_radius` が oracle と完全一致
+- `acceptable_pass_rate` — `axes` が `expected_axes ∪ acceptable_overrides`、severity が `acceptable_severities`、evidence が最低水準内に収まり、`blast_radius` が `expected_blast_radius` と一致
 - `false_positive_rate` — `expected_outcome=known_false_positive_trap` を Must Fix にしてしまった率
 - `recall_known_bug` — `expected_outcome=known_bug` が fixture の location/semantic matching 契約で検出された率
+
+`blast_radius` は runtime の Must Fix 判定には使わない非ゲート metadata だが、fixture 品質評価では `breakdown[].blast_radius_diff` に expected/actual/acceptable を決定的に記録し、`unknown` への退行を品質維持として扱わない。
 
 F11 eval report (`schemas/eval-report.v1.json`) は、baseline と iterative run の差分を比較するため各 run に `round_metrics` を必ず含める。最低限の round metrics は `rounds_completed` / `max_rounds` / `halt_reason` / `elapsed_ms` / `time_budget_ms` / `verifier_fail_candidates` / `suppressed_candidate_count` / `no_new_evidence_rounds` / `repeated_contradiction_events` / `insufficient_evidence_events` / `changed_candidate_count` / `evidence_added_count` / `disposition_changed_count` / `remaining_active_count` / `oscillation_detected`。これにより F5 の round 有無で timeout 内完了率、false positive 率、state 変化、oscillation 抑止の差分を fixture ごとに比較できる。host state metrics を採取していない過去の record だけは推測せず `null` とする。
 

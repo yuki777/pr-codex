@@ -15,6 +15,7 @@ SCHEMA_VERSION = "score-report.v1"
 FINGERPRINT_RE = re.compile(r"^[0-9a-f]{64}$")
 SEVERITIES = {"must_fix", "should_fix", "nit", "note"}
 AXIS_VALUES = {"yes", "no", "unknown"}
+BLAST_RADII = {"isolated", "component", "systemic", "unknown"}
 MATCH_STATUSES = {"matched", "missed", "false_positive_promoted"}
 TOP_KEYS = {
     "schema_version",
@@ -50,11 +51,13 @@ BREAKDOWN_KEYS = {
     "match_status",
     "axes_diff",
     "severity_diff",
+    "blast_radius_diff",
     "evidence_level_ok",
     "notes",
 }
 AXIS_DIFF_KEYS = {"expected", "actual", "acceptable"}
 SEVERITY_DIFF_KEYS = {"expected", "actual", "acceptable"}
+BLAST_RADIUS_DIFF_KEYS = {"expected", "actual", "acceptable"}
 GATE_CHECK_KEYS = {"name", "actual", "threshold", "passed"}
 UNMATCHED_ACTUAL_KEYS = {"fingerprint", "severity", "category", "path", "title"}
 GATE_CHECK_METRICS = {
@@ -219,6 +222,7 @@ def validate_breakdown(errors: list[str], value: Any) -> None:
         if not isinstance(item.get("evidence_level_ok"), bool):
             errors.append(f"{path}.evidence_level_ok: must be boolean")
         validate_axes_diff(errors, f"{path}.axes_diff", item.get("axes_diff"))
+        validate_blast_radius_diff(errors, f"{path}.blast_radius_diff", item.get("blast_radius_diff"))
         validate_severity_diff(errors, f"{path}.severity_diff", item.get("severity_diff"))
 
 
@@ -278,6 +282,29 @@ def validate_severity_diff(errors: list[str], path: str, value: Any) -> None:
         errors.append(f"{path}.actual: invalid value")
     if not isinstance(value.get("acceptable"), bool):
         errors.append(f"{path}.acceptable: must be boolean")
+
+
+def validate_blast_radius_diff(errors: list[str], path: str, value: Any) -> None:
+    if not isinstance(value, dict):
+        errors.append(f"{path}: must be an object")
+        return
+    add_unexpected(errors, path, value, BLAST_RADIUS_DIFF_KEYS)
+    require(errors, path, value, BLAST_RADIUS_DIFF_KEYS)
+    if value.get("expected") not in BLAST_RADII:
+        errors.append(f"{path}.expected: invalid value")
+    actual = value.get("actual")
+    if actual is not None and actual not in BLAST_RADII:
+        errors.append(f"{path}.actual: invalid value")
+    acceptable = value.get("acceptable")
+    if not isinstance(acceptable, bool):
+        errors.append(f"{path}.acceptable: must be boolean")
+    elif acceptable is not (
+        actual is not None and actual == value.get("expected")
+    ):
+        errors.append(
+            f"{path}.acceptable: "
+            "must equal (actual is not null and actual == expected)"
+        )
 
 
 def validate_score_report(data: Any) -> list[str]:
@@ -404,19 +431,33 @@ def validate_internal_consistency(errors: list[str], data: dict[str, Any]) -> No
 
 def row_axes_exact(item: dict[str, Any]) -> bool:
     axes = item.get("axes_diff")
-    return isinstance(axes, dict) and bool(axes) and all(
-        isinstance(diff, dict) and diff.get("actual") == diff.get("expected") and diff.get("actual") is not None
-        for diff in axes.values()
+    blast_radius = item.get("blast_radius_diff")
+    return (
+        isinstance(axes, dict)
+        and bool(axes)
+        and all(
+            isinstance(diff, dict)
+            and diff.get("actual") == diff.get("expected")
+            and diff.get("actual") is not None
+            for diff in axes.values()
+        )
+        and isinstance(blast_radius, dict)
+        and blast_radius.get("actual") == blast_radius.get("expected")
+        and blast_radius.get("actual") is not None
     )
 
 
 def row_acceptable(item: dict[str, Any]) -> bool:
     axes = item.get("axes_diff")
+    blast_radius = item.get("blast_radius_diff")
     severity = item.get("severity_diff")
     return (
         isinstance(axes, dict)
         and bool(axes)
         and all(isinstance(diff, dict) and diff.get("acceptable") is True for diff in axes.values())
+        and isinstance(blast_radius, dict)
+        and blast_radius.get("actual") is not None
+        and blast_radius.get("actual") == blast_radius.get("expected")
         and isinstance(severity, dict)
         and severity.get("acceptable") is True
         and item.get("evidence_level_ok") is True

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 import unittest
@@ -42,17 +43,30 @@ class Issue112PolicyTest(unittest.TestCase):
             "refinement_loop.py\" --plan-next",
             "refinement_loop.py\" --apply-auto-deep",
             "target_candidate_ids[]",
+            "candidate_updates[]",
             "state_digest_before",
             "state_digest_after",
+            "halt_basis_state_digest_after",
             "--previous-candidates",
             "changed_candidate_ids",
             "changed_candidate_count",
             "evidence_added_count",
             "disposition_changed_count",
             "remaining_active_count",
+            "untargeted_candidate_ids",
+            "untargeted_candidate_count",
+            "`time_budget_ms=0` は「round 1 を省略する」ではなく",
             "round 2 は未解決のうち high-risk",
             "round 3 は **round 2 で host-owned state が変化した high-risk 候補だけ**",
             "モデル自身に「続けるか」を判断させてはならない",
+            'decision="verified"',
+            'decision="refuted"',
+            'decision="suppressed"',
+            "最終 round より前に追加検証が必要な候補だけ",
+            "最終 round では verifier が全対象を terminal state",
+            "停止後に ACTIVE candidate を残してはならない",
+            '採用できるのは `decision="verified"`',
+            "validate_candidates.py",
         ):
             self.assertIn(snippet, step4c)
 
@@ -99,6 +113,103 @@ class Issue112PolicyTest(unittest.TestCase):
             command.index("  exec "),
         )
 
+    def test_aggregate_max_rounds_halt_requires_completed_rounds_at_cap(self) -> None:
+        report = json.loads(POSITIVE_EVAL.read_text(encoding="utf-8"))
+
+        for run_name in ("baseline", "iterative"):
+            metrics = report["aggregate"][run_name]["round_metrics"]
+            if metrics["halt_reason"] == "max_rounds":
+                self.assertEqual(
+                    metrics["rounds_completed"],
+                    metrics["max_rounds"],
+                    f"aggregate.{run_name} claims max_rounds before reaching the cap",
+                )
+
+    def test_positive_eval_provenance_is_complete_and_content_addressed(self) -> None:
+        schema = json.loads(EVAL_SCHEMA.read_text(encoding="utf-8"))
+        report = json.loads(POSITIVE_EVAL.read_text(encoding="utf-8"))
+        self.assertEqual(validate_json_schema_subset(report, schema), [])
+        self.assertNotIn("provenance", report["aggregate"]["baseline"])
+        self.assertNotIn("provenance", report["aggregate"]["iterative"])
+
+        run_ids: set[str] = set()
+        eval_artifacts: set[Path] = set()
+        artifact_fields = (
+            "prompt_config",
+            "fixture",
+            "oracle",
+            "findings_artifact",
+            "score_report",
+            "execution_manifest",
+            "scorer",
+        )
+        for fixture in report["fixtures"]:
+            for run_name in ("baseline", "iterative"):
+                provenance = fixture[run_name]["provenance"]
+                run_id = provenance["run_id"]
+                self.assertNotIn(run_id, run_ids)
+                run_ids.add(run_id)
+                self.assertGreaterEqual(provenance["sample_count"], 1)
+                self.assertGreaterEqual(provenance["repetitions"], 1)
+
+                for field in artifact_fields:
+                    reference = provenance[field]
+                    relative_path = Path(reference["path"])
+                    self.assertFalse(relative_path.is_absolute())
+                    self.assertNotIn("..", relative_path.parts)
+                    self.assertNotIn("\\", reference["path"])
+                    artifact = ROOT / relative_path
+                    self.assertTrue(artifact.is_file(), f"{field} is missing: {artifact}")
+                    digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+                    self.assertEqual(reference["sha256"], digest, f"{field} digest mismatch")
+                    if relative_path.parts[:3] == ("fixtures", "positive", "eval-artifacts"):
+                        eval_artifacts.add(relative_path)
+
+                self.assertEqual(
+                    provenance["scorer"]["revision"],
+                    f"sha256:{provenance['scorer']['sha256']}",
+                )
+                score_report = json.loads(
+                    (ROOT / provenance["score_report"]["path"]).read_text(encoding="utf-8")
+                )
+                self.assertEqual(provenance["evaluated_at"], score_report["evaluated_at"])
+                for metric in (
+                    "exact_pass_rate",
+                    "acceptable_pass_rate",
+                    "false_positive_rate",
+                    "recall_known_bug",
+                ):
+                    self.assertEqual(fixture[run_name]["score_metrics"][metric], score_report[metric])
+                execution_manifest = json.loads(
+                    (ROOT / provenance["execution_manifest"]["path"]).read_text(encoding="utf-8")
+                )
+                self.assertEqual(
+                    set(execution_manifest),
+                    {
+                        "schema_version",
+                        "run_id",
+                        "execution",
+                        "sample_count",
+                        "repetitions",
+                        "evaluated_at",
+                    },
+                )
+                self.assertEqual(execution_manifest["schema_version"], "eval-execution.v1")
+                self.assertEqual(execution_manifest["run_id"], run_id)
+                self.assertEqual(execution_manifest["execution"], fixture[run_name]["execution"])
+                self.assertEqual(execution_manifest["sample_count"], provenance["sample_count"])
+                self.assertEqual(execution_manifest["repetitions"], provenance["repetitions"])
+                self.assertEqual(execution_manifest["evaluated_at"], provenance["evaluated_at"])
+
+        self.assertEqual(len(run_ids), 2 * len(report["fixtures"]))
+        checked_in_artifacts = {
+            path.relative_to(ROOT)
+            for path in (ROOT / "fixtures" / "positive" / "eval-artifacts").iterdir()
+            if path.is_file()
+        }
+        self.assertEqual(checked_in_artifacts, eval_artifacts)
+
+
     def test_positive_eval_records_quality_preserving_reductions(self) -> None:
         schema = json.loads(EVAL_SCHEMA.read_text(encoding="utf-8"))
         report = json.loads(POSITIVE_EVAL.read_text(encoding="utf-8"))
@@ -126,7 +237,10 @@ class Issue112PolicyTest(unittest.TestCase):
                 self.assertIn(field, metrics)
 
         effort = fixtures["pr-codex-positive-seeded-001-preflight-effort"]
-        self.assertEqual(effort["baseline"]["score_metrics"], effort["iterative"]["score_metrics"])
+        self.assertGreater(
+            effort["iterative"]["score_metrics"]["acceptable_pass_rate"],
+            effort["baseline"]["score_metrics"]["acceptable_pass_rate"],
+        )
         self.assertEqual(effort["baseline"]["execution"]["reasoning_effort"], "xhigh")
         self.assertEqual(effort["iterative"]["execution"]["reasoning_effort"], "high")
         self.assertLess(
@@ -140,7 +254,7 @@ class Issue112PolicyTest(unittest.TestCase):
 
         fable = fixtures["pr-codex-positive-seeded-001-fable-prompt"]
         self.assertEqual(fable["baseline"]["execution"]["model"], "claude-fable-5")
-        self.assertEqual(fable["iterative"]["score_metrics"]["acceptable_pass_rate"], 1.0)
+        self.assertEqual(fable["iterative"]["score_metrics"]["acceptable_pass_rate"], 0.6667)
         self.assertGreater(
             fable["iterative"]["score_metrics"]["acceptable_pass_rate"],
             fable["baseline"]["score_metrics"]["acceptable_pass_rate"],

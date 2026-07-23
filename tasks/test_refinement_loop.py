@@ -85,6 +85,16 @@ class RefinementLoopTest(unittest.TestCase):
                     "new_evidence_count": 0,
                     "verifier_pass_count": 1,
                     "verifier_fail_count": 1,
+                    "target_candidate_ids": ["candidate-a", "candidate-b"],
+                    "state_digest_before": "a" * 64,
+                    "state_digest_after": "b" * 64,
+                    "changed_candidate_ids": ["candidate-a"],
+                    "changed_candidate_count": 1,
+                    "evidence_added_count": 0,
+                    "disposition_changed_count": 1,
+                    "untargeted_candidate_ids": [],
+                    "untargeted_candidate_count": 0,
+                    "remaining_active_count": 1,
                     "rejected_candidates": [
                         {
                             "finding_id": "abc",
@@ -117,10 +127,67 @@ class RefinementLoopTest(unittest.TestCase):
         self.assertTrue(by_time.should_halt)
         self.assertEqual(by_time.reason, "time_budget")
 
+    def test_zero_time_budget_still_runs_the_mandatory_first_round(self) -> None:
+        candidate = {
+            "candidate_id": "first-round",
+            "evidence_state": "needs_evidence",
+            "evidence_level": "suspicion",
+            "axes": {
+                "real": "yes",
+                "triggerable": "unknown",
+                "impactful": "unknown",
+            },
+        }
+        zero_extra_round_budget = HaltingPolicy(
+            max_rounds=3,
+            time_budget_ms=0,
+            no_new_evidence_rounds=1,
+            repeated_contradiction_limit=2,
+        )
+
+        plan = plan_next_round(
+            zero_extra_round_budget,
+            rounds=[],
+            candidates=[candidate],
+            elapsed_ms=0,
+        )
+
+        self.assertTrue(plan["should_run"])
+        self.assertIsNone(plan["halting"]["reason"])
+        self.assertEqual(plan["target_candidate_ids"], ["first-round"])
+        self.assertEqual(plan["candidate_updates"], [])
+        self.assertIsNone(plan["round_state"])
+
     def test_no_new_evidence_halts_before_another_round(self) -> None:
         decision = evaluate_halting(policy(), [{"new_evidence_count": 0}], elapsed_ms=100, active_candidates_count=1)
         self.assertTrue(decision.should_halt)
         self.assertEqual(decision.reason, "no_new_evidence")
+
+    def test_halting_uses_latest_untargeted_state(self) -> None:
+        decision = evaluate_halting(
+            HaltingPolicy(
+                max_rounds=3,
+                time_budget_ms=1_000,
+                no_new_evidence_rounds=1,
+                repeated_contradiction_limit=2,
+            ),
+            [
+                {
+                    "new_evidence_count": 1,
+                    "untargeted_candidate_count": 1,
+                },
+                {
+                    "new_evidence_count": 1,
+                    "untargeted_candidate_count": 0,
+                    "verifier_pass_count": 1,
+                },
+            ],
+            elapsed_ms=100,
+            active_candidates_count=0,
+        )
+
+        self.assertTrue(decision.should_halt)
+        self.assertEqual(decision.reason, "all_candidates_verified")
 
     def test_candidate_state_digest_is_order_independent_and_tracks_decision_state(self) -> None:
         candidates = [
@@ -160,6 +227,39 @@ class RefinementLoopTest(unittest.TestCase):
             candidate_state_digest(candidates),
             candidate_state_digest(expanded_blast_radius),
         )
+
+    def test_candidate_state_tracks_disagreement_kinds_independently(self) -> None:
+        before = [
+            {
+                "candidate_id": "disputed",
+                "evidence_state": "supported",
+                "evidence_level": "verified",
+                "axes": {
+                    "real": "yes",
+                    "triggerable": "yes",
+                    "impactful": "yes",
+                },
+                "disagreement": False,
+                "severity_disputed": False,
+                "contradiction": False,
+            }
+        ]
+        before_digest = candidate_state_digest(before)
+        changed_digests: set[str] = set()
+
+        for field in ("disagreement", "severity_disputed", "contradiction"):
+            with self.subTest(field=field):
+                after = copy.deepcopy(before)
+                after[0][field] = True
+                after_digest = candidate_state_digest(after)
+                delta = candidate_state_delta(before, after)
+
+                self.assertNotEqual(before_digest, after_digest)
+                self.assertEqual(delta["changed_candidate_ids"], ["disputed"])
+                self.assertEqual(delta["disposition_changed_count"], 1)
+                changed_digests.add(after_digest)
+
+        self.assertEqual(len(changed_digests), 3)
 
     def test_candidate_state_delta_tracks_host_owned_round_metrics(self) -> None:
         before = [
@@ -252,6 +352,7 @@ class RefinementLoopTest(unittest.TestCase):
             [item["candidate_id"] for item in select_round_targets(candidates, round_index=1)],
             ["verified", "low-risk-unknown", "needs-evidence", "high-risk", "disputed"],
         )
+        candidates[0]["decision"] = "verified"
         self.assertEqual(
             [item["candidate_id"] for item in select_round_targets(candidates, round_index=2)],
             ["needs-evidence", "high-risk", "disputed"],
@@ -340,9 +441,17 @@ class RefinementLoopTest(unittest.TestCase):
         self.assertTrue(plan["should_run"])
         self.assertEqual(plan["round_index"], 3)
         self.assertEqual(plan["target_candidate_ids"], ["changed-high-risk"])
-        self.assertEqual(plan["round_state"]["changed_candidate_ids"], ["changed-high-risk"])
-        self.assertEqual(plan["round_state"]["changed_candidate_count"], 1)
+        self.assertEqual(
+            plan["round_state"]["changed_candidate_ids"],
+            ["changed-high-risk", "unchanged-high-risk"],
+        )
+        self.assertEqual(plan["round_state"]["changed_candidate_count"], 2)
         self.assertEqual(plan["round_state"]["evidence_added_count"], 1)
+        self.assertEqual(plan["round_state"]["disposition_changed_count"], 1)
+        self.assertEqual(
+            plan["round_state"]["untargeted_candidate_ids"],
+            ["unchanged-high-risk"],
+        )
 
     def test_auto_deep_requires_small_verified_conflict_free_candidates(self) -> None:
         verified = [
@@ -480,6 +589,113 @@ class RefinementLoopTest(unittest.TestCase):
         self.assertEqual(plan["round_state"]["untargeted_candidate_count"], 1)
         self.assertEqual(plan["round_state"]["remaining_active_count"], 0)
 
+    def test_priority_narrowing_returns_host_owned_suppression_updates(self) -> None:
+        previous = [
+            {
+                "candidate_id": "unresolved-low-risk",
+                "evidence_state": "supported",
+                "evidence_level": "suspicion",
+                "axes": {
+                    "real": "yes",
+                    "triggerable": "unknown",
+                    "impactful": "unknown",
+                },
+                "severity_raw": "nit",
+                "category_raw": "code_quality",
+            }
+        ]
+        digest = candidate_state_digest(previous)
+
+        plan = plan_next_round(
+            policy(),
+            rounds=[
+                {
+                    "new_evidence_count": 0,
+                    "state_digest_before": digest,
+                }
+            ],
+            candidates=copy.deepcopy(previous),
+            previous_candidates=previous,
+            elapsed_ms=100,
+        )
+
+        self.assertFalse(plan["should_run"])
+        self.assertEqual(plan["halting"]["reason"], "no_active_candidates")
+        self.assertEqual(plan["target_candidate_ids"], [])
+        self.assertEqual(
+            plan["candidate_updates"],
+            [
+                {
+                    "candidate_id": "unresolved-low-risk",
+                    "decision": "suppressed",
+                    "posting": {
+                        "post_policy": "local_only",
+                        "explanation_postable": False,
+                        "not_postable_reason": "low_evidence_suspicion",
+                        "audience": "human_reviewer",
+                    },
+                }
+            ],
+        )
+        self.assertEqual(
+            plan["round_state"]["untargeted_candidate_ids"],
+            ["unresolved-low-risk"],
+        )
+        self.assertEqual(plan["round_state"]["untargeted_candidate_count"], 1)
+        self.assertEqual(
+            plan["round_state"]["untargeted_candidate_ids"],
+            ["unresolved-low-risk"],
+        )
+        self.assertEqual(
+            plan["round_state"]["changed_candidate_ids"],
+            ["unresolved-low-risk"],
+        )
+        self.assertEqual(plan["round_state"]["disposition_changed_count"], 1)
+        self.assertEqual(plan["round_state"]["remaining_active_count"], 0)
+        self.assertNotEqual(
+            plan["round_state"]["state_digest_before"],
+            plan["round_state"]["state_digest_after"],
+        )
+
+    def test_priority_narrowing_overrides_unchanged_state_halt(self) -> None:
+        unresolved_low_risk = [
+            {
+                "candidate_id": "unresolved-low-risk",
+                "evidence_state": "supported",
+                "evidence_level": "suspicion",
+                "axes": {
+                    "real": "yes",
+                    "triggerable": "unknown",
+                    "impactful": "unknown",
+                },
+                "severity_raw": "nit",
+                "category_raw": "code_quality",
+            }
+        ]
+        digest = candidate_state_digest(unresolved_low_risk)
+        plan = plan_next_round(
+            policy(),
+            rounds=[
+                {
+                    "new_evidence_count": 0,
+                    "state_digest_before": digest,
+                    "state_digest_after": digest,
+                    "changed_candidate_ids": [],
+                    "changed_candidate_count": 0,
+                    "evidence_added_count": 0,
+                    "disposition_changed_count": 0,
+                    "remaining_active_count": 1,
+                }
+            ],
+            candidates=unresolved_low_risk,
+            elapsed_ms=100,
+        )
+
+        self.assertFalse(plan["should_run"])
+        self.assertEqual(plan["halting"]["reason"], "no_active_candidates")
+        self.assertEqual(plan["round_state"]["untargeted_candidate_count"], 1)
+        self.assertEqual(plan["round_state"]["remaining_active_count"], 0)
+
     def test_review_rounds_records_untargeted_candidates_as_inactive(self) -> None:
         artifact = build_review_rounds_artifact(
             policy=policy(),
@@ -502,6 +718,7 @@ class RefinementLoopTest(unittest.TestCase):
                     "changed_candidate_count": 1,
                     "evidence_added_count": 1,
                     "disposition_changed_count": 0,
+                    "untargeted_candidate_ids": ["unresolved-low-risk"],
                     "untargeted_candidate_count": 1,
                     "remaining_active_count": 0,
                 }
@@ -511,16 +728,43 @@ class RefinementLoopTest(unittest.TestCase):
         )
         self.assertEqual(artifact["halting"]["reason"], "no_active_candidates")
         self.assertEqual(artifact["metrics"]["suppressed_candidate_count"], 1)
+        self.assertEqual(
+            artifact["rounds"][0]["untargeted_candidate_ids"],
+            ["unresolved-low-risk"],
+        )
         schema = json.loads(ROUND_SCHEMA.read_text(encoding="utf-8"))
         self.assertEqual(
             validate_review_rounds_artifact(artifact, schema),
             [],
         )
 
+    def test_controller_requires_explicit_verifier_decision(self) -> None:
+        candidate = {
+            "candidate_id": "hunter-supported",
+            "evidence_state": "supported",
+            "evidence_level": "verified",
+            "axes": {
+                "real": "yes",
+                "triggerable": "yes",
+                "impactful": "yes",
+            },
+        }
+
+        plan = plan_next_round(
+            policy(),
+            rounds=[],
+            candidates=[candidate],
+            elapsed_ms=100,
+        )
+
+        self.assertTrue(plan["should_run"])
+        self.assertEqual(plan["target_candidate_ids"], ["hunter-supported"])
+
     def test_controller_halts_when_no_unresolved_target_remains(self) -> None:
         verified = [
             {
                 "candidate_id": "verified",
+                "decision": "verified",
                 "evidence_state": "supported",
                 "evidence_level": "verified",
                 "axes": {"real": "yes", "triggerable": "yes", "impactful": "yes"},
@@ -542,6 +786,7 @@ class RefinementLoopTest(unittest.TestCase):
                     "candidate_id": "verified",
                     "evidence_state": "supported",
                     "evidence_level": "verified",
+                    "decision": "verified",
                     "axes": {"real": "yes", "triggerable": "yes", "impactful": "yes"},
                 },
                 {
@@ -622,6 +867,11 @@ class RefinementLoopTest(unittest.TestCase):
         )
         self.assertFalse(plan["should_run"])
         self.assertEqual(plan["halting"]["reason"], "no_new_evidence")
+        self.assertEqual(
+            plan["candidate_updates"][0]["decision"],
+            "suppressed",
+        )
+        self.assertEqual(plan["round_state"]["remaining_active_count"], 0)
 
     def test_controller_ignores_model_supplied_after_digest(self) -> None:
         unresolved = [
@@ -647,7 +897,165 @@ class RefinementLoopTest(unittest.TestCase):
         )
         self.assertFalse(plan["should_run"])
         self.assertEqual(plan["halting"]["reason"], "no_new_evidence")
-        self.assertEqual(plan["state_digest"], digest)
+        self.assertNotEqual(plan["state_digest"], digest)
+        self.assertNotEqual(plan["state_digest"], "f" * 64)
+        self.assertEqual(
+            plan["candidate_updates"][0]["posting"]["not_postable_reason"],
+            "low_evidence_suspicion",
+        )
+
+    def test_every_terminal_policy_halt_suppresses_remaining_active_candidates(
+        self,
+    ) -> None:
+        unresolved = [
+            {
+                "candidate_id": "needs-evidence",
+                "evidence_state": "needs_evidence",
+                "evidence_level": "suspicion",
+                "severity_raw": "must_fix",
+                "category_raw": "bug",
+                "axes": {
+                    "real": "yes",
+                    "triggerable": "unknown",
+                    "impactful": "unknown",
+                },
+            }
+        ]
+        digest = candidate_state_digest(unresolved)
+        default_policy = {
+            "max_rounds": 3,
+            "time_budget_ms": 1_000,
+            "no_new_evidence_rounds": 1,
+            "repeated_contradiction_limit": 2,
+        }
+        cases = {
+            "max_rounds": (
+                {**default_policy, "max_rounds": 1},
+                [{"new_evidence_count": 1, "state_digest_before": digest}],
+                100,
+            ),
+            "time_budget": (
+                {**default_policy, "time_budget_ms": 100},
+                [{"new_evidence_count": 1, "state_digest_before": digest}],
+                100,
+            ),
+            "no_new_evidence": (
+                default_policy,
+                [{"new_evidence_count": 1, "state_digest_before": digest}],
+                100,
+            ),
+            "repeated_contradiction": (
+                default_policy,
+                [
+                    {
+                        "new_evidence_count": 1,
+                        "contradiction_signatures": ["same-candidate"],
+                    },
+                    {
+                        "new_evidence_count": 1,
+                        "contradiction_signatures": ["same-candidate"],
+                        "state_digest_before": digest,
+                    },
+                ],
+                100,
+            ),
+        }
+        expected_update = {
+            "candidate_id": "needs-evidence",
+            "decision": "suppressed",
+            "posting": {
+                "post_policy": "local_only",
+                "explanation_postable": False,
+                "not_postable_reason": "low_evidence_suspicion",
+                "audience": "human_reviewer",
+            },
+        }
+
+        for expected_reason, (
+            case_policy,
+            rounds,
+            elapsed_ms,
+        ) in cases.items():
+            with self.subTest(expected_reason=expected_reason):
+                plan = plan_next_round(
+                    case_policy,
+                    rounds=rounds,
+                    candidates=unresolved,
+                    previous_candidates=copy.deepcopy(unresolved),
+                    elapsed_ms=elapsed_ms,
+                )
+
+                self.assertFalse(plan["should_run"])
+                self.assertEqual(plan["halting"]["reason"], expected_reason)
+                self.assertEqual(plan["target_candidate_ids"], [])
+                self.assertEqual(
+                    plan["round_state"]["untargeted_candidate_ids"],
+                    ["needs-evidence"],
+                )
+                self.assertEqual(plan["round_state"]["remaining_active_count"], 0)
+                self.assertEqual(plan["candidate_updates"], [expected_update])
+
+    def test_no_new_halt_reason_survives_terminal_suppression_artifact(
+        self,
+    ) -> None:
+        unresolved = [
+            {
+                "candidate_id": "needs-evidence",
+                "evidence_state": "needs_evidence",
+                "evidence_level": "suspicion",
+                "severity_raw": "must_fix",
+                "category_raw": "bug",
+                "axes": {
+                    "real": "yes",
+                    "triggerable": "unknown",
+                    "impactful": "unknown",
+                },
+            }
+        ]
+        digest = candidate_state_digest(unresolved)
+        plan = plan_next_round(
+            policy(),
+            rounds=[
+                {
+                    "new_evidence_count": 1,
+                    "state_digest_before": digest,
+                }
+            ],
+            candidates=unresolved,
+            previous_candidates=copy.deepcopy(unresolved),
+            elapsed_ms=100,
+        )
+        round_result = {
+            "actions": ["refine", "challenge", "verify"],
+            "input_candidates_count": 1,
+            "output_candidates_count": 0,
+            "new_evidence_count": 0,
+            "verifier_pass_count": 0,
+            "verifier_fail_count": 0,
+            "insufficient_evidence_count": 0,
+            "contradiction_signatures": [],
+            "rejected_candidates": [],
+            "target_candidate_ids": ["needs-evidence"],
+            **plan["round_state"],
+        }
+
+        artifact = build_review_rounds_artifact(
+            policy=policy(),
+            rounds=[round_result],
+            elapsed_ms=100,
+            active_candidates_count=0,
+        )
+
+        self.assertEqual(plan["halting"]["reason"], "no_new_evidence")
+        self.assertEqual(
+            plan["round_state"]["halt_basis_state_digest_after"],
+            digest,
+        )
+        self.assertNotEqual(plan["round_state"]["state_digest_after"], digest)
+        self.assertEqual(artifact["halting"]["reason"], "no_new_evidence")
+        schema = json.loads(ROUND_SCHEMA.read_text(encoding="utf-8"))
+        self.assertEqual(validate_review_rounds_artifact(artifact, schema), [])
+
     def test_round_artifact_records_controller_targets_and_state_digest(self) -> None:
         digest = "b" * 64
         artifact = build_review_rounds_artifact(
@@ -668,6 +1076,8 @@ class RefinementLoopTest(unittest.TestCase):
                     "evidence_added_count": 0,
                     "disposition_changed_count": 0,
                     "remaining_active_count": 1,
+                    "untargeted_candidate_ids": [],
+                    "untargeted_candidate_count": 0,
                 }
             ],
             elapsed_ms=100,
@@ -682,6 +1092,8 @@ class RefinementLoopTest(unittest.TestCase):
         self.assertEqual(round_result["evidence_added_count"], 0)
         self.assertEqual(round_result["disposition_changed_count"], 0)
         self.assertEqual(round_result["remaining_active_count"], 1)
+        self.assertEqual(round_result["untargeted_candidate_count"], 0)
+        self.assertEqual(round_result["untargeted_candidate_ids"], [])
         self.assertEqual(artifact["halting"]["reason"], "no_new_evidence")
         self.assertEqual(artifact["metrics"]["changed_candidate_count"], 0)
         self.assertEqual(artifact["metrics"]["evidence_added_count"], 0)
@@ -718,6 +1130,7 @@ class RefinementLoopTest(unittest.TestCase):
                 "evidence_added_count": 1,
                 "disposition_changed_count": 0,
                 "remaining_active_count": 0,
+                "untargeted_candidate_ids": ["candidate-1"],
             }
         )
         errors = validate_review_rounds_artifact(artifact)
@@ -727,6 +1140,33 @@ class RefinementLoopTest(unittest.TestCase):
         )
         self.assertTrue(
             any("remaining_active_count" in error for error in errors),
+            errors,
+        )
+        self.assertTrue(
+            any("untargeted_candidate_count" in error for error in errors),
+            errors,
+        )
+
+    def test_round_artifact_requires_host_state_on_every_round(self) -> None:
+        artifact = self.valid_review_rounds_artifact()
+        for key in (
+            "target_candidate_ids",
+            "state_digest_before",
+            "state_digest_after",
+            "changed_candidate_ids",
+            "changed_candidate_count",
+            "evidence_added_count",
+            "disposition_changed_count",
+            "untargeted_candidate_count",
+            "untargeted_candidate_ids",
+            "remaining_active_count",
+        ):
+            artifact["rounds"][0].pop(key, None)
+
+        errors = validate_review_rounds_artifact(artifact)
+
+        self.assertTrue(
+            any("missing required host state fields" in error for error in errors),
             errors,
         )
 
@@ -824,9 +1264,19 @@ class RefinementLoopTest(unittest.TestCase):
             policy=policy(),
             rounds=[
                 {
+                    "input_candidates_count": 1,
                     "new_evidence_count": 1,
                     "verifier_fail_count": 1,
                     "rejected_candidates": [raw_candidate],
+                    "target_candidate_ids": ["candidate-1"],
+                    "state_digest_before": "a" * 64,
+                    "state_digest_after": "b" * 64,
+                    "changed_candidate_ids": ["candidate-1"],
+                    "changed_candidate_count": 1,
+                    "evidence_added_count": 1,
+                    "disposition_changed_count": 1,
+                    "untargeted_candidate_count": 0,
+                    "remaining_active_count": 0,
                 }
             ],
             elapsed_ms=100,
@@ -942,9 +1392,19 @@ class RefinementLoopTest(unittest.TestCase):
             policy=policy(),
             rounds=[
                 {
+                    "input_candidates_count": 1,
                     "output_candidates_count": 0,
                     "new_evidence_count": 1,
                     "contradiction_signatures": [{"path": "src/app.ts", "title": "Some issue"}],
+                    "target_candidate_ids": ["candidate-1"],
+                    "state_digest_before": "a" * 64,
+                    "state_digest_after": "b" * 64,
+                    "changed_candidate_ids": ["candidate-1"],
+                    "changed_candidate_count": 1,
+                    "evidence_added_count": 1,
+                    "disposition_changed_count": 1,
+                    "untargeted_candidate_count": 0,
+                    "remaining_active_count": 0,
                 }
             ],
             elapsed_ms=100,

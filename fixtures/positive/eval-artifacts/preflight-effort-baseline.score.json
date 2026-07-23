@@ -1,0 +1,226 @@
+{
+  "schema_version": "score-report.v1",
+  "fixture_id": "pr-codex-positive-seeded-001",
+  "evaluated_at": "2026-07-23T00:00:00Z",
+  "oracle_sha256": "f21022727bb55089b8d0e8ff85852526b78d946f8d9146b39452490a59b1d077",
+  "expected_finding_ids": [
+    "cross-tenant-payment-after-first-item",
+    "global-refund-idempotency-collision",
+    "timestamp-only-pagination-cursor",
+    "limit-plus-one-is-not-returned"
+  ],
+  "exact_pass_rate": 0.0,
+  "acceptable_pass_rate": 0.0,
+  "false_positive_rate": 0.0,
+  "recall_known_bug": 0.0,
+  "gate_pass": false,
+  "scoring_gate": {
+    "acceptable_pass_rate_min": 0.8,
+    "false_positive_rate_max": 0.1,
+    "recall_known_bug_min": 0.66
+  },
+  "gate_checks": [
+    {
+      "name": "acceptable_pass_rate_min",
+      "actual": 0.0,
+      "threshold": 0.8,
+      "passed": false
+    },
+    {
+      "name": "false_positive_rate_max",
+      "actual": 0.0,
+      "threshold": 0.1,
+      "passed": true
+    },
+    {
+      "name": "recall_known_bug_min",
+      "actual": 0.0,
+      "threshold": 0.66,
+      "passed": false
+    }
+  ],
+  "counts": {
+    "axes_target": 3,
+    "exact_pass": 0,
+    "acceptable_pass": 0,
+    "known_bug": 3,
+    "known_bug_matched": 0,
+    "known_false_positive_trap": 1,
+    "false_positive_promoted": 0
+  },
+  "unmatched_actuals": [
+    {
+      "fingerprint": "852ad6a38743d63dfc3fbe8fdc49f1db784055a0ead01a38bd4c255537d409f8",
+      "severity": "must_fix",
+      "category": "security",
+      "path": "src/auth/refund_service.py",
+      "title": "先頭要素だけのテナント検証により他テナントの支払いを返金できる"
+    },
+    {
+      "fingerprint": "eb3d969b9b2b92c3cf132d9970dceb1b0b1e5e62c09464caaf24a1a8cbcc0e52",
+      "severity": "must_fix",
+      "category": "bug",
+      "path": "src/auth/refund_service.py",
+      "title": "テナント接頭辞の削除で返金の冪等性キーが衝突する"
+    },
+    {
+      "fingerprint": "9d5e211ba329346bf9121fb2026490dd5f6d000a33e15da0ae04f8cad12b179c",
+      "severity": "must_fix",
+      "category": "bug",
+      "path": "src/billing/pagination.py",
+      "title": "時刻だけのカーソルでは同一時刻の行を欠落なくページングできない"
+    }
+  ],
+  "breakdown": [
+    {
+      "expected_id": "cross-tenant-payment-after-first-item",
+      "expected_outcome": "known_bug",
+      "matched_actual_fingerprint": null,
+      "match_status": "missed",
+      "axes_diff": {
+        "real": {
+          "expected": "yes",
+          "actual": null,
+          "acceptable": false
+        },
+        "triggerable": {
+          "expected": "yes",
+          "actual": null,
+          "acceptable": false
+        },
+        "impactful": {
+          "expected": "yes",
+          "actual": null,
+          "acceptable": false
+        }
+      },
+      "blast_radius_diff": {
+        "expected": "component",
+        "actual": null,
+        "acceptable": false
+      },
+      "severity_diff": {
+        "expected": [
+          "must_fix"
+        ],
+        "actual": null,
+        "acceptable": false
+      },
+      "evidence_level_ok": false,
+      "notes": "expected finding was not detected"
+    },
+    {
+      "expected_id": "global-refund-idempotency-collision",
+      "expected_outcome": "known_bug",
+      "matched_actual_fingerprint": null,
+      "match_status": "missed",
+      "axes_diff": {
+        "real": {
+          "expected": "yes",
+          "actual": null,
+          "acceptable": false
+        },
+        "triggerable": {
+          "expected": "yes",
+          "actual": null,
+          "acceptable": false
+        },
+        "impactful": {
+          "expected": "yes",
+          "actual": null,
+          "acceptable": false
+        }
+      },
+      "blast_radius_diff": {
+        "expected": "isolated",
+        "actual": null,
+        "acceptable": false
+      },
+      "severity_diff": {
+        "expected": [
+          "must_fix"
+        ],
+        "actual": null,
+        "acceptable": false
+      },
+      "evidence_level_ok": false,
+      "notes": "expected finding was not detected"
+    },
+    {
+      "expected_id": "timestamp-only-pagination-cursor",
+      "expected_outcome": "known_bug",
+      "matched_actual_fingerprint": null,
+      "match_status": "missed",
+      "axes_diff": {
+        "real": {
+          "expected": "yes",
+          "actual": null,
+          "acceptable": false
+        },
+        "triggerable": {
+          "expected": "yes",
+          "actual": null,
+          "acceptable": false
+        },
+        "impactful": {
+          "expected": "yes",
+          "actual": null,
+          "acceptable": false
+        }
+      },
+      "blast_radius_diff": {
+        "expected": "component",
+        "actual": null,
+        "acceptable": false
+      },
+      "severity_diff": {
+        "expected": [
+          "must_fix",
+          "should_fix"
+        ],
+        "actual": null,
+        "acceptable": false
+      },
+      "evidence_level_ok": false,
+      "notes": "expected finding was not detected"
+    },
+    {
+      "expected_id": "limit-plus-one-is-not-returned",
+      "expected_outcome": "known_false_positive_trap",
+      "matched_actual_fingerprint": null,
+      "match_status": "matched",
+      "axes_diff": {
+        "real": {
+          "expected": "no",
+          "actual": null,
+          "acceptable": false
+        },
+        "triggerable": {
+          "expected": "no",
+          "actual": null,
+          "acceptable": false
+        },
+        "impactful": {
+          "expected": "no",
+          "actual": null,
+          "acceptable": false
+        }
+      },
+      "blast_radius_diff": {
+        "expected": "isolated",
+        "actual": null,
+        "acceptable": false
+      },
+      "severity_diff": {
+        "expected": [
+          "note",
+          "nit"
+        ],
+        "actual": null,
+        "acceptable": false
+      },
+      "evidence_level_ok": true,
+      "notes": "trap not promoted"
+    }
+  ]
+}

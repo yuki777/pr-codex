@@ -44,6 +44,76 @@ class ScoreFixtureTest(unittest.TestCase):
                 self.assertEqual(report["false_positive_rate"], 0.0)
                 self.assertEqual(report["recall_known_bug"], 1.0)
 
+    def test_positive_unknown_blast_radii_fail_quality_gate(self) -> None:
+        expected = load_json(ROOT / "fixtures" / "positive" / "expected-findings.json")
+        actual = copy.deepcopy(
+            load_json(ROOT / "fixtures" / "positive" / "scoring-stubs" / "perfect.findings.verified.json")
+        )
+        for finding in actual["findings"]:
+            finding["blast_radius"] = "unknown"
+
+        report = score_fixture(expected, actual, EVALUATED_AT)
+
+        self.assertEqual(validate_score_report(report), [])
+        self.assertFalse(report["gate_pass"])
+        self.assertEqual(report["exact_pass_rate"], 0.0)
+        self.assertEqual(report["acceptable_pass_rate"], 0.0)
+        matched_rows = [
+            row
+            for row in report["breakdown"]
+            if row["expected_outcome"] == "known_bug"
+        ]
+        self.assertTrue(matched_rows)
+        self.assertTrue(
+            all(
+                row["blast_radius_diff"]
+                == {
+                    "expected": expected_row["expected_blast_radius"],
+                    "actual": "unknown",
+                    "acceptable": False,
+                }
+                for row, expected_row in zip(
+                    matched_rows,
+                    [
+                        row
+                        for row in expected["expected_findings"]
+                        if row["expected_outcome"] == "known_bug"
+                    ],
+                    strict=True,
+                )
+            )
+        )
+
+    def test_duplicate_candidates_prefer_matching_blast_radius_independent_of_order(self) -> None:
+        expected = load_json(ROOT / "fixtures" / "small" / "expected-findings.json")
+        actual = load_json(
+            ROOT / "fixtures" / "small" / "scoring-stubs" / "perfect.findings.verified.json"
+        )
+        matching = copy.deepcopy(actual["findings"][0])
+        matching["severity"] = "note"
+        matching["fingerprint"] = "f" * 64
+        matching["id"] = matching["fingerprint"]
+        mismatching = copy.deepcopy(actual["findings"][0])
+        mismatching["blast_radius"] = "repository"
+        mismatching["severity"] = "must_fix"
+        mismatching["fingerprint"] = "0" * 64
+        mismatching["id"] = mismatching["fingerprint"]
+
+        for candidates in ([mismatching, matching], [matching, mismatching]):
+            with self.subTest(order=[item["fingerprint"] for item in candidates]):
+                payload = copy.deepcopy(actual)
+                payload["findings"] = copy.deepcopy(candidates)
+
+                report = score_fixture(expected, payload, EVALUATED_AT)
+                row = next(
+                    item
+                    for item in report["breakdown"]
+                    if item["expected_id"] == "abstract-app-local-migration-note"
+                )
+
+                self.assertEqual(row["matched_actual_fingerprint"], matching["fingerprint"])
+                self.assertTrue(row["blast_radius_diff"]["acceptable"])
+
     def test_missed_known_bug_fails_recall_and_gate(self) -> None:
         report = score("small", "missed-known-bug")
         self.assertFalse(report["gate_pass"])
@@ -203,6 +273,22 @@ class ScoreFixtureTest(unittest.TestCase):
         errors = validate_score_report(report)
         self.assertTrue(any("acceptable_pass_rate" in error for error in errors))
         self.assertTrue(any("counts.acceptable_pass" in error for error in errors))
+
+    def test_score_report_validator_rejects_tampered_blast_radius_acceptability(self) -> None:
+        report = score("small", "perfect")
+        report["breakdown"][0]["blast_radius_diff"]["acceptable"] = False
+
+        errors = validate_score_report(report)
+
+        self.assertIn(
+            "$.breakdown[0].blast_radius_diff.acceptable: "
+            "must equal (actual is not null and actual == expected)",
+            errors,
+        )
+        self.assertFalse(
+            any(error.startswith("$.counts.acceptable_pass") for error in errors),
+            errors,
+        )
 
     def test_score_report_validator_rejects_gate_pass_mismatch(self) -> None:
         report = score("small", "missed-known-bug")

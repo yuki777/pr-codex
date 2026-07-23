@@ -1,0 +1,123 @@
+{
+  "schema_version": "findings.v1",
+  "producer": {
+    "name": "pr-codex-eval",
+    "version": "1.8.0",
+    "run_id": "fable-lean-v2-default"
+  },
+  "pr": {
+    "repository": "pr-codex/synthetic-fixtures",
+    "number": 1,
+    "base_sha": "447a8d428c2a0a503cc21cb288c6ef46f42edde1f1d4cf61afe918eb1d2bfd96",
+    "head_sha": "456d082d6c19cd5118e79e0431687ef6383b7bdd590cfe8724d9aa4492703e06"
+  },
+  "generated_at": "2026-07-23T00:00:00Z",
+  "findings": [
+    {
+      "source_agents": [
+        "fable-lean-v2-default"
+      ],
+      "merged_from": [
+        "eval:fable-lean-v2-default"
+      ],
+      "location": {
+        "path": "src/auth/refund_service.py",
+        "start_line": 46,
+        "side": "RIGHT"
+      },
+      "severity": "must_fix",
+      "category": "security",
+      "title": "Batch authorization checks only the first payment",
+      "problem": "The tenant authorization check examines only payments[0], but the subsequent loop refunds every captured payment returned by the repository.",
+      "reason": "A caller can submit a batch whose first resolved payment belongs to the actor and whose later payment belongs to another tenant. The first check passes, and the later captured payment is sent to record_refund without any tenant validation, creating a cross-tenant refund authorization bypass.",
+      "suggestion": "Validate payment.tenant_id against actor.tenant_id for every payment before recording any refund. Prefer validating the entire batch first so an invalid entry cannot leave a partially processed batch.",
+      "evidence_level": "verified",
+      "axes": {
+        "real": "yes",
+        "triggerable": "yes",
+        "impactful": "yes"
+      },
+      "blast_radius": "component",
+      "posting": {
+        "post_policy": "inline",
+        "explanation_postable": true,
+        "audience": "eval_harness"
+      },
+      "security": {
+        "severity": "medium",
+        "confidence": "high",
+        "exploitability": "triggerable_from_changed_code",
+        "disclosure_policy": "inline_safe",
+        "public_safe_summary": "Batch authorization checks only the first payment"
+      },
+      "id": "6047041d790614ab891b9a47a056598aea434aef32569b2824005739f09ee7e3",
+      "fingerprint": "6047041d790614ab891b9a47a056598aea434aef32569b2824005739f09ee7e3"
+    },
+    {
+      "source_agents": [
+        "fable-lean-v2-default"
+      ],
+      "merged_from": [
+        "eval:fable-lean-v2-default"
+      ],
+      "location": {
+        "path": "src/auth/refund_service.py",
+        "start_line": 53,
+        "side": "RIGHT"
+      },
+      "severity": "must_fix",
+      "category": "bug",
+      "title": "Refund idempotency keys now collide across tenants",
+      "problem": "The repository idempotency key no longer includes actor.tenant_id even though repository keys use a global namespace and payment IDs are only unique within a tenant.",
+      "reason": "Two tenants using the same client idempotency key for payments with the same tenant-local payment ID produce an identical repository key. The repository can therefore treat one tenant's refund as the other tenant's retry, suppressing or misattributing a legitimate refund across tenants.",
+      "suggestion": "Restore tenant scoping, for example f\"{actor.tenant_id}:{idempotency_key}:{payment.id}\".",
+      "evidence_level": "verified",
+      "axes": {
+        "real": "yes",
+        "triggerable": "yes",
+        "impactful": "yes"
+      },
+      "blast_radius": "component",
+      "posting": {
+        "post_policy": "inline",
+        "explanation_postable": true,
+        "audience": "eval_harness"
+      },
+      "id": "f6034f7ffb1f87ecbac72a68e3a04c77aa8600b88ad6db974b3867b2699e2d58",
+      "fingerprint": "f6034f7ffb1f87ecbac72a68e3a04c77aa8600b88ad6db974b3867b2699e2d58"
+    },
+    {
+      "source_agents": [
+        "fable-lean-v2-default"
+      ],
+      "merged_from": [
+        "eval:fable-lean-v2-default"
+      ],
+      "location": {
+        "path": "src/billing/pagination.py",
+        "start_line": 59,
+        "side": "RIGHT"
+      },
+      "severity": "should_fix",
+      "category": "bug",
+      "title": "Timestamp-only cursor cannot paginate rows sharing a timestamp",
+      "problem": "The next cursor records only the last row's created_at value, discarding the payment ID that breaks ties in the declared ordering.",
+      "reason": "When more than one page of rows shares the same created_at, the cursor cannot represent which row within that timestamp was last returned. A subsequent timestamp-only page_before call must either exclude remaining equal-timestamp rows or include already returned rows, causing omissions, duplicates, or a non-advancing page.",
+      "suggestion": "Keep both created_at and payment_id in Cursor and pass the composite cursor to page_before so the continuation predicate matches the (created_at DESC, id DESC) ordering.",
+      "evidence_level": "verified",
+      "axes": {
+        "real": "yes",
+        "triggerable": "yes",
+        "impactful": "yes"
+      },
+      "blast_radius": "component",
+      "posting": {
+        "post_policy": "body_summary",
+        "explanation_postable": true,
+        "audience": "eval_harness"
+      },
+      "id": "e18361781789a52f2c9d0945b46f6eba3f7da202d2ae2299928ae3bd3deb463a",
+      "fingerprint": "e18361781789a52f2c9d0945b46f6eba3f7da202d2ae2299928ae3bd3deb463a"
+    }
+  ]
+}

@@ -92,6 +92,72 @@
         "avg_tokens": {"type": ["number", "null"], "minimum": 0}
       }
     },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "artifact_reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "prompt_config_reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "path", "sha256"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "scorer_reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "revision"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "revision": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "run_id",
+        "sample_count",
+        "repetitions",
+        "prompt_config",
+        "fixture",
+        "oracle",
+        "findings_artifact",
+        "score_report",
+        "execution_manifest",
+        "scorer",
+        "evaluated_at"
+      ],
+      "properties": {
+        "run_id": {"type": "string", "minLength": 1},
+        "sample_count": {"type": "integer", "minimum": 1},
+        "repetitions": {"type": "integer", "minimum": 1},
+        "prompt_config": {"$ref": "#/$defs/prompt_config_reference"},
+        "fixture": {"$ref": "#/$defs/artifact_reference"},
+        "oracle": {"$ref": "#/$defs/artifact_reference"},
+        "findings_artifact": {"$ref": "#/$defs/artifact_reference"},
+        "score_report": {"$ref": "#/$defs/artifact_reference"},
+        "execution_manifest": {"$ref": "#/$defs/artifact_reference"},
+        "scorer": {"$ref": "#/$defs/scorer_reference"},
+        "evaluated_at": {"type": "string", "format": "date-time"}
+      }
+    },
     "run_result": {
       "type": "object",
       "additionalProperties": false,
@@ -102,14 +168,25 @@
         "round_metrics": {"$ref": "#/$defs/round_metrics"}
       }
     },
+    "fixture_run_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["score_metrics", "execution", "round_metrics", "provenance"],
+      "properties": {
+        "score_metrics": {"$ref": "#/$defs/score_metrics"},
+        "execution": {"$ref": "#/$defs/execution"},
+        "round_metrics": {"$ref": "#/$defs/round_metrics"},
+        "provenance": {"$ref": "#/$defs/provenance"}
+      }
+    },
     "fixture_result": {
       "type": "object",
       "additionalProperties": false,
       "required": ["fixture_id", "baseline", "iterative"],
       "properties": {
         "fixture_id": {"type": "string", "minLength": 1},
-        "baseline": {"$ref": "#/$defs/run_result"},
-        "iterative": {"$ref": "#/$defs/run_result"}
+        "baseline": {"$ref": "#/$defs/fixture_run_result"},
+        "iterative": {"$ref": "#/$defs/fixture_run_result"}
       }
     },
     "aggregate": {

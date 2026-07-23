@@ -65,6 +65,13 @@
         "needs_evidence"
       ]
     },
+    "decision": {
+      "enum": [
+        "verified",
+        "refuted",
+        "suppressed"
+      ]
+    },
     "evidence_level": {
       "enum": [
         "suspicion",
@@ -245,6 +252,18 @@
         },
         "evidence_state": {
           "$ref": "#/$defs/evidence_state"
+        },
+        "decision": {
+          "$ref": "#/$defs/decision"
+        },
+        "disagreement": {
+          "type": "boolean"
+        },
+        "severity_disputed": {
+          "type": "boolean"
+        },
+        "contradiction": {
+          "type": "boolean"
         },
         "location": {
           "$ref": "#/$defs/location"

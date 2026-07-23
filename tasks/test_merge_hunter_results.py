@@ -262,6 +262,45 @@ class MergeHunterResultsTests(unittest.TestCase):
         self.assertEqual(validation.returncode, 0, validation.stderr)
         self.assertEqual(validation.stdout, "VALID candidates artifact\n")
 
+    def test_candidates_accept_verifier_terminal_state(self) -> None:
+        metadata = valid_metadata()
+        result, exists, output = self.run_merge(
+            valid_hunter(),
+            valid_hunter("clean"),
+            metadata=metadata,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(exists)
+        candidate = output["candidates"][0]
+        candidate.update(
+            {
+                "decision": "verified",
+                "disagreement": False,
+                "severity_disputed": False,
+                "contradiction": False,
+            }
+        )
+
+        self.assertEqual(validate_candidates(output, metadata), [])
+        schema = json.loads(CANDIDATES_SCHEMA.read_text(encoding="utf-8"))
+        properties = schema["$defs"]["candidate"]["properties"]
+        self.assertEqual(properties["decision"], {"$ref": "#/$defs/decision"})
+        self.assertEqual(
+            schema["$defs"]["decision"]["enum"],
+            ["verified", "refuted", "suppressed"],
+        )
+        for key in ("disagreement", "severity_disputed", "contradiction"):
+            self.assertEqual(properties[key], {"type": "boolean"})
+
+        invalid = copy.deepcopy(output)
+        invalid["candidates"][0]["decision"] = "pending"
+        self.assertTrue(
+            any(
+                ".decision: invalid value" in error
+                for error in validate_candidates(invalid, metadata)
+            )
+        )
+
     def test_clean_side_contributes_no_candidates(self) -> None:
         codex = valid_hunter(candidates=[valid_candidate(title="Codex only")])
         result, exists, output = self.run_merge(valid_hunter("clean"), codex)

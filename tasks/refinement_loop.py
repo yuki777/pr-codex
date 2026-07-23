@@ -220,11 +220,9 @@ def _candidate_state(candidate: dict[str, Any]) -> dict[str, Any]:
             candidate.get("blast_radius")
         ),
         "decision": candidate.get("decision"),
-        "disagreement": bool(
-            candidate.get("disagreement")
-            or candidate.get("severity_disputed")
-            or candidate.get("contradiction")
-        ),
+        "disagreement": bool(candidate.get("disagreement")),
+        "severity_disputed": bool(candidate.get("severity_disputed")),
+        "contradiction": bool(candidate.get("contradiction")),
     }
 
 
@@ -302,10 +300,17 @@ def candidate_state_delta(
             or axis_evidence_changed
         )
 
-    def disposition_state(state: dict[str, Any] | None) -> tuple[Any, Any]:
+    def disposition_state(
+        state: dict[str, Any] | None,
+    ) -> tuple[Any, Any, Any, Any]:
         if state is None:
-            return None, None
-        return state.get("decision"), state.get("disagreement")
+            return None, None, None, None
+        return (
+            state.get("decision"),
+            state.get("disagreement"),
+            state.get("severity_disputed"),
+            state.get("contradiction"),
+        )
 
     return {
         "state_digest_before": candidate_state_digest(before),
@@ -453,24 +458,11 @@ def apply_auto_deep(
 
 
 def _candidate_requires_refinement(candidate: dict[str, Any]) -> bool:
-    decision = candidate.get("decision")
-    if decision in {"verified", "refuted", "suppressed"}:
-        return False
-    if (
-        candidate.get("disagreement")
-        or candidate.get("severity_disputed")
-        or candidate.get("contradiction")
-    ):
-        return True
-    if candidate.get("evidence_state") != "supported":
-        return True
-    evidence_level = candidate.get("evidence_level") or candidate.get(
-        "evidence_level_suggestion"
-    )
-    if evidence_level != "verified":
-        return True
-    axes = _candidate_axes(candidate)
-    return any(axes.get(key) not in {"yes", "no"} for key in ("real", "triggerable", "impactful"))
+    return candidate.get("decision") not in {
+        "verified",
+        "refuted",
+        "suppressed",
+    }
 
 
 
@@ -556,6 +548,42 @@ def select_round_targets(
     return []
 
 
+def _suppress_candidates_outside_targets(
+    candidates: list[dict[str, Any]],
+    target_candidate_ids: set[str],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str]]:
+    """Apply deterministic local-only terminal state outside the next round."""
+
+    updated_candidates = copy.deepcopy(candidates)
+    updates: list[dict[str, Any]] = []
+    suppressed_ids: list[str] = []
+    for candidate in updated_candidates:
+        if not _candidate_requires_refinement(candidate):
+            continue
+        candidate_id = _candidate_identifier(candidate)
+        if candidate_id in target_candidate_ids:
+            continue
+        posting = {
+            "post_policy": "local_only",
+            "explanation_postable": False,
+            "not_postable_reason": "low_evidence_suspicion",
+            "audience": "human_reviewer",
+        }
+        candidate["decision"] = "suppressed"
+        candidate["posting"] = posting
+        suppressed_ids.append(candidate_id)
+        updates.append(
+            {
+                "candidate_id": candidate_id,
+                "decision": "suppressed",
+                "posting": copy.deepcopy(posting),
+            }
+        )
+    updates.sort(key=lambda update: str(update["candidate_id"]))
+    return updated_candidates, updates, sorted(suppressed_ids)
+
+
+
 def plan_next_round(
     policy: HaltingPolicy | dict[str, Any] | None,
     *,
@@ -566,26 +594,24 @@ def plan_next_round(
     previous_candidates: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     round_index = len(rounds) + 1
-    state_digest = candidate_state_digest(candidates)
     evaluation_rounds = copy.deepcopy(rounds)
-    round_state: dict[str, Any] | None = None
+    base_round_state: dict[str, Any] | None = None
     previous_changed_ids: set[str] = set()
+
     if previous_candidates is not None:
         if not evaluation_rounds:
             raise ValueError("previous candidates require at least one completed round")
-        round_state = candidate_state_delta(previous_candidates, candidates)
+        base_round_state = candidate_state_delta(previous_candidates, candidates)
         latest = evaluation_rounds[-1]
         supplied_before = latest.get("state_digest_before")
         if (
             isinstance(supplied_before, str)
-            and supplied_before != round_state["state_digest_before"]
+            and supplied_before != base_round_state["state_digest_before"]
         ):
             raise ValueError(
                 "previous candidate snapshot does not match the latest round start digest"
             )
-        latest.update(round_state)
-        latest["new_evidence_count"] = round_state["evidence_added_count"]
-        previous_changed_ids = set(round_state["changed_candidate_ids"])
+        previous_changed_ids = set(base_round_state["changed_candidate_ids"])
     elif evaluation_rounds:
         latest = evaluation_rounds[-1]
         raw_changed_ids = latest.get("changed_candidate_ids")
@@ -593,9 +619,7 @@ def plan_next_round(
             previous_changed_ids = {
                 value for value in raw_changed_ids if isinstance(value, str) and value
             }
-        if isinstance(latest.get("state_digest_before"), str):
-            latest["state_digest_after"] = state_digest
-        round_state = {
+        base_round_state = {
             key: latest[key]
             for key in (
                 "state_digest_before",
@@ -604,49 +628,111 @@ def plan_next_round(
                 "changed_candidate_count",
                 "evidence_added_count",
                 "disposition_changed_count",
+                "untargeted_candidate_ids",
+                "untargeted_candidate_count",
                 "remaining_active_count",
             )
             if key in latest
         }
-    targets = select_round_targets(
+
+    provisional_targets = select_round_targets(
         candidates,
         round_index=round_index,
         changed_candidate_ids=previous_changed_ids,
         run_plan=run_plan,
     )
-    unresolved_candidates_count = sum(
-        _candidate_requires_refinement(candidate)
-        for candidate in candidates
-        if isinstance(candidate, dict)
+    provisional_target_ids = {
+        _candidate_identifier(candidate) for candidate in provisional_targets
+    }
+
+    def assemble_round_state(
+        candidate_state: list[dict[str, Any]],
+        untargeted_candidate_ids: list[str],
+        remaining_active_count: int,
+    ) -> dict[str, Any] | None:
+        if previous_candidates is not None:
+            state = candidate_state_delta(previous_candidates, candidate_state)
+        elif evaluation_rounds:
+            state = copy.deepcopy(base_round_state or {})
+            state["state_digest_after"] = candidate_state_digest(candidate_state)
+            changed_ids = {
+                value
+                for value in state.get("changed_candidate_ids", [])
+                if isinstance(value, str) and value
+            }
+            newly_suppressed = set(untargeted_candidate_ids) - changed_ids
+            changed_ids.update(untargeted_candidate_ids)
+            state["changed_candidate_ids"] = sorted(changed_ids)
+            state["changed_candidate_count"] = len(changed_ids)
+            state["disposition_changed_count"] = (
+                max(0, _as_int(state.get("disposition_changed_count")))
+                + len(newly_suppressed)
+            )
+        else:
+            return None
+        state["untargeted_candidate_ids"] = list(untargeted_candidate_ids)
+        state["untargeted_candidate_count"] = len(untargeted_candidate_ids)
+        state["remaining_active_count"] = remaining_active_count
+        return state
+
+    effective_candidates, candidate_updates, untargeted_candidate_ids = (
+        _suppress_candidates_outside_targets(
+            candidates,
+            provisional_target_ids,
+        )
     )
+    round_state = assemble_round_state(
+        effective_candidates,
+        untargeted_candidate_ids,
+        len(provisional_targets),
+    )
+
+    def update_latest_round() -> None:
+        if not evaluation_rounds or round_state is None:
+            return
+        evaluation_rounds[-1].update(round_state)
+        if "evidence_added_count" in round_state:
+            evaluation_rounds[-1]["new_evidence_count"] = round_state[
+                "evidence_added_count"
+            ]
+
+    halt_basis_state_digest_after = candidate_state_digest(effective_candidates)
+    update_latest_round()
     decision = evaluate_halting(
         policy,
         evaluation_rounds,
         elapsed_ms=elapsed_ms,
-        active_candidates_count=unresolved_candidates_count,
+        active_candidates_count=len(provisional_targets),
     )
-    untargeted_candidate_count = max(
-        0,
-        unresolved_candidates_count - len(targets),
-    )
-    if not decision.should_halt and unresolved_candidates_count > 0 and not targets:
-        decision = HaltingDecision(
-            True,
-            "no_active_candidates",
-            "unresolved candidates are outside the next-round priority scope",
+
+    targets = provisional_targets
+    if decision.should_halt and provisional_targets:
+        effective_candidates, candidate_updates, untargeted_candidate_ids = (
+            _suppress_candidates_outside_targets(candidates, set())
         )
-    if round_state is not None and (
-        not decision.should_halt
-        or decision.reason == "no_active_candidates"
-    ):
-        round_state["untargeted_candidate_count"] = untargeted_candidate_count
-        round_state["remaining_active_count"] = len(targets)
+        round_state = assemble_round_state(
+            effective_candidates,
+            untargeted_candidate_ids,
+            0,
+        )
+        if round_state is not None:
+            round_state["halt_basis_state_digest_after"] = (
+                halt_basis_state_digest_after
+            )
+        update_latest_round()
+        targets = []
+
     return {
         "round_index": round_index,
         "should_run": not decision.should_halt,
-        "actions": ["refine", "challenge", "verify"] if not decision.should_halt else [],
-        "target_candidate_ids": [_candidate_identifier(candidate) for candidate in targets],
-        "state_digest": state_digest,
+        "actions": ["refine", "challenge", "verify"]
+        if not decision.should_halt
+        else [],
+        "target_candidate_ids": [
+            _candidate_identifier(candidate) for candidate in targets
+        ],
+        "candidate_updates": candidate_updates,
+        "state_digest": candidate_state_digest(effective_candidates),
         "round_state": round_state,
         "auto_deep_eligible": auto_deep_eligible(candidates, run_plan),
         "halting": decision.to_dict(
@@ -729,7 +815,7 @@ def evaluate_halting(
     active = max(0, int(active_candidates_count))
     rounds_completed = len(rounds)
 
-    if elapsed >= resolved_policy.time_budget_ms:
+    if rounds_completed > 0 and elapsed >= resolved_policy.time_budget_ms:
         return HaltingDecision(True, "time_budget", "time budget exhausted before starting another round")
     if rounds_completed >= resolved_policy.max_rounds:
         return HaltingDecision(True, "max_rounds", "max rounds reached")
@@ -741,7 +827,10 @@ def evaluate_halting(
         return HaltingDecision(True, "repeated_contradiction", f"repeated contradiction signature: {sorted(repeated)[0]}")
     if rounds:
         before = rounds[-1].get("state_digest_before")
-        after = rounds[-1].get("state_digest_after")
+        after = rounds[-1].get(
+            "halt_basis_state_digest_after",
+            rounds[-1].get("state_digest_after"),
+        )
         if (
             isinstance(before, str)
             and isinstance(after, str)
@@ -755,18 +844,10 @@ def evaluate_halting(
             )
 
     if active == 0:
-        untargeted = sum(
-            _as_int(round_result.get("untargeted_candidate_count"))
-            for round_result in rounds
-        )
-        verifier_failures = sum(
-            _as_int(round_result.get("verifier_fail_count"))
-            for round_result in rounds
-        )
-        insufficient = sum(
-            _as_int(round_result.get("insufficient_evidence_count"))
-            for round_result in rounds
-        )
+        latest = rounds[-1] if rounds and isinstance(rounds[-1], dict) else {}
+        untargeted = _as_int(latest.get("untargeted_candidate_count"))
+        verifier_failures = _as_int(latest.get("verifier_fail_count"))
+        insufficient = _as_int(latest.get("insufficient_evidence_count"))
         if untargeted > 0:
             return HaltingDecision(
                 True,
@@ -876,15 +957,26 @@ def sanitize_round_result(round_result: dict[str, Any], *, round_index: int) -> 
         ],
         "rejected_candidates": [sanitize_local_candidate(item) for item in rejected if isinstance(item, dict)],
     }
-    for key in ("target_candidate_ids", "changed_candidate_ids"):
+    for key in (
+        "target_candidate_ids",
+        "changed_candidate_ids",
+        "untargeted_candidate_ids",
+    ):
         values = round_result.get(key)
-        if isinstance(values, list):
-            sanitized[key] = [
-                _safe_identifier_value(value)
-                for value in values
-                if isinstance(value, str) and value
-            ]
-    for key in ("state_digest_before", "state_digest_after"):
+        if not isinstance(values, list):
+            if key != "untargeted_candidate_ids":
+                continue
+            values = []
+        sanitized[key] = [
+            _safe_identifier_value(value)
+            for value in values
+            if isinstance(value, str) and value
+        ]
+    for key in (
+        "state_digest_before",
+        "state_digest_after",
+        "halt_basis_state_digest_after",
+    ):
         value = round_result.get(key)
         if isinstance(value, str):
             sanitized[key] = value.strip().casefold()
@@ -1200,12 +1292,14 @@ def validate_review_rounds_artifact(data: dict[str, Any], schema: dict[str, Any]
             "target_candidate_ids",
             "state_digest_before",
             "state_digest_after",
+            "halt_basis_state_digest_after",
             "changed_candidate_ids",
             "changed_candidate_count",
             "evidence_added_count",
             "disposition_changed_count",
             "remaining_active_count",
             "untargeted_candidate_count",
+            "untargeted_candidate_ids",
         }
         extra_round_keys = sorted(set(round_result) - allowed_round_keys)
         if extra_round_keys:
@@ -1270,17 +1364,24 @@ def validate_review_rounds_artifact(data: dict[str, Any], schema: dict[str, Any]
                         errors.append(
                             f"{path}.target_candidate_ids: Round 3 must target only candidates changed in Round 2"
                         )
-        state_metric_keys = {
+        host_state_keys = {
+            "target_candidate_ids",
+            "state_digest_before",
+            "state_digest_after",
             "changed_candidate_ids",
             "changed_candidate_count",
             "evidence_added_count",
             "disposition_changed_count",
+            "untargeted_candidate_count",
+            "untargeted_candidate_ids",
             "remaining_active_count",
         }
-        present_state_metric_keys = state_metric_keys & set(round_result)
-        if present_state_metric_keys and present_state_metric_keys != state_metric_keys:
-            missing = ", ".join(sorted(state_metric_keys - present_state_metric_keys))
-            errors.append(f"{path}: incomplete host state metrics; missing {missing}")
+        missing_host_state_keys = sorted(host_state_keys - set(round_result))
+        if missing_host_state_keys:
+            errors.append(
+                f"{path}: missing required host state fields: "
+                f"{', '.join(missing_host_state_keys)}"
+            )
         changed_candidate_ids = round_result.get("changed_candidate_ids")
         current_changed_ids: set[str] | None = None
         if changed_candidate_ids is not None:
@@ -1306,6 +1407,40 @@ def validate_review_rounds_artifact(data: dict[str, Any], schema: dict[str, Any]
                     errors.append(
                         f"{path}.changed_candidate_count: must equal len(changed_candidate_ids)"
                     )
+        untargeted_candidate_ids = round_result.get("untargeted_candidate_ids")
+        if untargeted_candidate_ids is not None:
+            if (
+                not isinstance(untargeted_candidate_ids, list)
+                or any(
+                    not isinstance(value, str) or not value
+                    for value in untargeted_candidate_ids
+                )
+            ):
+                errors.append(
+                    f"{path}.untargeted_candidate_ids: "
+                    "must be an array of non-empty strings"
+                )
+            else:
+                untargeted_ids = set(untargeted_candidate_ids)
+                if len(untargeted_ids) != len(untargeted_candidate_ids):
+                    errors.append(
+                        f"{path}.untargeted_candidate_ids: must contain unique values"
+                    )
+                if round_result.get("untargeted_candidate_count") != len(
+                    untargeted_candidate_ids
+                ):
+                    errors.append(
+                        f"{path}.untargeted_candidate_count: "
+                        "must equal len(untargeted_candidate_ids)"
+                    )
+                if (
+                    current_changed_ids is not None
+                    and not untargeted_ids <= current_changed_ids
+                ):
+                    errors.append(
+                        f"{path}.untargeted_candidate_ids: "
+                        "must be a subset of changed_candidate_ids"
+                    )
         changed_count = round_result.get("changed_candidate_count")
         for key in ("evidence_added_count", "disposition_changed_count"):
             value = round_result.get(key)
@@ -1328,9 +1463,16 @@ def validate_review_rounds_artifact(data: dict[str, Any], schema: dict[str, Any]
         previous_changed_ids = current_changed_ids
         state_digest_before = round_result.get("state_digest_before")
         state_digest_after = round_result.get("state_digest_after")
+        halt_basis_state_digest_after = round_result.get(
+            "halt_basis_state_digest_after"
+        )
         for key, value in (
             ("state_digest_before", state_digest_before),
             ("state_digest_after", state_digest_after),
+            (
+                "halt_basis_state_digest_after",
+                halt_basis_state_digest_after,
+            ),
         ):
             if value is not None and (
                 not isinstance(value, str) or STATE_DIGEST_RE.fullmatch(value) is None

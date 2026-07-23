@@ -1,0 +1,123 @@
+{
+  "schema_version": "findings.v1",
+  "producer": {
+    "name": "pr-codex-eval",
+    "version": "1.8.0",
+    "run_id": "codex-lean-v2-high-seq"
+  },
+  "pr": {
+    "repository": "pr-codex/synthetic-fixtures",
+    "number": 1,
+    "base_sha": "447a8d428c2a0a503cc21cb288c6ef46f42edde1f1d4cf61afe918eb1d2bfd96",
+    "head_sha": "456d082d6c19cd5118e79e0431687ef6383b7bdd590cfe8724d9aa4492703e06"
+  },
+  "generated_at": "2026-07-23T00:00:00Z",
+  "findings": [
+    {
+      "source_agents": [
+        "codex-lean-v2-high-seq"
+      ],
+      "merged_from": [
+        "eval:codex-lean-v2-high-seq"
+      ],
+      "location": {
+        "path": "src/auth/refund_service.py",
+        "start_line": 46,
+        "side": "RIGHT"
+      },
+      "severity": "must_fix",
+      "category": "security",
+      "title": "Only the first payment is checked for tenant ownership",
+      "problem": "The batch authorization check validates only `payments[0]`, but the loop refunds every captured payment returned by the repository. A batch whose first payment belongs to the actor and whose later payment belongs to another tenant passes authorization and refunds the other tenant's payment.",
+      "reason": "`get_many` is not tenant-scoped, and the supplied model explicitly permits payment IDs to overlap across tenants. Therefore a mixed-tenant result is reachable, and the later unvalidated entries flow directly to `record_refund`, causing a cross-tenant authorization and integrity violation.",
+      "suggestion": "Validate every returned payment's `tenant_id` before recording any refund, and reject the entire batch if any payment does not belong to the actor. Prefer a tenant-scoped repository lookup as an additional boundary.",
+      "evidence_level": "verified",
+      "axes": {
+        "real": "yes",
+        "triggerable": "yes",
+        "impactful": "yes"
+      },
+      "blast_radius": "component",
+      "posting": {
+        "post_policy": "inline",
+        "explanation_postable": true,
+        "audience": "eval_harness"
+      },
+      "security": {
+        "severity": "medium",
+        "confidence": "high",
+        "exploitability": "triggerable_from_changed_code",
+        "disclosure_policy": "inline_safe",
+        "public_safe_summary": "Only the first payment is checked for tenant ownership"
+      },
+      "id": "78bd6795d21507b9c1e569466f69a5e810a0d8a61aa49e730e9370e4eaf663e3",
+      "fingerprint": "78bd6795d21507b9c1e569466f69a5e810a0d8a61aa49e730e9370e4eaf663e3"
+    },
+    {
+      "source_agents": [
+        "codex-lean-v2-high-seq"
+      ],
+      "merged_from": [
+        "eval:codex-lean-v2-high-seq"
+      ],
+      "location": {
+        "path": "src/auth/refund_service.py",
+        "start_line": 53,
+        "side": "RIGHT"
+      },
+      "severity": "must_fix",
+      "category": "bug",
+      "title": "Removing the tenant from globally scoped idempotency keys creates cross-tenant collisions",
+      "problem": "The generated repository key is now only `{idempotency_key}:{payment.id}` even though repository idempotency keys share a global namespace and payment IDs are unique only within a tenant.",
+      "reason": "Two tenants can submit the same idempotency key for payments with the same tenant-local ID, producing an identical global repository key for distinct refunds. This incorrectly aliases one tenant's operation with another tenant's operation and violates cross-tenant refund integrity.",
+      "suggestion": "Retain the tenant namespace in the key, for example `f\"{actor.tenant_id}:{idempotency_key}:{payment.id}\"`.",
+      "evidence_level": "verified",
+      "axes": {
+        "real": "yes",
+        "triggerable": "yes",
+        "impactful": "yes"
+      },
+      "blast_radius": "component",
+      "posting": {
+        "post_policy": "inline",
+        "explanation_postable": true,
+        "audience": "eval_harness"
+      },
+      "id": "250cb9e585f4ae25b4d94c523cd638e05df61b36b8f77b4b06db066bff60b0fa",
+      "fingerprint": "250cb9e585f4ae25b4d94c523cd638e05df61b36b8f77b4b06db066bff60b0fa"
+    },
+    {
+      "source_agents": [
+        "codex-lean-v2-high-seq"
+      ],
+      "merged_from": [
+        "eval:codex-lean-v2-high-seq"
+      ],
+      "location": {
+        "path": "src/billing/pagination.py",
+        "start_line": 59,
+        "side": "RIGHT"
+      },
+      "severity": "should_fix",
+      "category": "bug",
+      "title": "Timestamp-only cursor skips payments that share the page boundary timestamp",
+      "problem": "The next cursor retains only the last row's `created_at`, discarding the payment ID tie-breaker even though rows are ordered by `(created_at DESC, id DESC)`. The next query therefore cannot resume within a group of rows sharing that timestamp.",
+      "reason": "If more than `limit` payments have the same `created_at` at a page boundary, passing only that timestamp to `page_before` either excludes the unreturned tied rows under strict-before semantics or cannot distinguish them from already returned rows. Stable, gap-free pagination requires the complete ordering key.",
+      "suggestion": "Keep both `created_at` and `payment_id` in `Cursor` and pass the composite cursor to the query so its predicate can compare `(created_at, id)` lexicographically.",
+      "evidence_level": "verified",
+      "axes": {
+        "real": "yes",
+        "triggerable": "yes",
+        "impactful": "yes"
+      },
+      "blast_radius": "component",
+      "posting": {
+        "post_policy": "body_summary",
+        "explanation_postable": true,
+        "audience": "eval_harness"
+      },
+      "id": "9c6facc7d3f7c1ebf079a101e12a79c6894b69be12a00591840d35242a085815",
+      "fingerprint": "9c6facc7d3f7c1ebf079a101e12a79c6894b69be12a00591840d35242a085815"
+    }
+  ]
+}

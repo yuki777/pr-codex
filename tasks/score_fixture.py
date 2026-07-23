@@ -147,6 +147,7 @@ def choose_best_actual(expected: dict[str, Any], actuals: list[dict[str, Any]], 
             0 if location_matches(expected, actuals[index]) else 1,
             0 if expected_key(expected) == actual_key(actuals[index]) else 1,
             axes_hamming(expected, actuals[index]),
+            0 if blast_radius_matches(expected, actuals[index]) else 1,
             -SEVERITY_RANK.get(str(actuals[index].get("severity")), -1),
             str(actuals[index].get("fingerprint") or actuals[index].get("id") or ""),
             index,
@@ -245,6 +246,33 @@ def axes_acceptable(expected: dict[str, Any], actual: dict[str, Any] | None) -> 
     return all(isinstance(actual_axes.get(axis), str) and actual_axes[axis] in allowed_axis_values(expected, axis) for axis in AXES)
 
 
+def blast_radius_diff(expected: dict[str, Any], actual: dict[str, Any] | None) -> dict[str, Any]:
+    expected_value = expected.get("expected_blast_radius")
+    actual_value = actual.get("blast_radius") if actual is not None else None
+    matches = (
+        isinstance(expected_value, str)
+        and isinstance(actual_value, str)
+        and actual_value == expected_value
+    )
+    return {
+        "expected": expected_value if isinstance(expected_value, str) else "unknown",
+        "actual": actual_value if isinstance(actual_value, str) else None,
+        "acceptable": matches,
+    }
+
+
+def blast_radius_matches(expected: dict[str, Any], actual: dict[str, Any] | None) -> bool:
+    if actual is None:
+        return False
+    expected_value = expected.get("expected_blast_radius")
+    actual_value = actual.get("blast_radius")
+    return (
+        isinstance(expected_value, str)
+        and isinstance(actual_value, str)
+        and actual_value == expected_value
+    )
+
+
 def evidence_ok(expected: dict[str, Any], actual: dict[str, Any] | None) -> bool:
     if actual is None:
         return False
@@ -333,6 +361,7 @@ def build_breakdown(expected_findings: list[dict[str, Any]], actuals: list[dict[
                     "matched_actual_fingerprint": actual.get("fingerprint") if actual is not None else None,
                     "match_status": "false_positive_promoted" if is_promoted else "matched",
                     "axes_diff": axes_diff(expected, actual),
+                    "blast_radius_diff": blast_radius_diff(expected, actual),
                     "severity_diff": severity_diff(expected, actual),
                     "evidence_level_ok": evidence_ok(expected, actual) if actual is not None else True,
                     "notes": "trap promoted above acceptable severity" if is_promoted else "trap not promoted",
@@ -346,9 +375,10 @@ def build_breakdown(expected_findings: list[dict[str, Any]], actuals: list[dict[
             if actual is not None:
                 counts["known_bug_matched"] += 1
         target = contributes_to_axes_target(expected, actual)
-        exact_ok = axes_exact(expected, actual)
+        exact_ok = axes_exact(expected, actual) and blast_radius_matches(expected, actual)
         acceptable_ok = (
             axes_acceptable(expected, actual)
+            and blast_radius_matches(expected, actual)
             and severity_is_acceptable(expected, actual.get("severity") if actual is not None else None)
             and evidence_ok(expected, actual)
         )
@@ -366,6 +396,7 @@ def build_breakdown(expected_findings: list[dict[str, Any]], actuals: list[dict[
                 "matched_actual_fingerprint": actual.get("fingerprint") if actual is not None else None,
                 "match_status": "matched" if actual is not None else "missed",
                 "axes_diff": axes_diff(expected, actual),
+                "blast_radius_diff": blast_radius_diff(expected, actual),
                 "severity_diff": severity_diff(expected, actual),
                 "evidence_level_ok": evidence_ok(expected, actual),
                 "notes": note,
