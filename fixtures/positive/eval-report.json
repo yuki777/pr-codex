@@ -140,8 +140,8 @@
           },
           "scorer": {
             "path": "tasks/score_fixture.py",
-            "sha256": "1ecadcb3dceaabfa954d5c68e94cce931ee0c0a2fb4b335414ccf7a38463c5b5",
-            "revision": "sha256:1ecadcb3dceaabfa954d5c68e94cce931ee0c0a2fb4b335414ccf7a38463c5b5"
+            "sha256": "1971181a10022b3853f97eb58920e897a4d245089cfba822cb96c96338b54c9f",
+            "revision": "sha256:1971181a10022b3853f97eb58920e897a4d245089cfba822cb96c96338b54c9f"
           },
           "evaluated_at": "2026-07-23T00:00:00Z"
         }
@@ -209,8 +209,8 @@
           },
           "scorer": {
             "path": "tasks/score_fixture.py",
-            "sha256": "1ecadcb3dceaabfa954d5c68e94cce931ee0c0a2fb4b335414ccf7a38463c5b5",
-            "revision": "sha256:1ecadcb3dceaabfa954d5c68e94cce931ee0c0a2fb4b335414ccf7a38463c5b5"
+            "sha256": "1971181a10022b3853f97eb58920e897a4d245089cfba822cb96c96338b54c9f",
+            "revision": "sha256:1971181a10022b3853f97eb58920e897a4d245089cfba822cb96c96338b54c9f"
           },
           "evaluated_at": "2026-07-23T00:00:00Z"
         }
@@ -281,8 +281,8 @@
           },
           "scorer": {
             "path": "tasks/score_fixture.py",
-            "sha256": "1ecadcb3dceaabfa954d5c68e94cce931ee0c0a2fb4b335414ccf7a38463c5b5",
-            "revision": "sha256:1ecadcb3dceaabfa954d5c68e94cce931ee0c0a2fb4b335414ccf7a38463c5b5"
+            "sha256": "1971181a10022b3853f97eb58920e897a4d245089cfba822cb96c96338b54c9f",
+            "revision": "sha256:1971181a10022b3853f97eb58920e897a4d245089cfba822cb96c96338b54c9f"
           },
           "evaluated_at": "2026-07-23T00:00:00Z"
         }
@@ -350,8 +350,8 @@
           },
           "scorer": {
             "path": "tasks/score_fixture.py",
-            "sha256": "1ecadcb3dceaabfa954d5c68e94cce931ee0c0a2fb4b335414ccf7a38463c5b5",
-            "revision": "sha256:1ecadcb3dceaabfa954d5c68e94cce931ee0c0a2fb4b335414ccf7a38463c5b5"
+            "sha256": "1971181a10022b3853f97eb58920e897a4d245089cfba822cb96c96338b54c9f",
+            "revision": "sha256:1971181a10022b3853f97eb58920e897a4d245089cfba822cb96c96338b54c9f"
           },
           "evaluated_at": "2026-07-23T00:00:00Z"
         }
@@ -422,8 +422,8 @@
           },
           "scorer": {
             "path": "tasks/score_fixture.py",
-            "sha256": "1ecadcb3dceaabfa954d5c68e94cce931ee0c0a2fb4b335414ccf7a38463c5b5",
-            "revision": "sha256:1ecadcb3dceaabfa954d5c68e94cce931ee0c0a2fb4b335414ccf7a38463c5b5"
+            "sha256": "1971181a10022b3853f97eb58920e897a4d245089cfba822cb96c96338b54c9f",
+            "revision": "sha256:1971181a10022b3853f97eb58920e897a4d245089cfba822cb96c96338b54c9f"
           },
           "evaluated_at": "2026-07-23T00:00:00Z"
         }
@@ -491,8 +491,8 @@
           },
           "scorer": {
             "path": "tasks/score_fixture.py",
-            "sha256": "1ecadcb3dceaabfa954d5c68e94cce931ee0c0a2fb4b335414ccf7a38463c5b5",
-            "revision": "sha256:1ecadcb3dceaabfa954d5c68e94cce931ee0c0a2fb4b335414ccf7a38463c5b5"
+            "sha256": "1971181a10022b3853f97eb58920e897a4d245089cfba822cb96c96338b54c9f",
+            "revision": "sha256:1971181a10022b3853f97eb58920e897a4d245089cfba822cb96c96338b54c9f"
           },
           "evaluated_at": "2026-07-23T00:00:00Z"
         }

@@ -316,7 +316,10 @@ def match_expected_to_actuals(expected_findings: list[dict[str, Any]], actuals: 
         if expected.get("expected_outcome") == "known_bug":
             expected_location = expected.get("location_match")
             if isinstance(expected_location, dict) and "line_range" in expected_location:
-                candidate_indexes = location_candidate_indexes(expected, actuals)
+                location_indexes = set(location_candidate_indexes(expected, actuals))
+                candidate_indexes = [
+                    index for index in candidate_indexes if index in location_indexes
+                ]
         elif expected.get("expected_outcome") == "acceptable_risk":
             candidate_indexes = list(
                 dict.fromkeys(candidate_indexes + keyword_candidate_indexes(expected, actuals))

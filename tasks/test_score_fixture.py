@@ -152,7 +152,7 @@ class ScoreFixtureTest(unittest.TestCase):
         trap_rows = [row for row in report["breakdown"] if row["expected_id"] == trap["id"]]
         self.assertEqual(trap_rows[0]["match_status"], "false_positive_promoted")
 
-    def test_known_bug_matches_by_changed_line_when_category_drifts(self) -> None:
+    def test_known_bug_line_range_rejects_wrong_category(self) -> None:
         expected = load_json(ROOT / "fixtures" / "positive" / "expected-findings.json")
         actual = copy.deepcopy(
             load_json(ROOT / "fixtures" / "positive" / "scoring-stubs" / "perfect.findings.verified.json")
@@ -164,8 +164,18 @@ class ScoreFixtureTest(unittest.TestCase):
 
         report = score_fixture(expected, actual, EVALUATED_AT)
 
-        self.assertEqual(report["recall_known_bug"], 1.0)
-        self.assertEqual(report["unmatched_actuals"], [])
+        row = next(
+            item
+            for item in report["breakdown"]
+            if item["expected_id"] == "global-refund-idempotency-collision"
+        )
+        self.assertEqual(row["match_status"], "missed")
+        self.assertEqual(report["recall_known_bug"], 0.6667)
+        self.assertFalse(report["gate_pass"])
+        self.assertEqual(
+            report["unmatched_actuals"][0]["fingerprint"],
+            idempotency["fingerprint"],
+        )
 
     def test_known_bug_location_overlap_requires_semantic_match(self) -> None:
         expected = load_json(ROOT / "fixtures" / "positive" / "expected-findings.json")
@@ -196,6 +206,7 @@ class ScoreFixtureTest(unittest.TestCase):
 
         self.assertIn("`line_range` がある `known_bug`", docs)
         self.assertIn("位置の重複と title keyword の一致", docs)
+        self.assertIn("category の一致", docs)
         self.assertIn("`line_range` がない旧 fixture", docs)
 
     def test_partial_axes_drift_separates_exact_from_acceptable(self) -> None:
