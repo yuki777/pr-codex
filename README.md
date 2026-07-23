@@ -39,7 +39,7 @@ venv を使わず user site に入れる場合だけ、環境によっては次�
 python3 -m pip install --user --break-system-packages 'jsonschema>=4,<5'
 ```
 
-`CLAUDE_PLUGIN_ROOT が未設定` の shell でも、SKILL.md の command template は `plugin_root="${CLAUDE_PLUGIN_ROOT:-...}"` で plugin root を自己解決する。fallback は plugin cache の `pr-codex/tasks/validate_findings.py` marker から root を算出するため、validator/tool 呼び出しを手動で絶対パスに置換しない。
+`CLAUDE_PLUGIN_ROOT が未設定` の shell でも、SKILL.md の command template は `plugin_root="${CLAUDE_PLUGIN_ROOT:-...}"` で plugin root を自己解決する。fallback block は review のセットアップ / send の Step 1 common の 1 箇所だけに置かれ（#111 で各テンプレートへのコピペを廃止）、plugin cache の `pr-codex/tasks/validate_findings.py` marker から root を算出して解決値を標準出力に出す。以降のテンプレートの `$plugin_root` は置換対象変数であり、この fallback が解決した値を実値置換して使う。fallback の解決結果を使わず、validator/tool 呼び出しを手動で絶対パスに置換しない。
 
 ### インストール
 
@@ -71,8 +71,8 @@ cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
 
 - `--permission-mode auto` — `/loop` を非対話で回すために auto mode で起動する。auto mode は分類器による安全チェックでツール実行を自動承認またはブロックするため、すべての操作が無条件に通るわけではない。本スキルはテンプレートに明示した操作だけを実行し、ローカル書き込みは `~/claude-loop-pr-codex/` 配下の成果物作成に限定する
 - `--effort max` — Claude Code 本体の推論設定。`/pr-codex:review` の depth policy とは別軸
-- Codex CLI 側のレビュー (hunter) は、スキル内で `-m gpt-5.5` を指定して実行する。send Step 4.5 の semantic preflight は #110 の担当替えに従い `-m gpt-5.6-sol` (GPT-5.6) を指定する（素の `gpt-5.6` slug は ChatGPT アカウントの Codex では拒否されるため）。レビュー実行では `model_reasoning_effort` をスキル側で上書きせず、ユーザー config の値を使う。投稿前検証は `--ignore-user-config` でユーザー config から切り離す
-- Codex CLI は `codex-cli 0.145.0` 以降のみ対応する。旧バージョン向けテンプレートは打ち切り、`--sandbox read-only` / `--color never` / `--ephemeral` を並べる旧形式ではなく、`-c sandbox_mode=read-only` と preflight 限定の `--ignore-user-config` を使う。hunter (review Step 4b) と preflight verifier (send Step 4.5) は `--output-schema` / `--output-last-message` による structured output で JSON を直接受ける（0.145.0 で動作確認済み）
+- Codex CLI 側のレビュー (hunter) は、スキル内で `-m gpt-5.5` を指定して実行する。send Step 4.5 の semantic preflight は #110 の担当替えに従い `-m gpt-5.6-sol` (GPT-5.6) を指定する（素の `gpt-5.6` slug は ChatGPT アカウントの Codex では拒否されるため）。hunter (review Step 4b) と投稿前検証 (send Step 4.5) はどちらも `--ignore-user-config` でユーザー config から切り離すため (#111)、user config 由来の外部 MCP は無効化され、`model_reasoning_effort` は Codex CLI の default 値で実行される。GitHub 由来のレビュー文脈（PR 説明文・既存レビューコメント）は、親（メインコンテキスト）が read-only で取得した `pr-context.md`（sanitized context pack）として hunter に渡す（外部への到達経路の遮断は、4a が `--setting-sources ""`（settings の事前許可を読まない）+ `--tools "Read,Glob,Grep,Bash"`（WebFetch / WebSearch 等を除外）+ `--strict-mcp-config`（MCP サーバーを読まない）、4b が `--ignore-user-config`。Claude CLI の `--allowedTools` は確認なし許可の指定であって利用可能ツールの制限ではないため、遮断には使わない）
+- Codex CLI は `codex-cli 0.145.0` 以降のみ対応する。旧バージョン向けテンプレートは打ち切り、`--sandbox read-only` / `--color never` / `--ephemeral` を並べる旧形式ではなく、`-c sandbox_mode=read-only` と hunter / preflight 共通の `--ignore-user-config` を使う。hunter (review Step 4b) と preflight verifier (send Step 4.5) は `--output-schema` / `--output-last-message` による structured output で JSON を直接受ける（0.145.0 で動作確認済み）。hunter prompt は bash double-quote 埋め込みではなく prompt file + stdin（4a は `claude -p < prompt.md`、4b は `exec - < prompt.md`）で渡し、旧 4 文字エスケープ規則は廃止済み (#111)
 
 
 

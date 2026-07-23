@@ -23,7 +23,7 @@ import validate_findings_sarif as sarif_validator  # noqa: E402
 
 
 class Issue70PluginRootSetupTest(unittest.TestCase):
-    def test_skill_templates_define_plugin_root_fallback_before_tool_invocations(self) -> None:
+    def test_skill_templates_resolve_plugin_root_once_and_reference_it(self) -> None:
         for path in (REVIEW_SKILL, SEND_SKILL):
             text = path.read_text(encoding="utf-8")
             with self.subTest(path=path):
@@ -39,27 +39,22 @@ class Issue70PluginRootSetupTest(unittest.TestCase):
                 self.assertNotIn('${CLAUDE_PLUGIN_ROOT}` の位置を実値に置換', text)
                 self.assertNotIn('validator_path` / `schema_path` の実値へ置換', text)
 
-                in_bash = False
-                block = []
-                start_line = 0
-                for line_number, line in enumerate(text.splitlines(), start=1):
-                    if line.strip() == '```bash':
-                        in_bash = True
-                        block = []
-                        start_line = line_number
-                        continue
-                    if in_bash and line.strip() == '```':
-                        block_text = "\n".join(block)
-                        if '$plugin_root' in block_text:
-                            self.assertIn(
-                                'plugin_root="${CLAUDE_PLUGIN_ROOT:-',
-                                block_text,
-                                f"{path}:{start_line} uses $plugin_root without recomputing it",
-                            )
-                        in_bash = False
-                        continue
-                    if in_bash:
-                        block.append(line)
+                # Issue #111: fallback block は review のセットアップ / send の Step 1 common の 1 箇所だけに置く
+                self.assertEqual(
+                    text.count('plugin_root="${CLAUDE_PLUGIN_ROOT:-'),
+                    1,
+                    f"{path} must define the plugin_root fallback block exactly once",
+                )
+
+        review_text = REVIEW_SKILL.read_text(encoding="utf-8")
+        self.assertIn("この fallback block はセットアップのこの 1 箇所にだけ置き", review_text)
+        self.assertIn("置換対象変数として扱い、Bash ツールへ渡す前にセットアップで解決した絶対パスの実値へ置換する", review_text)
+        self.assertIn("test -d \"$plugin_root/tasks\" && test -d \"$plugin_root/schemas\" && printf '%s\\n' \"$plugin_root\"", review_text)
+
+        send_text = SEND_SKILL.read_text(encoding="utf-8")
+        self.assertIn("fallback block はこの 1 箇所にだけ置き", send_text)
+        self.assertIn("置換対象変数として扱い、Bash ツールへ渡す前に解決済みの絶対パス実値へ置換する", send_text)
+        self.assertIn("test -d \"$plugin_root/tasks\" && test -d \"$plugin_root/schemas\" && printf '%s\\n' \"$plugin_root\"", send_text)
 
     def test_readme_documents_no_manual_absolute_path_replacement_when_env_missing(self) -> None:
         text = README.read_text(encoding="utf-8")

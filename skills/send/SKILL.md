@@ -49,7 +49,7 @@ allowed-tools: ["Bash", "Read", "Write", "Glob", "Grep"]
 
 ## フロー
 
-各テンプレートはコードブロックの内容をそのまま 1 回のシェル実行単位として使う。変数（`$candidate`, `$dir_name`, `$org`, `$repository`, `$pr_number`, `$pr_url`, `$head_sha`, `$head_sha_short`, `$title`, `$review_url` など）の置換以外の改変は不可。
+各テンプレートはコードブロックの内容をそのまま 1 回のシェル実行単位として使う。変数（`$candidate`, `$dir_name`, `$org`, `$repository`, `$pr_number`, `$pr_url`, `$head_sha`, `$head_sha_short`, `$title`, `$review_url`, `$plugin_root` など）の置換以外の改変は不可。`$plugin_root` には Step 1 common で解決した絶対パスの実値を使う。
 
 ### Step 0: 引数解析
 
@@ -70,7 +70,7 @@ Skill 起動直後に `$ARGUMENTS` を shell 風に空白分割して解釈し�
 
 #### common: plugin root / validator path の早期解決
 
-direct mode / auto mode のどちらでも Step 2.5 と Step 3 の validator path 解決に使うため、対象 directory の選定前に plugin root を解決する。
+direct mode / auto mode のどちらでも Step 2.5 と Step 3 の validator path 解決に使うため、対象 directory の選定前に plugin root を解決する。fallback block はこの 1 箇所にだけ置き、末尾の `printf` が出力する解決済み plugin root の絶対パス 1 行を保持する。各テンプレートは 1 シェル実行単位でありシェル変数は持ち越されないため、以降のフロー内テンプレートに現れる `$plugin_root` は置換対象変数として扱い、Bash ツールへ渡す前に解決済みの絶対パス実値へ置換する。値を確定できない場合は、この fallback block を単独で再実行してから当該テンプレートをやり直す。
 
 ```bash
 plugin_root="${CLAUDE_PLUGIN_ROOT:-$(python3 - <<'PY'
@@ -91,7 +91,7 @@ marker = max((m.resolve() for m in markers), key=lambda p: (p.stat().st_mtime_ns
 print(marker.parents[1])
 PY
 )}"
-test -d "$plugin_root/tasks" && test -d "$plugin_root/schemas"
+test -d "$plugin_root/tasks" && test -d "$plugin_root/schemas" && printf '%s\n' "$plugin_root"
 ```
 
 #### direct mode（PR URL / PR 番号指定）
@@ -386,28 +386,10 @@ GitHub Reviews API は PR diff の新ファイル側 hunk 範囲外の `line` �
 - 次アクション: 作成後、Step 3.75 のフラグ確認を経て Step 4 の builder テンプレートへ進む。builder は `$must_fix` / `$should_fix_candidates` / `$nit_inline_candidates` の各エントリを下記の範囲判定ルールで検証する
 
 ```bash
-plugin_root="${CLAUDE_PLUGIN_ROOT:-$(python3 - <<'PY'
-import os
-from pathlib import Path
-roots = []
-if os.environ.get("CLAUDE_CODE_PLUGIN_CACHE_DIR"):
-    roots.append(Path(os.environ["CLAUDE_CODE_PLUGIN_CACHE_DIR"]).expanduser())
-if os.environ.get("CLAUDE_CONFIG_DIR"):
-    roots.append(Path(os.environ["CLAUDE_CONFIG_DIR"]).expanduser() / "plugins" / "cache")
-roots.append(Path.home() / ".claude" / "plugins" / "cache")
-markers = []
-for root in roots:
-    markers.extend(root.glob("**/pr-codex/tasks/validate_findings.py"))
-if not markers:
-    raise SystemExit("CLAUDE_PLUGIN_ROOT is unset and pr-codex plugin root was not found")
-marker = max((m.resolve() for m in markers), key=lambda p: (p.stat().st_mtime_ns, str(p)))
-print(marker.parents[1])
-PY
-)}"
 test -f "$plugin_root/skills/lib/extract-diff-ranges.awk" && awk -f "$plugin_root/skills/lib/extract-diff-ranges.awk" ~/claude-loop-pr-codex/$dir_name/pr.diff > ~/claude-loop-pr-codex/$dir_name/pr.diff.ranges.txt
 ```
 
-`plugin_root` は冒頭で自己解決済みの値を使う。`test -f` が失敗した場合は、同じ fallback block を再実行して plugin root を再解決し、まだ root を確定できない場合は silent な空ファイル生成を避けるため中断する。
+テンプレート中の `$plugin_root` は Step 1 common で解決済みの絶対パスの実値に置換して使う。`test -f` が失敗した場合は、Step 1 common の fallback block を再実行して plugin root を再解決し、まだ root を確定できない場合は silent な空ファイル生成を避けるため中断する。
 
 `pr.diff.ranges.txt` は builder が `--ranges` 入力として読む。Claude 側で Read して手動検証する必要はない。
 
