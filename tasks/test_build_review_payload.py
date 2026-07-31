@@ -247,6 +247,7 @@ class BuildReviewPayloadTest(unittest.TestCase):
         self.assertEqual(payload["event"], "APPROVE")
         self.assertEqual(payload["comments"], [])
         body = payload["body"]
+        self.assertIn("Must Fix はありません。承認します。", body)
         self.assertIn("- 変更ファイル: src/App.py, src/Other.py", body)
         self.assertIn("depth_actual=deep", body)
         self.assertIn("recommended_mode=focused", body)
@@ -263,6 +264,7 @@ class BuildReviewPayloadTest(unittest.TestCase):
             payload = json.loads(payload_path.read_text(encoding="utf-8"))
 
         self.assertEqual(payload["event"], "COMMENT")
+        self.assertIn("Must Fix はありませんが、CI が failure のため承認を保留します。", payload["body"])
         self.assertNotIn("## 確認した範囲", payload["body"])
         self.assertIn("## CI 状態\n\n- 状態: failure\n- 要約: unit tests failed", payload["body"])
 
@@ -276,6 +278,10 @@ class BuildReviewPayloadTest(unittest.TestCase):
 
         self.assertEqual(payload["event"], "REQUEST_CHANGES")
         self.assertEqual(payload["comments"], [])
+        self.assertIn(
+            "Must Fix を検出しました。マージ前に修正が必要です。行コメント不可のため本文末尾に記載しています。",
+            payload["body"],
+        )
         self.assertIn("### `src/App.py:L120`", payload["body"])
         self.assertIn("- 問題: problem far-away", payload["body"])
         self.assertEqual(manifest["out_of_range"], [{"finding_id": "far-away", "kind": "Must Fix", "reason": "diff 範囲外"}])
@@ -402,6 +408,9 @@ class BuildReviewPayloadTest(unittest.TestCase):
 
                 self.assertEqual(payload["event"], "REQUEST_CHANGES")
                 self.assertEqual(payload["comments"], [])
+                self.assertIn("このレビューは変更をリクエストします。", payload["body"])
+                self.assertNotIn("Must Fix", payload["body"])
+                self.assertNotIn("セキュリティ", payload["body"])
                 self.assertNotIn(f"private problem {identifier}", payload["body"])
                 self.assertNotIn(f"public summary {identifier}", payload["body"])
                 self.assertEqual(manifest["out_of_range"], [])
@@ -449,6 +458,9 @@ class BuildReviewPayloadTest(unittest.TestCase):
         self.assertEqual(manifest["counts"]["must_fix_total"], 7)
         self.assertEqual(manifest["counts"]["must_fix_inline"], 1)
         self.assertEqual(manifest["semantic_targets"], ["rep", *(f"member-{index}" for index in range(1, 7))])
+        self.assertIn("Must Fix を検出しました。マージ前に修正が必要です。", payload["body"])
+        self.assertNotIn("Must Fix 1件", payload["body"])
+        self.assertNotIn("Must Fix 7件", payload["body"])
 
 
     def test_cluster_summary_filters_private_unpostable_and_inactive_members(self) -> None:
@@ -636,12 +648,77 @@ class BuildReviewPayloadTest(unittest.TestCase):
             self.assertEqual(completed.returncode, 0, completed.stderr)
             body = json.loads(payload_path.read_text(encoding="utf-8"))["body"]
         offsets = [
-            body.index("確認済みの総評です。"),
+            body.index("Must Fix はありません。承認します。"),
             body.index("## 良い点"),
             body.index("## 確認した範囲"),
             body.index("## 行コメント不可 (diff 範囲外)"),
         ]
         self.assertEqual(offsets, sorted(offsets))
+
+    def test_posted_summary_mentions_only_posted_severities(self) -> None:
+        items = [
+            finding("must-1", start_line=10),
+            finding("should-1", "should_fix", start_line=20),
+            finding("nit-1", "nit", start_line=30),
+        ]
+        leaky_review = review_for(
+            items,
+            summary="全体的に良好です。Should Fix が1件と Nit が1件あります。`internal_token` の漏えいは非公開扱いです。",
+        )
+        cases: dict[tuple[str, ...], tuple[tuple[str, ...], tuple[str, ...]]] = {
+            (): ((), ("Should Fix", "Nit")),
+            ("--include-should-fix",): (
+                ("Should Fix を inline コメントとして併記しています。",),
+                ("Nit",),
+            ),
+            ("--include-should-fix", "--include-nit"): (
+                (
+                    "Should Fix を inline コメントとして併記しています。",
+                    "Nit を inline コメントとして併記しています。",
+                ),
+                (),
+            ),
+        }
+        for flags, (mentioned, absent) in cases.items():
+            with self.subTest(flags=flags), tempfile.TemporaryDirectory() as tmp:
+                completed, payload_path, _, _ = self.run_build(
+                    Path(tmp), artifact(items), review_text=leaky_review, flags=flags
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                body = json.loads(payload_path.read_text(encoding="utf-8"))["body"]
+                self.assertIn("Must Fix を検出しました。マージ前に修正が必要です。", body)
+                self.assertNotIn("全体的に良好です", body)
+                self.assertNotIn("internal_token", body)
+                for fragment in mentioned:
+                    self.assertIn(fragment, body)
+                for fragment in absent:
+                    self.assertNotIn(fragment, body)
+
+    def test_posted_summary_reflects_inline_and_out_of_range_placement(self) -> None:
+        items = [
+            finding("must-1", start_line=10),
+            finding("should-in", "should_fix", start_line=20),
+            finding("should-out", "should_fix", start_line=200),
+            finding("nit-out", "nit", start_line=300),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            completed, payload_path, _, _ = self.run_build(
+                Path(tmp), artifact(items), flags=("--include-should-fix", "--include-nit")
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            body = json.loads(payload_path.read_text(encoding="utf-8"))["body"]
+        self.assertIn("Should Fix を inline コメントとして併記しています（一部は行コメント不可のため本文末尾に記載）。", body)
+        self.assertIn("Nit は行コメント不可のため本文末尾に記載しています。", body)
+        self.assertIn("## 行コメント不可 (diff 範囲外)", body)
+        self.assertIn("problem should-out", body)
+        self.assertIn("problem nit-out", body)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            completed, payload_path, _, _ = self.run_build(Path(tmp), artifact(items))
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            body = json.loads(payload_path.read_text(encoding="utf-8"))["body"]
+        self.assertNotIn("Should Fix", body)
+        self.assertNotIn("Nit", body)
 
     def test_manifest_hashes_all_required_files_and_verify_detects_tampering(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

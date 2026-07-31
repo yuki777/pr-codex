@@ -462,6 +462,63 @@ def first_summary_line(text: str | None) -> str:
     return ""
 
 
+def severity_mention(label: str, inline_count: int, body_count: int) -> str:
+    """Return one posted-summary line for a severity, or '' when nothing was posted."""
+
+    if inline_count and body_count:
+        return f"{label} を inline コメントとして併記しています（一部は行コメント不可のため本文末尾に記載）。"
+    if inline_count:
+        return f"{label} を inline コメントとして併記しています。"
+    if body_count:
+        return f"{label} は行コメント不可のため本文末尾に記載しています。"
+    return ""
+
+
+def compose_posted_summary(
+    event: str,
+    ci_state: str | None,
+    *,
+    must_fix_inline: int,
+    must_fix_body: int,
+    should_fix_inline: int,
+    should_fix_body: int,
+    nit_inline: int,
+    nit_body: int,
+) -> str:
+    """Compose the posted body summary from posted findings only (issue #120).
+
+    The free-form `## 総評` of review.md is never posted: severities absent from
+    the payload must not be mentioned, withheld findings leak nothing, and no
+    counts are shown — cluster representatives aggregate members, so posted
+    comment counts diverge from canonical finding counts.
+    """
+
+    visible_must_fix = must_fix_inline + must_fix_body
+    lines: list[str] = []
+    if event == "REQUEST_CHANGES":
+        if visible_must_fix:
+            sentence = "Must Fix を検出しました。マージ前に修正が必要です。"
+            if must_fix_inline and must_fix_body:
+                sentence += "一部は行コメント不可のため本文末尾に記載しています。"
+            elif must_fix_body:
+                sentence += "行コメント不可のため本文末尾に記載しています。"
+            lines.append(sentence)
+        else:
+            lines.append("このレビューは変更をリクエストします。")
+    elif event == "COMMENT":
+        lines.append(f"Must Fix はありませんが、CI が {ci_state or '未取得'} のため承認を保留します。")
+    else:
+        lines.append("Must Fix はありません。承認します。")
+    for label, inline_count, body_count in (
+        ("Should Fix", should_fix_inline, should_fix_body),
+        ("Nit", nit_inline, nit_body),
+    ):
+        mention = severity_mention(label, inline_count, body_count)
+        if mention:
+            lines.append(mention)
+    return "\n".join(lines)
+
+
 def build_body(
     summary: str,
     good_points: str,
@@ -522,8 +579,7 @@ def compose_payload(
     """Compose payload and semantic manifest fields without reading or writing files."""
 
     canonical_findings, must_fix_total = validate_build_inputs(findings_data, metadata_data, review_text)
-    summary = markdown_section(review_text, "## 総評")
-    if not summary:
+    if not markdown_section(review_text, "## 総評"):
         raise BuildError("review.md summary is empty or missing")
     good_points = markdown_section(review_text, "## 良い点")
     ci_state_value = ci_data.get("state") if isinstance(ci_data, dict) else None
@@ -596,6 +652,8 @@ def compose_payload(
     comments = [inline_comment(item, members_by_representative, active_severities) for item in ordered_inline]
     must_fix_body = sum(entry["kind"] == "Must Fix" for entry in out_of_range)
     must_fix_withheld = sum(entry["kind"] == "Must Fix" for entry in withheld)
+    should_fix_body = sum(entry["kind"] == "Should Fix" for entry in out_of_range)
+    nit_body = sum(entry["kind"] == "Nit" for entry in out_of_range)
     if must_fix_total:
         event = "REQUEST_CHANGES"
     elif ci_state in {"failure", "pending"}:
@@ -604,7 +662,16 @@ def compose_payload(
         event = "APPROVE"
 
     body = build_body(
-        summary,
+        compose_posted_summary(
+            event,
+            ci_state,
+            must_fix_inline=len(inline_by_severity["must_fix"]),
+            must_fix_body=must_fix_body,
+            should_fix_inline=len(inline_by_severity["should_fix"]),
+            should_fix_body=should_fix_body,
+            nit_inline=len(inline_by_severity["nit"]),
+            nit_body=nit_body,
+        ),
         good_points,
         event,
         metadata_data,
