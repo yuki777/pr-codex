@@ -1,0 +1,14 @@
+{
+  "schema_version": "eval-execution.v1",
+  "run_id": "issue112-positive-fable-prompt-iterative-r1",
+  "execution": {
+    "model": "claude-fable-5",
+    "reasoning_effort": "default",
+    "completion_rate": 1.0,
+    "avg_duration_ms": 46869,
+    "avg_tokens": null
+  },
+  "sample_count": 1,
+  "repetitions": 1,
+  "evaluated_at": "2026-07-23T00:00:00Z"
+}

@@ -21,9 +21,12 @@ class Issue72DocsTest(unittest.TestCase):
 
         output_description = round_props["output_candidates_count"]["description"]
         self.assertIn("remaining ACTIVE", output_description)
-        self.assertIn("AFTER this round", output_description)
-        self.assertIn("input_candidates_count - (verifier_pass_count + verifier_fail_count + insufficient_evidence_count) + new active candidates", output_description)
-        self.assertIn("0 when all candidates were verified/rejected", output_description)
+        self.assertIn("for the next round", output_description)
+        self.assertIn("verifier terminal decisions", output_description)
+        self.assertIn("priority narrowing", output_description)
+        self.assertIn("remaining_active_count", output_description)
+        self.assertIn("untargeted_candidate_count", output_description)
+        self.assertIn("local-only", output_description)
 
         posted_description = metrics_props["posted_candidate_count"]["description"]
         self.assertIn("remaining ACTIVE candidates", posted_description)

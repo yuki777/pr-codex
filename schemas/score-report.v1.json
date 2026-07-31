@@ -55,6 +55,7 @@
   "$defs": {
     "severity": {"enum": ["must_fix", "should_fix", "nit", "note"]},
     "axis_value": {"enum": ["yes", "no", "unknown"]},
+    "blast_radius": {"enum": ["isolated", "component", "systemic", "unknown"]},
     "match_status": {"enum": ["matched", "missed", "false_positive_promoted"]},
     "scoring_gate": {
       "type": "object",
@@ -102,6 +103,16 @@
         "acceptable": {"type": "boolean"}
       }
     },
+    "blast_radius_diff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["expected", "actual", "acceptable"],
+      "properties": {
+        "expected": {"$ref": "#/$defs/blast_radius"},
+        "actual": {"oneOf": [{"$ref": "#/$defs/blast_radius"}, {"type": "null"}]},
+        "acceptable": {"type": "boolean"}
+      }
+    },
     "severity_diff": {
       "type": "object",
       "additionalProperties": false,
@@ -115,7 +126,7 @@
     "breakdown_item": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["expected_id", "expected_outcome", "matched_actual_fingerprint", "match_status", "axes_diff", "severity_diff", "evidence_level_ok", "notes"],
+      "required": ["expected_id", "expected_outcome", "matched_actual_fingerprint", "match_status", "axes_diff", "blast_radius_diff", "severity_diff", "evidence_level_ok", "notes"],
       "properties": {
         "expected_id": {"type": "string", "minLength": 1},
         "expected_outcome": {"type": "string", "minLength": 1},
@@ -125,6 +136,7 @@
           "type": "object",
           "additionalProperties": {"$ref": "#/$defs/axis_diff"}
         },
+        "blast_radius_diff": {"$ref": "#/$defs/blast_radius_diff"},
         "severity_diff": {"$ref": "#/$defs/severity_diff"},
         "evidence_level_ok": {"type": "boolean"},
         "notes": {"type": "string"}

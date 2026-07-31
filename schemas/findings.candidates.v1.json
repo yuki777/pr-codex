@@ -51,6 +51,27 @@
         "unknown"
       ]
     },
+    "blast_radius": {
+      "enum": [
+        "isolated",
+        "component",
+        "systemic",
+        "unknown"
+      ]
+    },
+    "evidence_state": {
+      "enum": [
+        "supported",
+        "needs_evidence"
+      ]
+    },
+    "decision": {
+      "enum": [
+        "verified",
+        "refuted",
+        "suppressed"
+      ]
+    },
     "evidence_level": {
       "enum": [
         "suspicion",
@@ -184,9 +205,6 @@
         },
         "impactful": {
           "$ref": "#/$defs/axis_value"
-        },
-        "general": {
-          "$ref": "#/$defs/axis_value"
         }
       }
     },
@@ -213,6 +231,7 @@
       "additionalProperties": false,
       "required": [
         "source_agent",
+        "evidence_state",
         "location",
         "severity_raw",
         "category_raw",
@@ -230,6 +249,21 @@
         },
         "source_ref": {
           "$ref": "#/$defs/non_empty_string"
+        },
+        "evidence_state": {
+          "$ref": "#/$defs/evidence_state"
+        },
+        "decision": {
+          "$ref": "#/$defs/decision"
+        },
+        "disagreement": {
+          "type": "boolean"
+        },
+        "severity_disputed": {
+          "type": "boolean"
+        },
+        "contradiction": {
+          "type": "boolean"
         },
         "location": {
           "$ref": "#/$defs/location"
@@ -263,6 +297,9 @@
         },
         "axes": {
           "$ref": "#/$defs/axes"
+        },
+        "blast_radius": {
+          "$ref": "#/$defs/blast_radius"
         },
         "verification_hint": {
           "$ref": "#/$defs/non_empty_string"

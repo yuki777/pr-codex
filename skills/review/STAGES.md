@@ -13,7 +13,7 @@ flowchart LR
 |---|---|---|---|---|
 | **ranker** | PR の規模・risk/area・実行 depth を分類し、F8 routing が差し込める interface を作る | GitHub PR metadata, `files[]`, `pr.diff` | `run-plan.json` (`risk_tags`, `recommended_mode`, `depth_actual`, `selected_hunters`) | metadata/files/diff/run-plan 生成失敗は `status.failed_stage=ranker` |
 | **hunter** | Claude Code / Codex CLI が読み取り専用で候補 finding を広めに集め、structured output (`schemas/hunter-result.v1.json`) を返す | `run-plan.json`, `pr.diff`, `pr.diff.ranges.txt`, shallow clones | `claude-review.json`, `codex-review.json`, `findings.candidates.json` (`merge_hunter_results.py` が検証・合成) | hunter timeout/非ゼロ/`HUNTER_DIFF_UNAVAILABLE`/hunter result schema 不適合/candidate validation 失敗は `failed_stage=hunter` |
-| **verifier** | 候補を正規化し、4軸 + evidence ladder + counterexample で絞る。posting policy もここで焼き付ける | `findings.candidates.json`, structured hunter results, `metadata.json`, `pr.diff.ranges.txt`, `schemas/findings.v1.json` | `findings.verified.json`, `validation-report.json` | 4軸 gate、range gate、fingerprint gate、Must Fix 件数 gate、同梱 validator 失敗は `failed_stage=verifier` |
+| **verifier** | host controller が対象候補と停止を決め、対象だけを `refine` / `challenge` / `verify` して 3軸 gate + 非ゲート `blast_radius` metadata + evidence ladder + counterexample で絞る。posting policy もここで焼き付ける | `findings.candidates.json`, `refinement-state.json`, `run-plan.json`, structured hunter results, `metadata.json`, `pr.diff.ranges.txt`, `schemas/findings.v1.json` | `refinement-plan.json`, `review-rounds.json`, `findings.verified.json`, `validation-report.json` | controller の `max_rounds` / `time_budget_ms` / state digest / 全候補解決 / 対象なし。schema / range / fingerprint / posting policy 不適合は `failed_stage=verifier` |
 | **explainer** | verified findings から postable な `review.md` と local-only 補足を派生生成する | `findings.verified.json`, `validation-report.json`, `run-plan.json` | `review.md` | temp write / final `mv` 失敗、派生成果物の不整合は `failed_stage=explainer` |
 
 ## Guardrails
@@ -23,3 +23,4 @@ flowchart LR
 - private chain-of-thought、raw sensitive logs、`claude.log` / `codex.log` は stage artifact として公開・派生投稿しない。
 - F8 hook: `selected_hunters` は ranker 出力の interface として配列のまま維持するが、F4 では `["claude","codex"]` 固定テンプレートを変えない。
 - F11 hook: `findings.candidates.json` / `findings.verified.json` / `validation-report.json` のファイル名を固定し、future scoring runner の入力にする。
+- F11 controller: round の継続・対象選択は `tasks/refinement_loop.py --plan-next` が行い、モデル申告値だけでは継続しない。small / fully verified / conflict-free の auto-deep も `--apply-auto-deep` の決定だけを採用する。

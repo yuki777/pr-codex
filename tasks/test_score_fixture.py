@@ -35,7 +35,7 @@ def score(size: str, stub: str) -> dict[str, object]:
 
 class ScoreFixtureTest(unittest.TestCase):
     def test_perfect_stubs_pass_all_fixture_gates(self) -> None:
-        for size in ("small", "medium", "large"):
+        for size in ("small", "medium", "large", "positive"):
             with self.subTest(size=size):
                 report = score(size, "perfect")
                 self.assertTrue(report["gate_pass"])
@@ -43,6 +43,96 @@ class ScoreFixtureTest(unittest.TestCase):
                 self.assertEqual(report["acceptable_pass_rate"], 1.0)
                 self.assertEqual(report["false_positive_rate"], 0.0)
                 self.assertEqual(report["recall_known_bug"], 1.0)
+
+    def test_positive_idempotency_seed_has_component_blast_radius(self) -> None:
+        expected = load_json(ROOT / "fixtures" / "positive" / "expected-findings.json")
+        actual = load_json(
+            ROOT / "fixtures" / "positive" / "scoring-stubs"
+            / "perfect.findings.verified.json"
+        )
+        expected_idempotency = next(
+            finding
+            for finding in expected["expected_findings"]
+            if finding["id"] == "global-refund-idempotency-collision"
+        )
+        actual_idempotency = next(
+            finding
+            for finding in actual["findings"]
+            if finding["location"]["start_line"] == 53
+        )
+
+        self.assertEqual(expected_idempotency["expected_blast_radius"], "component")
+        self.assertEqual(actual_idempotency["blast_radius"], "component")
+
+    def test_positive_unknown_blast_radii_fail_quality_gate(self) -> None:
+        expected = load_json(ROOT / "fixtures" / "positive" / "expected-findings.json")
+        actual = copy.deepcopy(
+            load_json(ROOT / "fixtures" / "positive" / "scoring-stubs" / "perfect.findings.verified.json")
+        )
+        for finding in actual["findings"]:
+            finding["blast_radius"] = "unknown"
+
+        report = score_fixture(expected, actual, EVALUATED_AT)
+
+        self.assertEqual(validate_score_report(report), [])
+        self.assertFalse(report["gate_pass"])
+        self.assertEqual(report["exact_pass_rate"], 0.0)
+        self.assertEqual(report["acceptable_pass_rate"], 0.0)
+        matched_rows = [
+            row
+            for row in report["breakdown"]
+            if row["expected_outcome"] == "known_bug"
+        ]
+        self.assertTrue(matched_rows)
+        self.assertTrue(
+            all(
+                row["blast_radius_diff"]
+                == {
+                    "expected": expected_row["expected_blast_radius"],
+                    "actual": "unknown",
+                    "acceptable": False,
+                }
+                for row, expected_row in zip(
+                    matched_rows,
+                    [
+                        row
+                        for row in expected["expected_findings"]
+                        if row["expected_outcome"] == "known_bug"
+                    ],
+                    strict=True,
+                )
+            )
+        )
+
+    def test_duplicate_candidates_prefer_matching_blast_radius_independent_of_order(self) -> None:
+        expected = load_json(ROOT / "fixtures" / "small" / "expected-findings.json")
+        actual = load_json(
+            ROOT / "fixtures" / "small" / "scoring-stubs" / "perfect.findings.verified.json"
+        )
+        matching = copy.deepcopy(actual["findings"][0])
+        matching["severity"] = "note"
+        matching["fingerprint"] = "f" * 64
+        matching["id"] = matching["fingerprint"]
+        mismatching = copy.deepcopy(actual["findings"][0])
+        mismatching["blast_radius"] = "repository"
+        mismatching["severity"] = "must_fix"
+        mismatching["fingerprint"] = "0" * 64
+        mismatching["id"] = mismatching["fingerprint"]
+
+        for candidates in ([mismatching, matching], [matching, mismatching]):
+            with self.subTest(order=[item["fingerprint"] for item in candidates]):
+                payload = copy.deepcopy(actual)
+                payload["findings"] = copy.deepcopy(candidates)
+
+                report = score_fixture(expected, payload, EVALUATED_AT)
+                row = next(
+                    item
+                    for item in report["breakdown"]
+                    if item["expected_id"] == "abstract-app-local-migration-note"
+                )
+
+                self.assertEqual(row["matched_actual_fingerprint"], matching["fingerprint"])
+                self.assertTrue(row["blast_radius_diff"]["acceptable"])
 
     def test_missed_known_bug_fails_recall_and_gate(self) -> None:
         report = score("small", "missed-known-bug")
@@ -82,6 +172,83 @@ class ScoreFixtureTest(unittest.TestCase):
         trap_rows = [row for row in report["breakdown"] if row["expected_id"] == trap["id"]]
         self.assertEqual(trap_rows[0]["match_status"], "false_positive_promoted")
 
+    def test_known_bug_line_range_rejects_wrong_category(self) -> None:
+        expected = load_json(ROOT / "fixtures" / "positive" / "expected-findings.json")
+        actual = copy.deepcopy(
+            load_json(ROOT / "fixtures" / "positive" / "scoring-stubs" / "perfect.findings.verified.json")
+        )
+        idempotency = next(
+            finding for finding in actual["findings"] if finding["location"]["start_line"] == 53
+        )
+        idempotency["category"] = "bug"
+
+        report = score_fixture(expected, actual, EVALUATED_AT)
+
+        row = next(
+            item
+            for item in report["breakdown"]
+            if item["expected_id"] == "global-refund-idempotency-collision"
+        )
+        self.assertEqual(row["match_status"], "missed")
+        self.assertEqual(report["recall_known_bug"], 0.6667)
+        self.assertFalse(report["gate_pass"])
+        self.assertEqual(
+            report["unmatched_actuals"][0]["fingerprint"],
+            idempotency["fingerprint"],
+        )
+
+    def test_known_bug_line_range_accepts_non_ascii_title_with_structural_match(self) -> None:
+        expected = load_json(ROOT / "fixtures" / "positive" / "expected-findings.json")
+        actual = copy.deepcopy(
+            load_json(ROOT / "fixtures" / "positive" / "scoring-stubs" / "perfect.findings.verified.json")
+        )
+        multilingual = next(
+            finding for finding in actual["findings"] if finding["location"]["start_line"] == 46
+        )
+        multilingual["title"] = "先頭要素だけのテナント検証により他テナントの支払いを返金できる"
+
+        report = score_fixture(expected, actual, EVALUATED_AT)
+
+        row = next(
+            item
+            for item in report["breakdown"]
+            if item["expected_id"] == "cross-tenant-payment-after-first-item"
+        )
+        self.assertEqual(row["match_status"], "matched")
+
+    def test_known_bug_location_overlap_requires_semantic_match(self) -> None:
+        expected = load_json(ROOT / "fixtures" / "positive" / "expected-findings.json")
+        actual = copy.deepcopy(
+            load_json(ROOT / "fixtures" / "positive" / "scoring-stubs" / "perfect.findings.verified.json")
+        )
+        unrelated = next(
+            finding for finding in actual["findings"] if finding["location"]["start_line"] == 46
+        )
+        unrelated["title"] = "Cache allocation can be reduced"
+        unrelated["problem"] = "A cache entry allocates one extra object."
+
+        report = score_fixture(expected, actual, EVALUATED_AT)
+
+        row = next(
+            item
+            for item in report["breakdown"]
+            if item["expected_id"] == "cross-tenant-payment-after-first-item"
+        )
+        self.assertEqual(row["match_status"], "missed")
+        self.assertEqual(
+            report["unmatched_actuals"][0]["fingerprint"],
+            unrelated["fingerprint"],
+        )
+
+    def test_fixture_docs_describe_semantic_line_range_matching(self) -> None:
+        docs = (ROOT / "fixtures" / "README.md").read_text(encoding="utf-8")
+
+        self.assertIn("`line_range` がある `known_bug`", docs)
+        self.assertIn("path / category の一致と行位置の重複", docs)
+        self.assertIn("ASCII keyword", docs)
+        self.assertIn("非 ASCII の英数字", docs)
+        self.assertIn("`line_range` がない旧 fixture", docs)
+
     def test_partial_axes_drift_separates_exact_from_acceptable(self) -> None:
         report = score("small", "partial-axes-drift")
         self.assertTrue(report["gate_pass"])
@@ -118,7 +285,7 @@ class ScoreFixtureTest(unittest.TestCase):
         overpromotion["title"] = "Reviewer suggests adding @since / @removed-in tags"
         overpromotion["problem"] = "Reviewer suggests adding @since / @removed-in tags"
         overpromotion["evidence_level"] = "corroborated"
-        overpromotion["axes"] = {"real": "yes", "triggerable": "no", "impactful": "no", "general": "yes"}
+        overpromotion["axes"] = {"real": "yes", "triggerable": "no", "impactful": "no"}
         overpromotion["fingerprint"] = "1" * 64
         overpromotion["id"] = "1" * 64
         actual["findings"].append(overpromotion)
@@ -139,7 +306,7 @@ class ScoreFixtureTest(unittest.TestCase):
         overpromotion["title"] = risk["title"]
         overpromotion["problem"] = risk["title"]
         overpromotion["evidence_level"] = "corroborated"
-        overpromotion["axes"] = {"real": "yes", "triggerable": "no", "impactful": "no", "general": "yes"}
+        overpromotion["axes"] = {"real": "yes", "triggerable": "no", "impactful": "no"}
         overpromotion["fingerprint"] = "3" * 64
         overpromotion["id"] = "3" * 64
         actual["findings"].append(overpromotion)
@@ -157,6 +324,22 @@ class ScoreFixtureTest(unittest.TestCase):
         errors = validate_score_report(report)
         self.assertTrue(any("acceptable_pass_rate" in error for error in errors))
         self.assertTrue(any("counts.acceptable_pass" in error for error in errors))
+
+    def test_score_report_validator_rejects_tampered_blast_radius_acceptability(self) -> None:
+        report = score("small", "perfect")
+        report["breakdown"][0]["blast_radius_diff"]["acceptable"] = False
+
+        errors = validate_score_report(report)
+
+        self.assertIn(
+            "$.breakdown[0].blast_radius_diff.acceptable: "
+            "must equal (actual is not null and actual == expected)",
+            errors,
+        )
+        self.assertFalse(
+            any(error.startswith("$.counts.acceptable_pass") for error in errors),
+            errors,
+        )
 
     def test_score_report_validator_rejects_gate_pass_mismatch(self) -> None:
         report = score("small", "missed-known-bug")

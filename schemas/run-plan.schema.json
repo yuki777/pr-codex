@@ -208,7 +208,8 @@
           "properties": {
             "max_rounds": {
               "type": "integer",
-              "minimum": 1
+              "minimum": 1,
+              "maximum": 3
             },
             "time_budget_ms": {
               "type": "integer",
@@ -241,6 +242,10 @@
             "no_new_evidence_rounds",
             "repeated_contradiction_events",
             "insufficient_evidence_events",
+            "changed_candidate_count",
+            "evidence_added_count",
+            "disposition_changed_count",
+            "remaining_active_count",
             "oscillation_detected"
           ],
           "properties": {
@@ -299,6 +304,22 @@
                 "integer",
                 "null"
               ],
+              "minimum": 0
+            },
+            "changed_candidate_count": {
+              "type": ["integer", "null"],
+              "minimum": 0
+            },
+            "evidence_added_count": {
+              "type": ["integer", "null"],
+              "minimum": 0
+            },
+            "disposition_changed_count": {
+              "type": ["integer", "null"],
+              "minimum": 0
+            },
+            "remaining_active_count": {
+              "type": ["integer", "null"],
               "minimum": 0
             },
             "oscillation_detected": {

@@ -1,0 +1,145 @@
+{
+  "schema_version": "expected-findings.v1",
+  "fixture_id": "pr-codex-positive-seeded-001",
+  "fixture_type": "positive_seeded",
+  "provenance": {
+    "method": "synthetic_overlay",
+    "base_snapshot_path": "base",
+    "authored_at": "2026-07-23T00:00:00Z",
+    "seeded_bugs": [
+      {
+        "id": "bulk-refund-first-tenant-only",
+        "path": "src/auth/refund_service.py",
+        "line": 46,
+        "bug_class": "authorization_scope",
+        "trigger": "A batch contains an authorized first payment and a later payment owned by another tenant.",
+        "impact": "The later cross-tenant payment is refunded without authorization."
+      },
+      {
+        "id": "refund-idempotency-tenant-omitted",
+        "path": "src/auth/refund_service.py",
+        "line": 53,
+        "bug_class": "idempotency_scope",
+        "trigger": "Two tenants reuse the same request id and tenant-local payment id.",
+        "impact": "The repository's global idempotency namespace aliases distinct refunds."
+      },
+      {
+        "id": "pagination-cursor-drops-tie-breaker",
+        "path": "src/billing/pagination.py",
+        "line": 59,
+        "bug_class": "pagination_boundary",
+        "trigger": "More than one page contains rows sharing the last row's created_at timestamp.",
+        "impact": "Rows tied on created_at can be skipped permanently between pages."
+      }
+    ]
+  },
+  "source": {
+    "repository": "pr-codex/synthetic-fixtures",
+    "pr_number": 1,
+    "pr_title": "Add batch refunds and compact pagination cursors",
+    "base_sha": "447a8d428c2a0a503cc21cb288c6ef46f42edde1f1d4cf61afe918eb1d2bfd96",
+    "head_sha": "456d082d6c19cd5118e79e0431687ef6383b7bdd590cfe8724d9aa4492703e06",
+    "source_url": "urn:pr-codex:fixture:positive-seeded-001",
+    "license": "CC0-1.0",
+    "frozen_patch_path": "diff.patch",
+    "retrieved_at": "2026-07-23T00:00:00Z"
+  },
+  "pr_intent": "add_batch_refunds_and_compact_pagination_cursors",
+  "scoring_gate": {
+    "acceptable_pass_rate_min": 0.8,
+    "false_positive_rate_max": 0.1,
+    "recall_known_bug_min": 0.66
+  },
+  "expected_findings": [
+    {
+      "id": "cross-tenant-payment-after-first-item",
+      "seed_id": "bulk-refund-first-tenant-only",
+      "expected_outcome": "known_bug",
+      "title": "Bulk refund authorizes only the first payment in the batch",
+      "category": "security",
+      "severity": "must_fix",
+      "acceptable_severities": ["must_fix"],
+      "strictness_profile": "must_fix_strict",
+      "expected_axes": {
+        "real": "yes",
+        "triggerable": "yes",
+        "impactful": "yes"
+      },
+      "expected_blast_radius": "component",
+      "minimum_evidence_level": "verified",
+      "location_match": {
+        "path": "src/auth/refund_service.py",
+        "line_range": [45, 50]
+      },
+      "should_be_caught_by": ["claude", "codex", "adaptive_verifier"],
+      "oracle_notes": "Every payment must be tenant-checked; an authorized first item currently lets later foreign-tenant items reach record_refund()."
+    },
+    {
+      "id": "global-refund-idempotency-collision",
+      "seed_id": "refund-idempotency-tenant-omitted",
+      "expected_outcome": "known_bug",
+      "title": "Batch refund drops tenant scope from the global idempotency key",
+      "category": "security",
+      "severity": "must_fix",
+      "acceptable_severities": ["must_fix"],
+      "strictness_profile": "must_fix_strict",
+      "expected_axes": {
+        "real": "yes",
+        "triggerable": "yes",
+        "impactful": "yes"
+      },
+      "expected_blast_radius": "component",
+      "minimum_evidence_level": "impact_explained",
+      "location_match": {
+        "path": "src/auth/refund_service.py",
+        "line_range": [50, 58]
+      },
+      "should_be_caught_by": ["claude", "codex", "adaptive_verifier"],
+      "oracle_notes": "Payment ids are tenant-local while repository idempotency keys are global, so the previous tenant prefix remains required. This is deliberately specific but merge-blocking."
+    },
+    {
+      "id": "timestamp-only-pagination-cursor",
+      "seed_id": "pagination-cursor-drops-tie-breaker",
+      "expected_outcome": "known_bug",
+      "title": "Timestamp-only cursor skips rows that share a created_at value",
+      "category": "bug",
+      "severity": "should_fix",
+      "acceptable_severities": ["must_fix", "should_fix"],
+      "strictness_profile": "should_fix_lax",
+      "expected_axes": {
+        "real": "yes",
+        "triggerable": "yes",
+        "impactful": "yes"
+      },
+      "expected_blast_radius": "component",
+      "minimum_evidence_level": "trigger_path_identified",
+      "location_match": {
+        "path": "src/billing/pagination.py",
+        "line_range": [51, 59]
+      },
+      "should_be_caught_by": ["claude", "codex", "adaptive_verifier"],
+      "oracle_notes": "The repository order remains (created_at, id), but the new cursor preserves only created_at and cannot resume within a tie."
+    },
+    {
+      "id": "limit-plus-one-is-not-returned",
+      "expected_outcome": "known_false_positive_trap",
+      "title": "limit plus one query exposes an extra payment row",
+      "category": "performance",
+      "acceptable_severities": ["note", "nit"],
+      "strictness_profile": "noise_filter",
+      "expected_axes": {
+        "real": "no",
+        "triggerable": "no",
+        "impactful": "no"
+      },
+      "expected_blast_radius": "isolated",
+      "minimum_evidence_level": "suspicion",
+      "location_match": {
+        "path": "src/billing/pagination.py",
+        "line_range": [51, 56]
+      },
+      "should_be_caught_by": ["four_axes_gate"],
+      "oracle_notes": "Fetching limit + 1 is intentional has-more detection; page_rows slices the public result back to limit."
+    }
+  ]
+}

@@ -1,6 +1,10 @@
 {
   "schema_version": "expected-findings.v1",
   "fixture_id": "bear-sunday-pr143-medium",
+  "fixture_type": "negative_real_world",
+  "provenance": {
+    "method": "frozen_merged_pr"
+  },
   "source": {
     "repository": "bearsunday/BEAR.Sunday",
     "pr_number": 143,
@@ -32,12 +36,11 @@
       "expected_axes": {
         "real": "yes",
         "triggerable": "unknown",
-        "impactful": "yes",
-        "general": "no"
+        "impactful": "yes"
       },
+      "expected_blast_radius": "isolated",
       "acceptable_overrides": {
-        "triggerable": ["yes", "unknown"],
-        "general": ["no", "unknown"]
+        "triggerable": ["yes", "unknown"]
       },
       "minimum_evidence_level": "trigger_path_identified",
       "location_match": {
@@ -56,9 +59,9 @@
       "expected_axes": {
         "real": "yes",
         "triggerable": "no",
-        "impactful": "unknown",
-        "general": "no"
+        "impactful": "unknown"
       },
+      "expected_blast_radius": "isolated",
       "strictness_profile": "should_fix_lax",
       "minimum_evidence_level": "suspicion",
       "oracle_notes": "Acceptable as a note-level observation; must NOT be promoted to should_fix or above."
@@ -73,9 +76,9 @@
       "expected_axes": {
         "real": "no",
         "triggerable": "no",
-        "impactful": "no",
-        "general": "yes"
+        "impactful": "no"
       },
+      "expected_blast_radius": "component",
       "strictness_profile": "noise_filter",
       "minimum_evidence_level": "suspicion"
     }

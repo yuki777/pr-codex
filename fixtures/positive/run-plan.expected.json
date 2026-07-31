@@ -1,0 +1,72 @@
+{
+  "files_changed": 2,
+  "hunks": 5,
+  "lines_added": 27,
+  "lines_removed": 21,
+  "risk_tags": [
+    "security"
+  ],
+  "selected_hunters": [
+    "claude",
+    "codex"
+  ],
+  "depth_actual": "standard",
+  "depth_source": "default",
+  "depth_reason": "automatic deep deferred until the initial candidate gate; selected default standard",
+  "depth_requested": null,
+  "depth_downgraded": false,
+  "depth_downgrade_reason": null,
+  "recommended_mode": "standard",
+  "skip_reason": null,
+  "routing_decision": {
+    "budget_class": "medium",
+    "route": "claude+codex",
+    "model_profile": "standard",
+    "rationale": "files_changed=2, total_lines=48, risk_tags=[security], depth=standard, mode=standard"
+  },
+  "pr_classification": {
+    "primary_type": "security-sensitive",
+    "all_types": [
+      "security-sensitive"
+    ],
+    "selected_specialists": [
+      "security"
+    ],
+    "rationale": "types=[security-sensitive], specialists=[security], read_only=true",
+    "read_only": true
+  },
+  "estimated_stages": 4,
+  "estimated_timeout_ms": 529800,
+  "actual_duration_ms": null,
+  "actual_tokens": null,
+  "cost": {
+    "actual_usd": null,
+    "currency": "USD",
+    "source": "unavailable",
+    "components": []
+  },
+  "review_loop": {
+    "halting_policy": {
+      "max_rounds": 3,
+      "time_budget_ms": 529800,
+      "no_new_evidence_rounds": 1,
+      "repeated_contradiction_limit": 2,
+      "verifier_fail_policy": "local_artifact_only",
+      "insufficient_evidence_policy": "suppress_to_local_artifact"
+    },
+    "round_metrics": {
+      "rounds_completed": null,
+      "halt_reason": null,
+      "verifier_fail_candidates": null,
+      "suppressed_candidate_count": null,
+      "no_new_evidence_rounds": null,
+      "repeated_contradiction_events": null,
+      "insufficient_evidence_events": null,
+      "changed_candidate_count": null,
+      "evidence_added_count": null,
+      "disposition_changed_count": null,
+      "remaining_active_count": null,
+      "oscillation_detected": null
+    }
+  }
+}

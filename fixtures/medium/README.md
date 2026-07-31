@@ -11,7 +11,7 @@
 ## レビュー検証としての位置づけ
 
 - カテゴリ: **realistic-mid-refactor / type-safety**
-- 主用途: **4軸 (REAL/TRIGGERABLE/IMPACTFUL/GENERAL) の判定精度測定**
+- 主用途: **3軸 (REAL/TRIGGERABLE/IMPACTFUL) と blast_radius metadata の判定精度測定**
 - 想定 oracle カテゴリ: `should_fix` (型契約強化に伴う潜在 trigger path)
 
 ## 仕込み意図 (oracle 設計)
@@ -21,7 +21,7 @@
 - **REAL**: yes (該当 key を参照する code path が確実に存在)
 - **TRIGGERABLE**: unknown (call sites を全部追えるかは context 依存)
 - **IMPACTFUL**: yes (本番で 500 / undefined index notice)
-- **GENERAL**: no (型 alias 導入の意図と矛盾せず、追加の境界バリデーションで対応すべき)
+- **blast_radius**: isolated (この箇所固有。Must Fix gate には使わない)
 
 → profile `should_fix_lax`、`acceptable_overrides.triggerable: ["yes", "unknown"]`
 

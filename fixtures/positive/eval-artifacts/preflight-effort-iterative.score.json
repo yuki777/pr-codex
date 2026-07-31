@@ -1,0 +1,204 @@
+{
+  "schema_version": "score-report.v1",
+  "fixture_id": "pr-codex-positive-seeded-001",
+  "evaluated_at": "2026-07-23T00:00:00Z",
+  "oracle_sha256": "5a7b57437239698e2507549f626e726db8b170aa39a18a77879bfa0dc2869507",
+  "expected_finding_ids": [
+    "cross-tenant-payment-after-first-item",
+    "global-refund-idempotency-collision",
+    "timestamp-only-pagination-cursor",
+    "limit-plus-one-is-not-returned"
+  ],
+  "exact_pass_rate": 1.0,
+  "acceptable_pass_rate": 1.0,
+  "false_positive_rate": 0.0,
+  "recall_known_bug": 1.0,
+  "gate_pass": true,
+  "scoring_gate": {
+    "acceptable_pass_rate_min": 0.8,
+    "false_positive_rate_max": 0.1,
+    "recall_known_bug_min": 0.66
+  },
+  "gate_checks": [
+    {
+      "name": "acceptable_pass_rate_min",
+      "actual": 1.0,
+      "threshold": 0.8,
+      "passed": true
+    },
+    {
+      "name": "false_positive_rate_max",
+      "actual": 0.0,
+      "threshold": 0.1,
+      "passed": true
+    },
+    {
+      "name": "recall_known_bug_min",
+      "actual": 1.0,
+      "threshold": 0.66,
+      "passed": true
+    }
+  ],
+  "counts": {
+    "axes_target": 3,
+    "exact_pass": 3,
+    "acceptable_pass": 3,
+    "known_bug": 3,
+    "known_bug_matched": 3,
+    "known_false_positive_trap": 1,
+    "false_positive_promoted": 0
+  },
+  "unmatched_actuals": [],
+  "breakdown": [
+    {
+      "expected_id": "cross-tenant-payment-after-first-item",
+      "expected_outcome": "known_bug",
+      "matched_actual_fingerprint": "f0689ec3fd819352f34f8c54583299f645a33f8729a3ed0b3b740d85c0022148",
+      "match_status": "matched",
+      "axes_diff": {
+        "real": {
+          "expected": "yes",
+          "actual": "yes",
+          "acceptable": true
+        },
+        "triggerable": {
+          "expected": "yes",
+          "actual": "yes",
+          "acceptable": true
+        },
+        "impactful": {
+          "expected": "yes",
+          "actual": "yes",
+          "acceptable": true
+        }
+      },
+      "blast_radius_diff": {
+        "expected": "component",
+        "actual": "component",
+        "acceptable": true
+      },
+      "severity_diff": {
+        "expected": [
+          "must_fix"
+        ],
+        "actual": "must_fix",
+        "acceptable": true
+      },
+      "evidence_level_ok": true,
+      "notes": "matched by location/category"
+    },
+    {
+      "expected_id": "global-refund-idempotency-collision",
+      "expected_outcome": "known_bug",
+      "matched_actual_fingerprint": "48b812456c7ad5c91ba06c42f741108db1f2e70a438cf2ff107a29f1e069bac3",
+      "match_status": "matched",
+      "axes_diff": {
+        "real": {
+          "expected": "yes",
+          "actual": "yes",
+          "acceptable": true
+        },
+        "triggerable": {
+          "expected": "yes",
+          "actual": "yes",
+          "acceptable": true
+        },
+        "impactful": {
+          "expected": "yes",
+          "actual": "yes",
+          "acceptable": true
+        }
+      },
+      "blast_radius_diff": {
+        "expected": "component",
+        "actual": "component",
+        "acceptable": true
+      },
+      "severity_diff": {
+        "expected": [
+          "must_fix"
+        ],
+        "actual": "must_fix",
+        "acceptable": true
+      },
+      "evidence_level_ok": true,
+      "notes": "matched by location/category"
+    },
+    {
+      "expected_id": "timestamp-only-pagination-cursor",
+      "expected_outcome": "known_bug",
+      "matched_actual_fingerprint": "602e78559230513cc497fafc5e5a33acc467143f36c37b26456ba64716c65f50",
+      "match_status": "matched",
+      "axes_diff": {
+        "real": {
+          "expected": "yes",
+          "actual": "yes",
+          "acceptable": true
+        },
+        "triggerable": {
+          "expected": "yes",
+          "actual": "yes",
+          "acceptable": true
+        },
+        "impactful": {
+          "expected": "yes",
+          "actual": "yes",
+          "acceptable": true
+        }
+      },
+      "blast_radius_diff": {
+        "expected": "component",
+        "actual": "component",
+        "acceptable": true
+      },
+      "severity_diff": {
+        "expected": [
+          "must_fix",
+          "should_fix"
+        ],
+        "actual": "should_fix",
+        "acceptable": true
+      },
+      "evidence_level_ok": true,
+      "notes": "matched by location/category"
+    },
+    {
+      "expected_id": "limit-plus-one-is-not-returned",
+      "expected_outcome": "known_false_positive_trap",
+      "matched_actual_fingerprint": null,
+      "match_status": "matched",
+      "axes_diff": {
+        "real": {
+          "expected": "no",
+          "actual": null,
+          "acceptable": false
+        },
+        "triggerable": {
+          "expected": "no",
+          "actual": null,
+          "acceptable": false
+        },
+        "impactful": {
+          "expected": "no",
+          "actual": null,
+          "acceptable": false
+        }
+      },
+      "blast_radius_diff": {
+        "expected": "isolated",
+        "actual": null,
+        "acceptable": false
+      },
+      "severity_diff": {
+        "expected": [
+          "note",
+          "nit"
+        ],
+        "actual": null,
+        "acceptable": false
+      },
+      "evidence_level_ok": true,
+      "notes": "trap not promoted"
+    }
+  ]
+}

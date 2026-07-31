@@ -8,6 +8,8 @@
   "required": [
     "schema_version",
     "fixture_id",
+    "fixture_type",
+    "provenance",
     "source",
     "pr_intent",
     "expected_findings"
@@ -15,6 +17,8 @@
   "properties": {
     "schema_version": {"const": "expected-findings.v1"},
     "fixture_id": {"$ref": "#/$defs/non_empty_string"},
+    "fixture_type": {"$ref": "#/$defs/fixture_type"},
+    "provenance": {"$ref": "#/$defs/provenance"},
     "source": {"$ref": "#/$defs/source"},
     "pr_intent": {"$ref": "#/$defs/non_empty_string"},
     "scoring_gate": {"$ref": "#/$defs/scoring_gate"},
@@ -33,6 +37,36 @@
     "evidence_level": {"enum": ["suspicion", "corroborated", "trigger_path_identified", "impact_explained", "verified"]},
     "strictness_profile": {"enum": ["must_fix_strict", "should_fix_lax", "noise_filter"]},
     "expected_outcome": {"enum": ["known_bug", "known_false_positive_trap", "acceptable_risk", "out_of_scope", "no_expected_finding"]},
+    "fixture_type": {"enum": ["negative_real_world", "positive_seeded"]},
+    "blast_radius": {"enum": ["isolated", "component", "systemic", "unknown"]},
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method"],
+      "properties": {
+        "method": {"enum": ["frozen_merged_pr", "synthetic_overlay"]},
+        "base_snapshot_path": {"$ref": "#/$defs/non_empty_string"},
+        "authored_at": {"type": "string", "format": "date-time"},
+        "seeded_bugs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/seeded_bug"}
+        }
+      }
+    },
+    "seeded_bug": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "path", "line", "bug_class", "trigger", "impact"],
+      "properties": {
+        "id": {"$ref": "#/$defs/non_empty_string"},
+        "path": {"$ref": "#/$defs/non_empty_string"},
+        "line": {"type": "integer", "minimum": 1},
+        "bug_class": {"$ref": "#/$defs/non_empty_string"},
+        "trigger": {"$ref": "#/$defs/non_empty_string"},
+        "impact": {"$ref": "#/$defs/non_empty_string"}
+      }
+    },
     "source": {
       "type": "object",
       "additionalProperties": false,
@@ -64,12 +98,11 @@
     "axes": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["real", "triggerable", "impactful", "general"],
+      "required": ["real", "triggerable", "impactful"],
       "properties": {
         "real": {"$ref": "#/$defs/axis_value"},
         "triggerable": {"$ref": "#/$defs/axis_value"},
-        "impactful": {"$ref": "#/$defs/axis_value"},
-        "general": {"$ref": "#/$defs/axis_value"}
+        "impactful": {"$ref": "#/$defs/axis_value"}
       }
     },
     "axis_overrides": {
@@ -78,8 +111,7 @@
       "properties": {
         "real": {"$ref": "#/$defs/axis_values"},
         "triggerable": {"$ref": "#/$defs/axis_values"},
-        "impactful": {"$ref": "#/$defs/axis_values"},
-        "general": {"$ref": "#/$defs/axis_values"}
+        "impactful": {"$ref": "#/$defs/axis_values"}
       }
     },
     "axis_values": {
@@ -122,9 +154,10 @@
     "expected_finding": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "expected_outcome", "title", "category", "expected_axes", "strictness_profile", "minimum_evidence_level"],
+      "required": ["id", "expected_outcome", "title", "category", "expected_axes", "expected_blast_radius", "strictness_profile", "minimum_evidence_level"],
       "properties": {
         "id": {"$ref": "#/$defs/non_empty_string"},
+        "seed_id": {"$ref": "#/$defs/non_empty_string"},
         "expected_outcome": {"$ref": "#/$defs/expected_outcome"},
         "title": {"$ref": "#/$defs/non_empty_string"},
         "category": {"$ref": "#/$defs/category"},
@@ -138,6 +171,7 @@
         "strictness_profile": {"$ref": "#/$defs/strictness_profile"},
         "expected_axes": {"$ref": "#/$defs/axes"},
         "acceptable_overrides": {"$ref": "#/$defs/axis_overrides"},
+        "expected_blast_radius": {"$ref": "#/$defs/blast_radius"},
         "minimum_evidence_level": {"$ref": "#/$defs/evidence_level"},
         "location_match": {"$ref": "#/$defs/location_match"},
         "acceptable_alternatives": {

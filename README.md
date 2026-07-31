@@ -71,7 +71,7 @@ cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
 
 - `--permission-mode auto` — `/loop` を非対話で回すために auto mode で起動する。auto mode は分類器による安全チェックでツール実行を自動承認またはブロックするため、すべての操作が無条件に通るわけではない。本スキルはテンプレートに明示した操作だけを実行し、ローカル書き込みは `~/claude-loop-pr-codex/` 配下の成果物作成に限定する
 - `--effort max` — Claude Code 本体の推論設定。`/pr-codex:review` の depth policy とは別軸
-- Codex CLI 側のレビュー (hunter) は、スキル内で `-m gpt-5.5` を指定して実行する。send Step 4.5 の semantic preflight は #110 の担当替えに従い `-m gpt-5.6-sol` (GPT-5.6) を指定する（素の `gpt-5.6` slug は ChatGPT アカウントの Codex では拒否されるため）。hunter (review Step 4b) と投稿前検証 (send Step 4.5) はどちらも `--ignore-user-config` でユーザー config から切り離すため (#111)、user config 由来の外部 MCP は無効化され、`model_reasoning_effort` は Codex CLI の default 値で実行される。GitHub 由来のレビュー文脈（PR 説明文・既存レビューコメント）は、親（メインコンテキスト）が read-only で取得した `pr-context.md`（sanitized context pack）として hunter に渡す（外部への到達経路の遮断は、4a が `--setting-sources ""`（settings の事前許可を読まない）+ `--tools "Read,Glob,Grep,Bash"`（WebFetch / WebSearch 等を除外）+ `--strict-mcp-config`（MCP サーバーを読まない）、4b が `--ignore-user-config`。Claude CLI の `--allowedTools` は確認なし許可の指定であって利用可能ツールの制限ではないため、遮断には使わない）
+- Codex CLI 側のレビュー (hunter) は、スキル内で `-m gpt-5.5` を指定して実行する。send Step 4.5 の semantic preflight は #110 の担当替えに従い `-m gpt-5.6-sol` (GPT-5.6) を指定する。7,301-byte の prompt と upstream findings 入力を high / xhigh 間で byte-identical に揃えて再実測し、同じ Must Fix 2件を confirmed、品質 gate も同値だった。high は 14,890 ms / 23,003 tokens、xhigh は 34,217 ms / 23,326 tokens だったため `model_reasoning_effort="high"` に固定する。hunter は user config から切り離した Codex CLI default のままにする。hunter (review Step 4b) と投稿前検証 (send Step 4.5) はどちらも `--ignore-user-config` を使うため (#111)、user config 由来の外部 MCP は無効。GitHub 由来のレビュー文脈（PR 説明文・既存レビューコメント）は、親（メインコンテキスト）が read-only で取得した `pr-context.md`（sanitized context pack）として hunter に渡す（外部への到達経路の遮断は、4a が `--setting-sources ""` + `--tools "Read,Glob,Grep,Bash"` + `--strict-mcp-config`、4b が `--ignore-user-config`）
 - Codex CLI は `codex-cli 0.145.0` 以降のみ対応する。旧バージョン向けテンプレートは打ち切り、`--sandbox read-only` / `--color never` / `--ephemeral` を並べる旧形式ではなく、`-c sandbox_mode=read-only` と hunter / preflight 共通の `--ignore-user-config` を使う。hunter (review Step 4b) と preflight verifier (send Step 4.5) は `--output-schema` / `--output-last-message` による structured output で JSON を直接受ける（0.145.0 で動作確認済み）。hunter prompt は bash double-quote 埋め込みではなく prompt file + stdin（4a は `claude -p < prompt.md`、4b は `exec - < prompt.md`）で渡し、旧 4 文字エスケープ規則は廃止済み (#111)
 
 
@@ -101,19 +101,19 @@ cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
 
 ## Depth control
 
-`/pr-codex:review` はレビュー深度を `standard` / `deep` の 2 値で記録する。depth はオプションでは受け付けず、PR のリスクとサイズから自動判定する。既定はコストと 20 分 timeout を優先する `standard` で、`deep` は高リスク・小規模 PR 向け。
+`/pr-codex:review` はレビュー深度を `standard` / `deep` の 2 値で記録する。depth はオプションでは受け付けない。ranker は全 PR を `standard` で開始し、hunter 後に small / fully verified / conflict-free gate を host controller が通過した場合だけ `deep` へ上げる。
 
 この 20 分は review budget / run-plan budget であり、Bash tool の foreground timeout ではない。Claude Code Bash tool の foreground timeout 上限 600000 ms を超えるため、review hunters は run_in_background: true で起動し、foreground timeout=1200000 は指定しない。
 
 | 入力 / signal | selected depth | artifact |
 | --- | --- | --- |
-| `risk_tags` に `security` または `data_migration` を含み、`files_changed <= 20` かつ `lines_added + lines_removed <= 1500` | `deep` | `depth_source=auto` |
-| 上記以外 | `standard` | `depth_source=default` |
+| ranker 初期判定（全 PR） | `standard` | `depth_source=default`、candidate gate まで auto-deep を保留 |
 | `lines_added + lines_removed > 5000` | `standard` | `depth_source=default`, `depth_downgraded=false`, `depth_reason` に大規模ガード理由を記録 |
+| hunter 後に `recommended_mode=standard` / `budget_class=small`、全候補 `verified`・3軸既知・severity 矛盾なし | `deep` | host controller が `depth_source=auto` と専用 `depth_reason` を記録 |
 
-`run-plan.json` には `depth_actual` / `depth_source` / `depth_reason` / `depth_requested=null` / `depth_downgraded=false` / `depth_downgrade_reason=null` を保存するため、standard/deep の選択は deterministic に追跡できる。
+`run-plan.json` には `depth_actual` / `depth_source` / `depth_reason` / `depth_requested=null` / `depth_downgraded=false` / `depth_downgrade_reason=null` を保存する。hunter 後の auto-deep は `tasks/refinement_loop.py --apply-auto-deep` だけが更新し、モデルの自由判断では変更しないため、standard/deep の選択は deterministic に追跡できる。
 
-`recommended_mode` (`standard` / `focused` / `skip`) は depth とは直交する別軸。`recommended_mode` は「観点や対象範囲の絞り込み」、depth は「1観点あたりの掘り下げ深さ」を表す。たとえば `recommended_mode=focused` かつ `depth_actual=deep` の組み合わせは有効で、focused fallback / skip recommendation と矛盾しない。
+`recommended_mode` (`standard` / `focused` / `skip`) は depth とは直交する別軸であり、「観点や対象範囲の絞り込み」を表す。ただし現行の hunter 後 auto-deep gate は安全側に `recommended_mode=standard` を必須とするため、production workflow が自動生成する `depth_actual=deep` は `recommended_mode=standard` の場合だけである。
 
 ## レビューフロー
 
@@ -125,8 +125,8 @@ cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
 6. **結果報告** — レビュー結果の要約をユーザーに報告。`--auto-send` 指定時は completed 後に `/pr-codex:send <PR URL> --auto-submit` 相当の auto-send phase へ進む
 4. **stage 化されたレビュー実行** — 既存 Step を logical stage として扱う（ranker / hunter / verifier / explainer）
    - ranker: `run-plan.json` で PR risk/area と実行方針を分類
-   - hunter: Claude Code と Codex CLI が並行して広めに候補を集め、structured output（`claude-review.json` / `codex-review.json`、`schemas/hunter-result.v1.json` 準拠）を `tasks/merge_hunter_results.py` が検証・合成して `findings.candidates.json` を残す
-   - verifier: 4軸 + evidence ladder + counterexample で絞り込み、`findings.verified.json` を canonical artifact にする
+   - hunter: Claude Code と Codex CLI が並行して広めに候補を集め、structured output（`claude-review.json` / `codex-review.json`、`schemas/hunter-result.v1.json` 準拠）を `tasks/merge_hunter_results.py` が検証・合成して `findings.candidates.json` を残す。具体的根拠が不足する候補は `evidence_state=needs_evidence` として verifier へ送る
+   - verifier: REAL / TRIGGERABLE / IMPACTFUL の 3軸 gate + evidence ladder + counterexample で絞り込み、非ゲート metadata の `blast_radius` を付けて `findings.verified.json` を canonical artifact にする
    - explainer: verified findings から `review.md` と local-only `findings.sarif` を派生生成する
 5. **結果報告** — レビュー結果の要約をユーザーに報告。`--auto-send` 指定時は Must Fix のみを対象に send 側の verifier pipeline / head SHA gate / 二重投稿防止 gate を通して投稿する
 
@@ -268,7 +268,7 @@ python3 $CLAUDE_PLUGIN_ROOT/tasks/episode_memory.py retrieve \
 
 ## Regression eval / fixture scoring (F11)
 
-CI では LLM を起動せず、固定 fixture と stub artifact だけで schema / runner の deterministic smoke test を行う。手動 deep eval では実レビューで生成した `findings.verified.json` を fixture oracle と比較し、M1→M2 gate report に集約する。
+CI では LLM を起動せず、固定 fixture と stub artifact だけで schema / runner の deterministic smoke test を行う。small / medium / large の既存 oracle に加え、Issue #112 の `fixtures/positive/` は 3 個の既知バグと 1 個の既知 false-positive trap を持つ positive-seeded fixture として検証する。手動 deep eval では実レビューで生成した `findings.verified.json` を fixture oracle と比較し、4 fixture すべてを M1→M2 gate report に集約する。
 
 ### CI-safe smoke
 
@@ -276,7 +276,7 @@ CI では LLM を起動せず、固定 fixture と stub artifact だけで schem
 python3 -m unittest discover -s tasks -p "test_*.py"
 ```
 
-このテストは `fixtures/<size>/scoring-stubs/*.findings.verified.json` を使い、`expected-findings.v1` / `score-report.v1` / `m1-m2-gate.v1` の validation と scoring runner の分岐を確認する。実 LLM / `gh api` / GitHub write 操作は含めない。
+このテストは `fixtures/{small,medium,large,positive}/scoring-stubs/*.findings.verified.json` を使い、`expected-findings.v1` / `score-report.v1` / `m1-m2-gate.v1` の validation と scoring runner の分岐を確認する。`fixtures/positive/eval-report.json` は GPT-5.6 の round policy と reasoning effort 比較を `eval-report.v1` で記録する。CI smoke に実 LLM / `gh api` / GitHub write 操作は含めない。
 
 ### Manual deep eval
 
@@ -299,6 +299,11 @@ python3 tasks/score_fixture.py \
   --expected fixtures/large/expected-findings.json \
   --actual /path/to/large/findings.verified.json \
   --out artifacts/score-large.json
+
+python3 tasks/score_fixture.py \
+  --expected fixtures/positive/expected-findings.json \
+  --actual /path/to/positive/findings.verified.json \
+  --out artifacts/score-positive.json
 ```
 
 M1→M2 gate は運用実測値を `m1-m2-inputs.v1` として外部供給する。未計測項目は省略でき、省略された criteria は `unknown` として記録される（unknown は fail にはしない）。
@@ -322,7 +327,7 @@ M1→M2 gate は運用実測値を `m1-m2-inputs.v1` として外部供給する
 
 ```bash
 python3 tasks/m1_m2_gate.py \
-  --score-reports artifacts/score-small.json artifacts/score-medium.json artifacts/score-large.json \
+  --score-reports artifacts/score-small.json artifacts/score-medium.json artifacts/score-large.json artifacts/score-positive.json \
   --inputs artifacts/m1-m2-inputs.json \
   --out artifacts/m1-m2-gate.json
 ```
@@ -406,9 +411,9 @@ mv ~/claude-loop-pr-codex/sent/yuki777-pr-codex-24 \
 - `depth_downgraded` は常に `false`、`depth_downgrade_reason` は常に `null`。大規模 PR は downgrade ではなく default standard として扱う
 - `recommended_mode == "skip"` の場合だけ `skip_reason` を非空にし、それ以外は `skip_reason=null` にする。`recommended_mode` は depth と直交し、GitHub への自動投稿範囲は depth では拡大しない。`--auto-send` でも default の投稿対象は Must Fix のみで、Should Fix / Nit は含めない
 - hunter の structured output は `schemas/hunter-result.v1.json` (JSON Schema Draft 2020-12) で定義する。strict structured output 互換のため全フィールド required（optionality は nullable 型で表現）とし、`status` は `findings` / `clean` / `diff_unavailable` の 3 値。`tasks/merge_hunter_results.py` が両 hunter 出力を検証して `findings.candidates.json` へ決定論的に変換する
-- hunter → verifier 境界の debug artifact は `schemas/findings.candidates.v1.json` (JSON Schema Draft 2020-12) で定義する。`findings.candidates.json` は `id == fingerprint` や 4軸 / evidence / posting policy を要求せず、verifier が canonical findings へ揃える
+- hunter → verifier 境界の debug artifact は `schemas/findings.candidates.v1.json` (JSON Schema Draft 2020-12) で定義する。`findings.candidates.json` は `id == fingerprint` や 3軸 / evidence / posting policy の最終確定を要求せず、`evidence_state=needs_evidence` を正式に許容する。verifier が canonical findings へ揃え、`blast_radius` は非ゲート metadata として保持する
 - canonical runtime artifact は `schemas/findings.v1.json` (JSON Schema Draft 2020-12) で定義する
-- F5 の round artifact は `schemas/review-rounds.v1.json` で定義し、`review-rounds.json` に `max_rounds` / `time_budget_ms` / `no_new_evidence_rounds` / `repeated_contradiction_limit` と round metrics を保存する
+- F5 の round artifact は `schemas/review-rounds.v1.json` で定義し、`review-rounds.json` に `max_rounds` / `time_budget_ms` / `no_new_evidence_rounds` / `repeated_contradiction_limit` と host state metrics を保存する。`max_rounds` は通常 2、deep / security / data migration だけ 3、hard cap は 3。`tasks/refinement_loop.py --plan-next` が round 前後の candidate snapshot、SHA-256 state digest、実測経過時間、未解決対象 ID を使って継続・停止を決定し、モデル申告だけの「新規根拠」は採用しない
 - review-rounds カウンタでは、`rounds[].output_candidates_count` と `metrics.posted_candidate_count` はどちらも remaining ACTIVE candidates を表す。`posted_candidate_count` は最終 round の `output_candidates_count` であり、名前に反して GitHub に投稿した件数ではない。また、`findings.verified.json の件数ではない`（canonical findings の採用数ではない）
 - fixture oracle は `schemas/expected-findings.v1.json` で定義する。runtime artifact とは分離し、`expected_outcome` / `acceptable_overrides` / `strictness_profile` / `minimum_evidence_level` など採点用メタデータを保持する
 - fixture scoring の出力は `schemas/score-report.v1.json`、M1→M2 gate report は `schemas/m1-m2-gate.v1.json` で定義する
@@ -438,7 +443,7 @@ mv ~/claude-loop-pr-codex/sent/yuki777-pr-codex-24 \
 - `routing_decision.rationale` は 240 文字以内の決定論的な事実列（例: `files_changed=N, total_lines=M, risk_tags=[...], depth=deep, mode=standard`）に限定し、LLM 自由生成文を入れない
 - `pr_classification` は run-plan 内にも同じ内容を持ち、Step 3 で `pr-classification.json` として派生保存する。`selected_specialists` は `docs` / `tests` / `workflow` / `review-skill` / `python` / `security` / `generic` の read-only checklist 選択であり、GitHub 投稿範囲や write 権限を広げない
 - M1 で生成済みの旧 `run-plan.json` には `routing_decision` がないため、M2 partial 以降の strict schema では再生成が必要。production consumer はまだないため migration script は不要
-- Timeout 完了率の実測比較は #36 (F11 regression eval) の fixture/eval 完了後に行う。本リポジトリ内の回帰確認は `python3 tasks/validate_run_plan.py` と `python3 -m unittest discover -s tasks -p "test_*.py"` を流し、routing fields と既存 timeout proxy が悪化していないことを確認する
+- Issue #112 の positive fixture 実測では、GPT-5.6 verifier の exact / acceptable / false-positive / recall gate を維持したまま、3 round (86,460 ms / 66,327 tokens) から controller 停止後の 1 round (43,452 ms / 23,285 tokens) へ削減できた。semantic preflight は byte-identical な prompt / findings 入力で xhigh と high が同じ PASS かつ全品質指標 1.0 となり、high は 34,217 ms / 23,326 tokens から 14,890 ms / 23,003 tokens へ減少した。Fable 5 は baseline prompt の acceptable 0.0 / false-positive 0.0 から、focused prompt で acceptable 0.6667 / false-positive 0.0 へ改善した（35,848 ms → 46,869 ms、token 値は provider 未報告）。再現可能な集計は `fixtures/positive/eval-report.json` に保存する
 - Budget class はレビュー観点や Must Fix 検出を抑制するためには使わない。`focused-fallback` でも security / bug / test を優先しつつレビュー自体は継続する
 
 ## SARIF derived artifact
@@ -459,14 +464,16 @@ mv ~/claude-loop-pr-codex/sent/yuki777-pr-codex-24 \
 
 既定の halting policy:
 
-- `max_rounds = 3` — round 数の上限。到達したら `halt_reason=max_rounds`
+- `max_rounds = 2 | 3` — standard / focused は通常 2、`depth_actual=deep` または `risk_tags` に `security` / `data_migration` がある場合だけ 3。positive fixture では固定 3 round が token / 時間を増やしたため、全フローの hard cap は 3 のまま対象を狭める adaptive policy（適応ポリシー）とする。到達したら `halt_reason=max_rounds`
 - `time_budget_ms = estimated_timeout_ms` — 追加 round 開始前に予算を確認し、超過なら `halt_reason=time_budget`
 - `no_new_evidence_rounds = 1` — 新しい根拠がない round が続く場合は `halt_reason=no_new_evidence`
 - `repeated_contradiction_limit = 2` — 同じ contradiction signature が繰り返されたら `halt_reason=repeated_contradiction` とし、oscillation を止める
 - `verifier_fail_policy = local_artifact_only` — `verifier FAIL` 候補は `review-rounds.json.rounds[].rejected_candidates[]` に `local_only=true` で残し、`findings.verified.json` / `review.md` / GitHub 投稿 payload には含めない
 - `insufficient_evidence_policy = suppress_to_local_artifact` — 根拠不足候補も local artifact のみ。raw log / secret / token / authorization / private key は保存しない
 
-`run-plan.json.review_loop.round_metrics` は完了時に `rounds_completed` / `halt_reason` / `verifier_fail_candidates` / `suppressed_candidate_count` / `no_new_evidence_rounds` / `repeated_contradiction_events` / `insufficient_evidence_events` / `oscillation_detected` を持つ。F11 eval report (`schemas/eval-report.v1.json`) は baseline と iterative run の両方に `round_metrics` を含め、round 有無による timeout completion / false positive / oscillation 差分を比較できるようにする。
+各 round の継続可否は `tasks/refinement_loop.py --plan-next` が実測経過時間と、round 開始前後の candidate snapshot から host 側で計算した state digest / state delta（状態差分）から決定する。round 1 は全候補、round 2 は未解決の high-risk・hunter 間不一致・新しい evidence を取得可能な候補、round 3 は round 2 で state が変化した high-risk 候補だけを対象にする。モデルが自分で停止条件や対象拡大を判断したり、文章の言い換えを新規 evidence と申告したりして継続してはならない。small かつ初期候補が fully verified / conflict-free の場合だけ、同 controller の `--apply-auto-deep` が round 1 前に `run-plan.json` を `depth_actual=deep` へ更新する。
+
+`review-rounds.json.rounds[]` は controller 算出の `state_digest_before` / `state_digest_after` / `changed_candidate_ids` / `changed_candidate_count` / `evidence_added_count` / `disposition_changed_count` / `remaining_active_count` を保持する。`run-plan.json.review_loop.round_metrics` は完了時にこれらの集計値に加え、`rounds_completed` / `halt_reason` / `verifier_fail_candidates` / `suppressed_candidate_count` / `no_new_evidence_rounds` / `repeated_contradiction_events` / `insufficient_evidence_events` / `oscillation_detected` を持つ。F11 eval report (`schemas/eval-report.v1.json`) は baseline と iterative run の両方に同じ round metrics を含め、round 有無による timeout completion / false positive / oscillation 差分を比較できるようにする。host state metrics を採取していない過去の eval record は推測せず `null` とする。
 
 ## Preflight result schema
 

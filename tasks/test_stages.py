@@ -64,6 +64,7 @@ def valid_candidates() -> dict[str, object]:
             {
                 "source_agent": "claude",
                 "source_ref": "claude-review.md:Must Fix 1",
+                "evidence_state": "supported",
                 "location": {
                     "path": "skills/review/SKILL.md",
                     "start_line": 590,

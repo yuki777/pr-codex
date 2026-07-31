@@ -62,7 +62,7 @@
         "insufficient_evidence_policy"
       ],
       "properties": {
-        "max_rounds": {"type": "integer", "minimum": 1},
+        "max_rounds": {"type": "integer", "minimum": 1, "maximum": 3},
         "time_budget_ms": {"type": "integer", "minimum": 0},
         "no_new_evidence_rounds": {"type": "integer", "minimum": 1},
         "repeated_contradiction_limit": {"type": "integer", "minimum": 1},
@@ -83,7 +83,17 @@
         "verifier_fail_count",
         "insufficient_evidence_count",
         "contradiction_signatures",
-        "rejected_candidates"
+        "rejected_candidates",
+        "target_candidate_ids",
+        "state_digest_before",
+        "state_digest_after",
+        "changed_candidate_ids",
+        "changed_candidate_count",
+        "evidence_added_count",
+        "disposition_changed_count",
+        "untargeted_candidate_ids",
+        "untargeted_candidate_count",
+        "remaining_active_count"
       ],
       "properties": {
         "round_index": {"type": "integer", "minimum": 1},
@@ -100,12 +110,70 @@
         "output_candidates_count": {
           "type": "integer",
           "minimum": 0,
-          "description": "Number of candidates remaining ACTIVE in the loop AFTER this round. Compute as input_candidates_count - (verifier_pass_count + verifier_fail_count + insufficient_evidence_count) + new active candidates discovered during the round. Set to 0 when all candidates were verified/rejected and no active candidates remain."
+          "description": "Number of candidates remaining ACTIVE for the next round after verifier terminal decisions, duplicate suppression, and priority narrowing. It must equal remaining_active_count; untargeted_candidate_count records unresolved candidates transitioned to local-only state by narrowing."
         },
         "new_evidence_count": {"type": "integer", "minimum": 0},
         "verifier_pass_count": {"type": "integer", "minimum": 0},
         "verifier_fail_count": {"type": "integer", "minimum": 0},
         "insufficient_evidence_count": {"type": "integer", "minimum": 0},
+        "target_candidate_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/non_empty_string"},
+          "description": "Host-selected candidate IDs for this round. Later rounds must be a subset of the previous targeted set."
+        },
+        "state_digest_before": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "SHA-256 of canonical host-owned candidate state before this round."
+        },
+        "state_digest_after": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "SHA-256 of canonical host-owned candidate state after this round."
+        },
+        "halt_basis_state_digest_after": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Optional host-computed state digest before terminal controller suppression. It preserves the evidence state used to derive a no_new_evidence halt while state_digest_after records the final terminal candidate state."
+        },
+        "changed_candidate_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/non_empty_string"},
+          "description": "Host-computed IDs whose canonical candidate state changed during this round."
+        },
+        "changed_candidate_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Host-computed count equal to changed_candidate_ids length."
+        },
+        "evidence_added_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Host-computed count of candidates whose evidence state, level, or axes changed."
+        },
+        "disposition_changed_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Host-computed count of candidates whose disposition or disagreement state changed."
+        },
+        "untargeted_candidate_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/non_empty_string"},
+          "description": "Host-computed unresolved candidate IDs transitioned to local-only suppression because they are not targeted by another round."
+        },
+        "untargeted_candidate_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Host-computed unresolved candidates excluded by the next-round priority policy and transitioned out of ACTIVE loop state."
+        },
+        "remaining_active_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Host-computed candidate count remaining ACTIVE for the next round after priority narrowing."
+        },
         "contradiction_signatures": {
           "type": "array",
           "items": {"$ref": "#/$defs/non_empty_string"}
@@ -174,6 +242,10 @@
         "no_new_evidence_rounds",
         "repeated_contradiction_events",
         "insufficient_evidence_events",
+        "changed_candidate_count",
+        "evidence_added_count",
+        "disposition_changed_count",
+        "remaining_active_count",
         "oscillation_detected"
       ],
       "properties": {
@@ -188,6 +260,10 @@
         "no_new_evidence_rounds": {"type": "integer", "minimum": 0},
         "repeated_contradiction_events": {"type": "integer", "minimum": 0},
         "insufficient_evidence_events": {"type": "integer", "minimum": 0},
+        "changed_candidate_count": {"type": "integer", "minimum": 0},
+        "evidence_added_count": {"type": "integer", "minimum": 0},
+        "disposition_changed_count": {"type": "integer", "minimum": 0},
+        "remaining_active_count": {"type": "integer", "minimum": 0},
         "oscillation_detected": {"type": "boolean"}
       }
     }

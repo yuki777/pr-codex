@@ -47,15 +47,17 @@ python3 tasks/score_fixture.py \
 
 oracle 評価結果は4指標を出す:
 
-- `exact_pass_rate` — `axes` が完全一致
-- `acceptable_pass_rate` — `expected_axes ∪ acceptable_overrides` と `acceptable_severities` 内に収まる
+- `exact_pass_rate` — `axes` と `blast_radius` が oracle と完全一致
+- `acceptable_pass_rate` — `axes` が `expected_axes ∪ acceptable_overrides`、severity が `acceptable_severities`、evidence が最低水準内に収まり、`blast_radius` が `expected_blast_radius` と一致
 - `false_positive_rate` — `expected_outcome=known_false_positive_trap` を Must Fix にしてしまった率
-- `recall_known_bug` — `expected_outcome=known_bug` が location/category matching で検出された率
+- `recall_known_bug` — `expected_outcome=known_bug` が fixture の location/semantic matching 契約で検出された率
 
-F11 eval report (`schemas/eval-report.v1.json`) は、baseline と iterative run の差分を比較するため各 run に `round_metrics` を必ず含める。最低限の round metrics は `rounds_completed` / `max_rounds` / `halt_reason` / `elapsed_ms` / `time_budget_ms` / `verifier_fail_candidates` / `suppressed_candidate_count` / `no_new_evidence_rounds` / `repeated_contradiction_events` / `insufficient_evidence_events` / `oscillation_detected`。これにより F5 の round 有無で timeout 内完了率、false positive 率、oscillation 抑止の差分を fixture ごとに比較できる。
+`blast_radius` は runtime の Must Fix 判定には使わない非ゲート metadata だが、fixture 品質評価では `breakdown[].blast_radius_diff` に expected/actual/acceptable を決定的に記録し、`unknown` への退行を品質維持として扱わない。
+
+F11 eval report (`schemas/eval-report.v1.json`) は、baseline と iterative run の差分を比較するため各 run に `round_metrics` を必ず含める。最低限の round metrics は `rounds_completed` / `max_rounds` / `halt_reason` / `elapsed_ms` / `time_budget_ms` / `verifier_fail_candidates` / `suppressed_candidate_count` / `no_new_evidence_rounds` / `repeated_contradiction_events` / `insufficient_evidence_events` / `changed_candidate_count` / `evidence_added_count` / `disposition_changed_count` / `remaining_active_count` / `oscillation_detected`。これにより F5 の round 有無で timeout 内完了率、false positive 率、state 変化、oscillation 抑止の差分を fixture ごとに比較できる。host state metrics を採取していない過去の record だけは推測せず `null` とする。
 
 **M1 gate**: `acceptable_pass_rate ≥ 0.8`, `false_positive_rate ≤ 0.1`
-matching は actual の `id` ではなく `(location_match.path, category)` で行う。同一 key に複数候補がある場合は `expected_axes` との Hamming 距離が最小の actual を貪欲に選ぶ。`known_false_positive_trap` は fixture 全体にかかる罠として扱い、title keyword または path/category で該当 actual を検出する。title keyword による trap / acceptable-risk promotion 検出は、model 出力の category が揺れても検出できるよう category には依存しない。
+matching は actual の `id` ではなく fixture の location/semantic 条件で行う。`line_range` がある `known_bug` は path / category の一致と行位置の重複を必須にする。expected / actual title を ASCII keyword で比較できる場合は title keyword の一致も必須とし、いずれかの title に非 ASCII の英数字が含まれる場合は、言語差で recall を落とさないよう path / category / line の構造条件へフォールバックする。`line_range` がない旧 fixture だけは従来どおり `(location_match.path, category)` で照合する。同一条件に複数候補がある場合は `expected_axes` との Hamming 距離が最小の actual を貪欲に選ぶ。`known_false_positive_trap` は fixture 全体にかかる罠として扱い、title keyword または path/category で該当 actual を検出する。title keyword による trap / acceptable-risk promotion 検出は、model 出力の category が揺れても検出できるよう category には依存しない。
 matching されなかった actual のうち `severity ∈ {must_fix, should_fix}` は `score-report.v1.unmatched_actuals[]` に残し、過検知候補として後から確認できるようにする。
 
 **M1 gate**: 各 fixture の `scoring_gate` に従う。現状は `acceptable_pass_rate` と `false_positive_rate` を主ゲートにし、medium だけ `exact_pass_rate_min` も固定している。`score-report.v1` には oracle 由来の `scoring_gate` / `oracle_sha256` / `expected_finding_ids` を埋め込み、`gate_checks[]` の必須チェック名・閾値と照合する。M1→M2 集約時も fixture ID ごとの固定 oracle 閾値・oracle digest・expected-id/outcome sequence と一致しない report は fail として扱う。

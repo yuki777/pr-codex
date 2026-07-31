@@ -41,7 +41,8 @@ class Issue74DocsTest(unittest.TestCase):
     def test_step4c_mv_order_is_single_and_includes_review_rounds_before_sarif(self) -> None:
         section = self._step4c()
         self.assertEqual(section.count("temp file を final artifact に反映する際は"), 1)
-        mv_targets = re.findall(r"mv .*?/([^/\s]+)\.tmp .*?/([^/\s]+)$", section, re.MULTILINE)
+        publish_section = section[section.index("temp file を final artifact に反映する際は") :]
+        mv_targets = re.findall(r"mv .*?/([^/\s]+)\.tmp .*?/([^/\s]+)$", publish_section, re.MULTILINE)
         self.assertEqual(
             mv_targets[:5],
             [

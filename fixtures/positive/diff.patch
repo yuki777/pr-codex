@@ -1,0 +1,97 @@
+diff --git a/src/auth/refund_service.py b/src/auth/refund_service.py
+index 93092a4..ec43142 100644
+--- a/src/auth/refund_service.py
++++ b/src/auth/refund_service.py
+@@ -36,21 +36,26 @@
+     def __init__(self, repository: PaymentRepository) -> None:
+         self._repository = repository
+ 
+-    def refund_one(
++    def refund_many(
+         self,
+         actor: Actor,
+-        payment_id: str,
++        payment_ids: Sequence[str],
+         idempotency_key: str,
+-    ) -> str:
+-        payment = self._repository.get_many([payment_id])[0]
+-        if payment.tenant_id != actor.tenant_id:
++    ) -> list[str]:
++        payments = self._repository.get_many(payment_ids)
++        if payments and payments[0].tenant_id != actor.tenant_id:
+             raise PermissionError("payment belongs to another tenant")
+-        if payment.state != "captured":
+-            raise ValueError("only captured payments can be refunded")
+ 
+-        repository_key = f"{actor.tenant_id}:{idempotency_key}:{payment.id}"
+-        return self._repository.record_refund(
+-            payment,
+-            payment.amount,
+-            repository_key,
+-        )
++        results: list[str] = []
++        for payment in payments:
++            if payment.state != "captured":
++                continue
++            repository_key = f"{idempotency_key}:{payment.id}"
++            results.append(
++                self._repository.record_refund(
++                    payment,
++                    payment.amount,
++                    repository_key,
++                )
++            )
++        return results
+diff --git a/src/billing/pagination.py b/src/billing/pagination.py
+index 234dc4f..2067d5b 100644
+--- a/src/billing/pagination.py
++++ b/src/billing/pagination.py
+@@ -14,7 +14,6 @@
+ @dataclass(frozen=True)
+ class Cursor:
+     created_at: datetime
+-    payment_id: str
+ 
+ 
+ @dataclass(frozen=True)
+@@ -27,7 +26,7 @@
+     def page_before(
+         self,
+         tenant_id: str,
+-        cursor: Cursor | None,
++        created_before: datetime | None,
+         limit: int,
+     ) -> list[PaymentRow]:
+         """Return rows ordered by (created_at DESC, id DESC)."""
+@@ -35,12 +34,11 @@
+ 
+ 
+ def encode_cursor(cursor: Cursor) -> str:
+-    return f"{cursor.created_at.isoformat()}|{cursor.payment_id}"
++    return cursor.created_at.isoformat()
+ 
+ 
+ def decode_cursor(value: str) -> Cursor:
+-    created_at, payment_id = value.rsplit("|", 1)
+-    return Cursor(datetime.fromisoformat(created_at), payment_id)
++    return Cursor(datetime.fromisoformat(value))
+ 
+ 
+ def list_recent(
+@@ -50,10 +48,13 @@
+     limit: int,
+ ) -> Page:
+     cursor = decode_cursor(after) if after else None
+-    rows = query.page_before(tenant_id, cursor, limit + 1)
++    rows = query.page_before(
++        tenant_id,
++        cursor.created_at if cursor else None,
++        limit + 1,
++    )
+     page_rows = rows[:limit]
+     next_cursor = None
+     if len(rows) > limit:
+-        last = page_rows[-1]
+-        next_cursor = encode_cursor(Cursor(last.created_at, last.id))
++        next_cursor = encode_cursor(Cursor(page_rows[-1].created_at))
+     return Page(page_rows, next_cursor)

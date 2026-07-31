@@ -7,7 +7,7 @@
 
 - `## 総評`: 全体評価と承認可否を 1-2 文で明示する（人間向け要約として記述してよいが、Must Fix / Should Fix の件数や内容が canonical findings と矛盾してはならない）
 - `## 重大な問題 (Must Fix)`: `severity=must_fix` のみ
-- `## 改善提案 (Should Fix)`: `severity=should_fix` かつ `posting.post_policy=body_summary` のみ。4軸 gate 不通過で `local_only` に降格した finding は載せない
+- `## 改善提案 (Should Fix)`: `severity=should_fix` かつ `posting.post_policy=body_summary` のみ。3軸 gate 不通過で `local_only` に降格した finding は載せない
 - `## 軽微な指摘 (Nit)`: `severity=nit` を箇条書きで簡潔に。各項目に必ず `path/to/file.ext:L<行番号>` 表記を付ける
 - `## 良い点`: 評価できるコードや設計判断を簡潔に述べる。厳しいレビューでも、良い点は認める
 - `## 補足`: 投稿対象外の補足事項。`severity=note` や `posting.post_policy=local_only/suppress` の finding、コメント可能行がない範囲外の参考指摘、レビュー上の前提、確認できなかった事項を置く。なければ `なし`

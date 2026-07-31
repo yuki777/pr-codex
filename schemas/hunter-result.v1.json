@@ -64,11 +64,37 @@
     }
   },
   "$defs": {
+    "axis_value": {
+      "type": "string",
+      "enum": ["yes", "no", "unknown"]
+    },
+    "axes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["real", "triggerable", "impactful"],
+      "properties": {
+        "real": {"$ref": "#/$defs/axis_value"},
+        "triggerable": {"$ref": "#/$defs/axis_value"},
+        "impactful": {"$ref": "#/$defs/axis_value"}
+      }
+    },
+    "evidence_level": {
+      "type": "string",
+      "enum": ["suspicion", "corroborated", "trigger_path_identified", "impact_explained", "verified"]
+    },
+    "blast_radius": {
+      "type": "string",
+      "enum": ["isolated", "component", "systemic", "unknown"]
+    },
     "candidate": {
       "type": "object",
       "additionalProperties": false,
       "required": [
         "title",
+        "evidence_state",
+        "evidence_level_suggestion",
+        "axes_suggestion",
+        "blast_radius_suggestion",
         "severity_suggestion",
         "category_suggestion",
         "path",
@@ -92,6 +118,23 @@
             "nit",
             "note"
           ]
+        },
+        "evidence_state": {
+          "type": "string",
+          "enum": [
+            "supported",
+            "needs_evidence"
+          ],
+          "description": "supported when the hunter can cite concrete diff/code evidence; needs_evidence when the candidate is plausible but requires verifier investigation. Hunter prose is not publication-ready."
+        },
+        "evidence_level_suggestion": {
+          "$ref": "#/$defs/evidence_level"
+        },
+        "axes_suggestion": {
+          "$ref": "#/$defs/axes"
+        },
+        "blast_radius_suggestion": {
+          "$ref": "#/$defs/blast_radius"
         },
         "category_suggestion": {
           "type": "string",

@@ -27,7 +27,7 @@ from validate_expected_findings import validate_expected_findings  # noqa: E402
 from validate_findings import validate_artifact as validate_findings_artifact  # noqa: E402
 from validate_score_report import validate_score_report  # noqa: E402
 
-AXES = ("real", "triggerable", "impactful", "general")
+AXES = ("real", "triggerable", "impactful")
 SEVERITY_RANK = {"note": 0, "nit": 1, "should_fix": 2, "must_fix": 3}
 EVIDENCE_RANK = {
     "suspicion": 0,
@@ -98,6 +98,40 @@ def expected_key(expected: dict[str, Any]) -> tuple[str, str] | None:
     return location["path"], category
 
 
+def location_matches(expected: dict[str, Any], actual: dict[str, Any]) -> bool:
+    expected_location = expected.get("location_match")
+    actual_location = actual.get("location")
+    if not isinstance(expected_location, dict) or not isinstance(actual_location, dict):
+        return False
+    if expected_location.get("path") != actual_location.get("path"):
+        return False
+    line_range = expected_location.get("line_range")
+    start_line = actual_location.get("start_line")
+    end_line = actual_location.get("end_line", start_line)
+    if (
+        not isinstance(line_range, list)
+        or len(line_range) != 2
+        or not all(isinstance(line, int) and not isinstance(line, bool) for line in line_range)
+        or not isinstance(start_line, int)
+        or isinstance(start_line, bool)
+        or not isinstance(end_line, int)
+        or isinstance(end_line, bool)
+    ):
+        return False
+    return start_line <= line_range[1] and end_line >= line_range[0]
+
+
+def location_candidate_indexes(
+    expected: dict[str, Any], actuals: list[dict[str, Any]]
+) -> list[int]:
+    return [
+        index
+        for index, actual in enumerate(actuals)
+        if location_matches(expected, actual)
+        and known_bug_title_match(expected.get("title"), actual.get("title"))
+    ]
+
+
 def axes_hamming(expected: dict[str, Any], actual: dict[str, Any]) -> int:
     expected_axes = expected.get("expected_axes") if isinstance(expected.get("expected_axes"), dict) else {}
     actual_axes = actual.get("axes") if isinstance(actual.get("axes"), dict) else {}
@@ -110,7 +144,10 @@ def choose_best_actual(expected: dict[str, Any], actuals: list[dict[str, Any]], 
         return None
     available.sort(
         key=lambda index: (
+            0 if location_matches(expected, actuals[index]) else 1,
+            0 if expected_key(expected) == actual_key(actuals[index]) else 1,
             axes_hamming(expected, actuals[index]),
+            0 if blast_radius_matches(expected, actuals[index]) else 1,
             -SEVERITY_RANK.get(str(actuals[index].get("severity")), -1),
             str(actuals[index].get("fingerprint") or actuals[index].get("id") or ""),
             index,
@@ -140,6 +177,16 @@ def title_keyword_match(expected_title: Any, actual_title: Any) -> bool:
         return False
     overlap = expected_tokens & actual_tokens
     return len(overlap) >= min(2, len(expected_tokens))
+
+
+def known_bug_title_match(expected_title: Any, actual_title: Any) -> bool:
+    if title_keyword_match(expected_title, actual_title):
+        return True
+    return any(
+        isinstance(title, str)
+        and any(character.isalnum() and not character.isascii() for character in title)
+        for title in (expected_title, actual_title)
+    )
 
 
 def actual_matches_trap(expected: dict[str, Any], actual: dict[str, Any]) -> bool:
@@ -209,6 +256,33 @@ def axes_acceptable(expected: dict[str, Any], actual: dict[str, Any] | None) -> 
     return all(isinstance(actual_axes.get(axis), str) and actual_axes[axis] in allowed_axis_values(expected, axis) for axis in AXES)
 
 
+def blast_radius_diff(expected: dict[str, Any], actual: dict[str, Any] | None) -> dict[str, Any]:
+    expected_value = expected.get("expected_blast_radius")
+    actual_value = actual.get("blast_radius") if actual is not None else None
+    matches = (
+        isinstance(expected_value, str)
+        and isinstance(actual_value, str)
+        and actual_value == expected_value
+    )
+    return {
+        "expected": expected_value if isinstance(expected_value, str) else "unknown",
+        "actual": actual_value if isinstance(actual_value, str) else None,
+        "acceptable": matches,
+    }
+
+
+def blast_radius_matches(expected: dict[str, Any], actual: dict[str, Any] | None) -> bool:
+    if actual is None:
+        return False
+    expected_value = expected.get("expected_blast_radius")
+    actual_value = actual.get("blast_radius")
+    return (
+        isinstance(expected_value, str)
+        and isinstance(actual_value, str)
+        and actual_value == expected_value
+    )
+
+
 def evidence_ok(expected: dict[str, Any], actual: dict[str, Any] | None) -> bool:
     if actual is None:
         return False
@@ -249,8 +323,17 @@ def match_expected_to_actuals(expected_findings: list[dict[str, Any]], actuals: 
             continue
         key = expected_key(expected)
         candidate_indexes = groups.get(key, []) if key is not None else []
-        if key is None and expected.get("expected_outcome") == "acceptable_risk":
-            candidate_indexes = keyword_candidate_indexes(expected, actuals)
+        if expected.get("expected_outcome") == "known_bug":
+            expected_location = expected.get("location_match")
+            if isinstance(expected_location, dict) and "line_range" in expected_location:
+                location_indexes = set(location_candidate_indexes(expected, actuals))
+                candidate_indexes = [
+                    index for index in candidate_indexes if index in location_indexes
+                ]
+        elif expected.get("expected_outcome") == "acceptable_risk":
+            candidate_indexes = list(
+                dict.fromkeys(candidate_indexes + keyword_candidate_indexes(expected, actuals))
+            )
         best = choose_best_actual(expected, actuals, candidate_indexes, used)
         if best is not None:
             matches[expected_index] = best
@@ -291,6 +374,7 @@ def build_breakdown(expected_findings: list[dict[str, Any]], actuals: list[dict[
                     "matched_actual_fingerprint": actual.get("fingerprint") if actual is not None else None,
                     "match_status": "false_positive_promoted" if is_promoted else "matched",
                     "axes_diff": axes_diff(expected, actual),
+                    "blast_radius_diff": blast_radius_diff(expected, actual),
                     "severity_diff": severity_diff(expected, actual),
                     "evidence_level_ok": evidence_ok(expected, actual) if actual is not None else True,
                     "notes": "trap promoted above acceptable severity" if is_promoted else "trap not promoted",
@@ -304,9 +388,10 @@ def build_breakdown(expected_findings: list[dict[str, Any]], actuals: list[dict[
             if actual is not None:
                 counts["known_bug_matched"] += 1
         target = contributes_to_axes_target(expected, actual)
-        exact_ok = axes_exact(expected, actual)
+        exact_ok = axes_exact(expected, actual) and blast_radius_matches(expected, actual)
         acceptable_ok = (
             axes_acceptable(expected, actual)
+            and blast_radius_matches(expected, actual)
             and severity_is_acceptable(expected, actual.get("severity") if actual is not None else None)
             and evidence_ok(expected, actual)
         )
@@ -324,6 +409,7 @@ def build_breakdown(expected_findings: list[dict[str, Any]], actuals: list[dict[
                 "matched_actual_fingerprint": actual.get("fingerprint") if actual is not None else None,
                 "match_status": "matched" if actual is not None else "missed",
                 "axes_diff": axes_diff(expected, actual),
+                "blast_radius_diff": blast_radius_diff(expected, actual),
                 "severity_diff": severity_diff(expected, actual),
                 "evidence_level_ok": evidence_ok(expected, actual),
                 "notes": note,

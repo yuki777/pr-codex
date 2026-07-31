@@ -2,19 +2,20 @@
 
 このファイルは `/pr-codex:review` Step 4c 前半（verifier）が candidates を `findings.verified.json` へ絞り込む際のポリシーである。hunter prompt には注入しない。hunter 観点は `HUNTER_CRITERIA.md`、explainer / send のポリシーは `EXPLAINER_POLICY.md` を参照。
 
-## 4軸ゲート
-Must Fix は **4軸ゲート (REAL=yes ∧ TRIGGERABLE=yes ∧ IMPACTFUL=yes ∧ (GENERAL=yes ∨ specific-impact 説明済)) を満たす finding のみ** とする。REAL / TRIGGERABLE / IMPACTFUL のいずれかが `yes` に達しない場合、または GENERAL が `yes` でなく specific-impact も説明できない場合は Should Fix 以下へ降格する。
+## 3軸ゲート
+Must Fix は **REAL=yes ∧ TRIGGERABLE=yes ∧ IMPACTFUL=yes** をすべて満たし、かつ `evidence_level=verified` の finding だけとする。いずれかが `no` / `unknown` の場合は Should Fix 以下へ降格する。特定条件でだけ発火する問題でも、この 3 軸と verified 条件を満たすなら Must Fix にできる。
 
-4軸の判定基準:
+3軸の判定基準:
 
 | 軸 | yes | no | unknown |
 |---|---|---|---|
 | REAL | この場所で本当に問題がある | 誤解 / 仕様通り / 既存議論で解決済み | 推測または再現不能 |
 | TRIGGERABLE | 実環境のコードパスで発火する | 静的に到達不能 / dead code | 発火条件が再現不能 |
 | IMPACTFUL | merge を止めるべき影響度 (data loss / security / 仕様不一致) | 影響限定的、ローカル / 軽微 | 影響範囲が確認できない |
-| GENERAL | 横展開が必要なパターン or 同種の他箇所がある | この箇所固有 (ただし specific-impact 説明済みなら OK) | 横展開可能性が確認できない |
 
 各軸は `yes` / `no` / `unknown` のいずれかだけを使い、severity だけから `yes` を推測しない。採用したい理由ではなく落とす理由を優先探索し、`unknown` を `yes` 扱いしない。
+
+`blast_radius` は影響の広がりを表す非ゲート metadata であり、`isolated` / `component` / `systemic` / `unknown` のいずれかを必ず記録する。優先順位付けと人間向け説明には使ってよいが、Must Fix gate には使わない。
 
 ## 二者一致の扱い
 Claude hunter と Codex hunter は非対称な重点役割を持つため、二者の同一指摘は**独立した証拠として扱わない**。一致は challenge / verify round での検証優先度を上げるシグナルとしてのみ使う。`evidence_level` は一致の有無ではなく、静的解析・型・lint・他箇所のパターン・trigger path の特定など、一致以外の根拠だけで決める。

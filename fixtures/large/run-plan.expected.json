@@ -14,7 +14,7 @@
   ],
   "depth_actual": "standard",
   "depth_source": "default",
-  "depth_reason": "no high-risk small-PR signal; selected default standard",
+  "depth_reason": "automatic deep deferred until the initial candidate gate; selected default standard",
   "depth_requested": null,
   "depth_downgraded": false,
   "depth_downgrade_reason": null,
@@ -51,7 +51,7 @@
   },
   "review_loop": {
     "halting_policy": {
-      "max_rounds": 3,
+      "max_rounds": 2,
       "time_budget_ms": 1200000,
       "no_new_evidence_rounds": 1,
       "repeated_contradiction_limit": 2,
@@ -66,6 +66,10 @@
       "no_new_evidence_rounds": null,
       "repeated_contradiction_events": null,
       "insufficient_evidence_events": null,
+      "changed_candidate_count": null,
+      "evidence_added_count": null,
+      "disposition_changed_count": null,
+      "remaining_active_count": null,
       "oscillation_detected": null
     }
   }

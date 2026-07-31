@@ -1,0 +1,130 @@
+{
+  "schema_version": "findings.v1",
+  "producer": {
+    "name": "pr-codex-eval",
+    "version": "1.8.0",
+    "run_id": "fable-baseline-default"
+  },
+  "pr": {
+    "repository": "pr-codex/synthetic-fixtures",
+    "number": 1,
+    "base_sha": "447a8d428c2a0a503cc21cb288c6ef46f42edde1f1d4cf61afe918eb1d2bfd96",
+    "head_sha": "456d082d6c19cd5118e79e0431687ef6383b7bdd590cfe8724d9aa4492703e06"
+  },
+  "generated_at": "2026-07-23T00:00:00Z",
+  "findings": [
+    {
+      "source_agents": [
+        "fable-baseline-default"
+      ],
+      "merged_from": [
+        "eval:fable-baseline-default"
+      ],
+      "location": {
+        "path": "src/auth/refund_service.py",
+        "start_line": 46,
+        "side": "RIGHT"
+      },
+      "severity": "should_fix",
+      "category": "security",
+      "title": "Validate every payment's tenant before processing the batch",
+      "problem": "The authorization check examines only `payments[0]`, but the loop refunds every returned payment. A later payment belonging to another tenant therefore bypasses tenant authorization.",
+      "reason": "`Payment.id` is documented as tenant-scoped, and `get_many` accepts only IDs without a tenant constraint. When a batch resolves to an authorized first payment followed by a captured payment from another tenant, the second payment reaches `record_refund`, allowing a cross-tenant refund. The check must cover the same set that is processed.",
+      "suggestion": "Validate `payment.tenant_id == actor.tenant_id` for every returned payment before recording any refund, preferably in a complete pre-validation pass so a bad item cannot leave a partially processed batch. Also constrain repository lookup by tenant where possible.",
+      "evidence_level": "impact_explained",
+      "axes": {
+        "real": "yes",
+        "triggerable": "yes",
+        "impactful": "yes"
+      },
+      "blast_radius": "component",
+      "posting": {
+        "post_policy": "body_summary",
+        "explanation_postable": true,
+        "audience": "eval_harness"
+      },
+      "security": {
+        "severity": "medium",
+        "confidence": "high",
+        "exploitability": "triggerable_from_changed_code",
+        "disclosure_policy": "inline_safe",
+        "public_safe_summary": "Validate every payment's tenant before processing the batch"
+      },
+      "id": "be05767239b4f3096be17767f3ee5a8044a6350c9d405a54b6cdd1b4d6b12d1b",
+      "fingerprint": "be05767239b4f3096be17767f3ee5a8044a6350c9d405a54b6cdd1b4d6b12d1b"
+    },
+    {
+      "source_agents": [
+        "fable-baseline-default"
+      ],
+      "merged_from": [
+        "eval:fable-baseline-default"
+      ],
+      "location": {
+        "path": "src/auth/refund_service.py",
+        "start_line": 53,
+        "side": "RIGHT"
+      },
+      "severity": "should_fix",
+      "category": "security",
+      "title": "Keep the tenant in the repository idempotency key",
+      "problem": "The new repository key omits `actor.tenant_id` even though repository idempotency keys use a global namespace and payment IDs are unique only within a tenant.",
+      "reason": "Two tenants can submit the same caller idempotency key for payments with the same tenant-local ID, producing identical repository keys. The later refund can then collide with or be deduplicated against another tenant's operation, violating refund correctness and tenant isolation.",
+      "suggestion": "Restore a tenant-qualified key such as `f\"{actor.tenant_id}:{idempotency_key}:{payment.id}\"`, and add a test covering identical payment IDs and idempotency keys in different tenants.",
+      "evidence_level": "impact_explained",
+      "axes": {
+        "real": "yes",
+        "triggerable": "yes",
+        "impactful": "yes"
+      },
+      "blast_radius": "component",
+      "posting": {
+        "post_policy": "body_summary",
+        "explanation_postable": true,
+        "audience": "eval_harness"
+      },
+      "security": {
+        "severity": "medium",
+        "confidence": "high",
+        "exploitability": "triggerable_from_changed_code",
+        "disclosure_policy": "inline_safe",
+        "public_safe_summary": "Keep the tenant in the repository idempotency key"
+      },
+      "id": "3fdea6355cf7ff1572daea3de37ca37f893dd3ba4ddd22cf1f611201549cf0e0",
+      "fingerprint": "3fdea6355cf7ff1572daea3de37ca37f893dd3ba4ddd22cf1f611201549cf0e0"
+    },
+    {
+      "source_agents": [
+        "fable-baseline-default"
+      ],
+      "merged_from": [
+        "eval:fable-baseline-default"
+      ],
+      "location": {
+        "path": "src/billing/pagination.py",
+        "start_line": 36,
+        "side": "RIGHT"
+      },
+      "severity": "should_fix",
+      "category": "bug",
+      "title": "Preserve the ID tie-breaker in pagination cursors",
+      "problem": "The cursor now encodes only `created_at`, discarding the payment ID even though query ordering is `(created_at DESC, id DESC)`.",
+      "reason": "When more than one row shares the boundary timestamp, the next request can only filter by time and cannot resume after the exact `(created_at, id)` tuple. Depending on the query's timestamp predicate, rows at that timestamp are skipped or repeated, so clients cannot reliably enumerate all payments.",
+      "suggestion": "Retain both `created_at` and `payment_id` in `Cursor`, pass the full cursor to `page_before`, and apply tuple/keyset pagination using both ordering columns. Add a multi-page test where several rows share the same timestamp.",
+      "evidence_level": "impact_explained",
+      "axes": {
+        "real": "yes",
+        "triggerable": "yes",
+        "impactful": "yes"
+      },
+      "blast_radius": "component",
+      "posting": {
+        "post_policy": "body_summary",
+        "explanation_postable": true,
+        "audience": "eval_harness"
+      },
+      "id": "3c46f64ec13a3dd9ffdca62a07d09bfdb1996ba3aa54e6b0abe0710ddc4ea2e7",
+      "fingerprint": "3c46f64ec13a3dd9ffdca62a07d09bfdb1996ba3aa54e6b0abe0710ddc4ea2e7"
+    }
+  ]
+}

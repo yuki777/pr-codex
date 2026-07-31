@@ -27,7 +27,7 @@ jobs:
       - name: Validate fixture eval smoke gate
         run: |
           mkdir -p /tmp/pr-codex-eval
-          for fixture in small medium large; do
+          for fixture in small medium large positive; do
             python3 tasks/validate_expected_findings.py \
               --schema schemas/expected-findings.v1.json \
               --data "fixtures/${fixture}/expected-findings.json"

@@ -6,7 +6,15 @@
       "score_metrics": {
         "exact_pass_rate": 0.0,
         "acceptable_pass_rate": 0.8,
-        "false_positive_rate": 0.1
+        "false_positive_rate": 0.1,
+        "recall_known_bug": 1.0
+      },
+      "execution": {
+        "model": "gpt-5.6-sol",
+        "reasoning_effort": "high",
+        "completion_rate": 1.0,
+        "avg_duration_ms": 0,
+        "avg_tokens": null
       },
       "round_metrics": {
         "enabled": false,
@@ -20,6 +28,10 @@
         "no_new_evidence_rounds": 0,
         "repeated_contradiction_events": 0,
         "insufficient_evidence_events": 0,
+        "changed_candidate_count": 0,
+        "evidence_added_count": 0,
+        "disposition_changed_count": 0,
+        "remaining_active_count": 0,
         "oscillation_detected": false
       }
     },
@@ -27,12 +39,20 @@
       "score_metrics": {
         "exact_pass_rate": 0.0,
         "acceptable_pass_rate": 0.8,
-        "false_positive_rate": 0.1
+        "false_positive_rate": 0.1,
+        "recall_known_bug": 1.0
+      },
+      "execution": {
+        "model": "gpt-5.6-sol",
+        "reasoning_effort": "high",
+        "completion_rate": 1.0,
+        "avg_duration_ms": 0,
+        "avg_tokens": null
       },
       "round_metrics": {
         "enabled": true,
         "rounds_completed": 2,
-        "max_rounds": 3,
+        "max_rounds": 2,
         "halt_reason": "no_new_evidence",
         "elapsed_ms": 0,
         "time_budget_ms": 1200000,
@@ -41,6 +61,10 @@
         "no_new_evidence_rounds": 1,
         "repeated_contradiction_events": 0,
         "insufficient_evidence_events": 0,
+        "changed_candidate_count": 1,
+        "evidence_added_count": 1,
+        "disposition_changed_count": 1,
+        "remaining_active_count": 0,
         "oscillation_detected": false
       }
     },

@@ -94,7 +94,7 @@ candidate に付ける行番号は、以下の規約で必ず head 基準に統�
 - head 側の行が直接特定できない場合は、`pr.diff` の hunk header `@@ -OLD,N +NEW,M @@` を使い、`+NEW` 側オフセットから head 行を逆算する
 
 ## severity_suggestion の基準
-4軸ゲート（REAL / TRIGGERABLE / IMPACTFUL / GENERAL）と evidence ladder による最終確定は verifier の責務だが、hunter も candidate 選定時に同じ観点で落とす理由を優先探索する。
+3軸ゲート（REAL / TRIGGERABLE / IMPACTFUL）と evidence ladder による最終確定は verifier の責務である。hunter は同じ観点で落とす理由を優先探索し、影響の広がりは非ゲート metadata の `blast_radius_suggestion` として分離する。
 
 - must_fix: この場所で本当に問題があり（REAL）、実環境のコードパスで発火し（TRIGGERABLE）、マージを止めるべき影響（IMPACTFUL）を具体的に説明できるものだけ。いずれかを説明できない指摘を must_fix にしない
 - should_fix: 修正が強く推奨される問題。静的解析・型・lint・他箇所のパターンなどの裏付けを `reason` に書けるもの
@@ -109,7 +109,11 @@ hunter の最終出力は、呼び出し元プロンプトが指定する `hunte
 - 理由: `reason`（なぜ問題か。発火条件・影響・裏付けをここに書く）
 - 提案: `suggestion`（どう修正すべきか）
 - `coverage`: `high_risk_paths_checked` に重点確認したファイル、`checks_run` に実施した確認内容、`limitations` に確認できなかった事項を短い平文で記録する
+- `evidence_state`: diff / code の具体的根拠を示せる場合は `supported`、候補として妥当でも verifier の追加調査が必要なら `needs_evidence`。後者では未確認事項を `reason` に明示し、確定事実のように断定しない
+- `evidence_level_suggestion`: `suspicion` / `corroborated` / `trigger_path_identified` / `impact_explained` / `verified`
+- `axes_suggestion`: `real` / `triggerable` / `impactful` をそれぞれ `yes` / `no` / `unknown` で記録する
+- `blast_radius_suggestion`: `isolated` / `component` / `systemic` / `unknown`。Must Fix 判定には使わない
 - 総評・良い点・補足セクションは hunter の JSON 出力には含めない。verifier / explainer が `review.md` 生成時に作成する
 
 ## 重要
-遠慮は不要。「動くから良い」は理由にならない。プロダクションコードとして長期的に保守可能かどうかを基準に判断すること。曖昧な表現（「〜かもしれません」「〜した方がいいかも」）は避け、断定的に指摘すること。採用したい理由ではなく落とす理由を優先探索し、実発火・影響・横展開または specific-impact を確認できない指摘を must_fix にしないこと。
+遠慮は不要。「動くから良い」は理由にならない。プロダクションコードとして長期的に保守可能かどうかを基準に判断すること。断定的な投稿文にできるのは verifier が採用した verified finding だけである。hunter の `needs_evidence` candidate は、仮説と未確認事項を区別し、追加検証が必要な理由を明記する。採用したい理由ではなく落とす理由を優先探索し、実発火または影響を確認できない指摘を must_fix にしないこと。
