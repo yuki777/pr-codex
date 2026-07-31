@@ -5,7 +5,6 @@
   },
   "metadata": {
     "description": "GitHub PRを Claude Code と Codex CLI の2者レビュー方式で自動レビューするプラグイン",
-    "version": "2.13.0",
     "repository": "https://github.com/yuki777/pr-codex",
     "license": "MIT",
     "keywords": [
