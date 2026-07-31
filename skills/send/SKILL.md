@@ -245,7 +245,7 @@ Step 3 と Step 4.5 の verifier pipeline で `{SCHEMA_PATH}` / `{VALIDATOR_PATH
 
 ### Step 3: `findings.verified.json` の解析 (primary)
 
-`findings.verified.json` を **必須の一次情報源**として payload を組み立てる。`review.md` は `## 総評` / `## 良い点` の本文取得と、Must Fix 件数 gate の確認にだけ使う。payload の抽出・整形・振り分けは Step 4 の `build_review_payload.py` が決定論的に行い、Claude がメモリ上で payload を組み立てることはしない。まず Step 2.5 で保持した `validator_path` / `schema_path` を使い、`findings.verified.json` がその schema に適合するかを review 側と同じ同梱 validator で外部検証してから進む。
+`findings.verified.json` を **必須の一次情報源**として payload を組み立てる。`review.md` は `## 良い点` の本文取得と、`## 総評` の非空 gate、Must Fix 件数 gate の確認にだけ使う。投稿 body 先頭の総評（`$posted_summary`）は builder が投稿対象の finding だけから決定論的に生成し、`review.md` の自由文総評は GitHub へ投稿しない（投稿対象外の Should Fix / Nit への言及や非公開情報の混入を防ぐ。#120）。payload の抽出・整形・振り分けは Step 4 の `build_review_payload.py` が決定論的に行い、Claude がメモリ上で payload を組み立てることはしない。まず Step 2.5 で保持した `validator_path` / `schema_path` を使い、`findings.verified.json` がその schema に適合するかを review 側と同じ同梱 validator で外部検証してから進む。
 
 #### 同梱 validator コマンド
 
@@ -265,7 +265,7 @@ python3 $validator_path --schema $schema_path --data ~/claude-loop-pr-codex/$dir
 
 以下の抽出・検証は `build_review_payload.py` の責務であり、builder が fail-closed で実施する:
 
-- `review.md` から: `## 総評` 直下の本文 → `$summary`（後続セクション見出しの直前まで。前後の空行はトリム。空なら中断）、`## 良い点` 直下の本文 → `$good_points`、`## 重大な問題 (Must Fix)` 配下の `### ...` 見出し数 → `$must_fix_markdown_count`
+- `review.md` から: `## 総評` 直下の本文（後続セクション見出しの直前まで。前後の空行はトリム）は非空 gate にのみ使う（空なら中断。投稿 body へは転記しない）、`## 良い点` 直下の本文 → `$good_points`、`## 重大な問題 (Must Fix)` 配下の `### ...` 見出し数 → `$must_fix_markdown_count`
 - `findings.verified.json` から:
   - top-level `schema_version` が **`findings.v1`** であり、`findings[]` が array であること
   - top-level `pr.repository` / `pr.number` / `pr.head_sha` / `pr.base_sha` が `metadata.json.repository_full_name` / `metadata.json.pr_number` / `metadata.json.head_sha` / `metadata.json.base_sha` と一致し、`metadata.json.repository_full_name` が `$org/$repository` と一致すること
@@ -352,7 +352,7 @@ Must Fix:
 - `$should_fix_candidates` が空配列なら `$inline_should_fix=[]` とする
 - `$nit_findings` が空配列なら `nits.md` は作成しない
 - `$good_points` が空文字列なら body から `## 良い点` セクションを省略する
-- `$summary` が空になることは想定しない（`/pr-codex:review` のテンプレートで必ず出力されるため）。万一空ならユーザーに通知して処理を中断する
+- `review.md` の `## 総評` が空になることは想定しない（`/pr-codex:review` のテンプレートで必ず出力されるため）。万一空ならユーザーに通知して処理を中断する。`$posted_summary` は builder が生成するため空にならない
 
 行範囲検証で範囲外コメントをレビュー body 末尾へ退避するため、builder は各 finding について `heading_markdown` と `body`（GitHub API 用に整形する前の元情報）も内部で保持する。
 
@@ -445,13 +445,16 @@ builder は以下のルールを実装している:
 
 - `commit_id`: `$head_sha`（レビュー時点の head に明示的に紐付ける）
 - `event`:
-  - 範囲検証後の `$must_fix` が 1 件以上、または `$out_of_range_comments` に `Must Fix` が 1 件以上あれば `"REQUEST_CHANGES"`
+  - canonical（`findings.verified.json`）の Must Fix が 1 件以上あれば `"REQUEST_CHANGES"`（`counts.must_fix_total`。範囲検証後の `$must_fix` と `$out_of_range_comments` の `Must Fix` に加え、cluster 非代表 member / `withheld` を含む）
   - Must Fix が 0 件、かつ `ci-status.json.state` が `failure` / `pending` ではない場合は `"APPROVE"`。`ci-status.json` が存在しない、または `success` / `skipped` の場合もこの分岐に含める
   - Must Fix が 0 件、かつ `ci-status.json.state` が `failure` / `pending` の場合は `"COMMENT"` に抑止する
 - `body`:
+  - `$posted_summary`（投稿用総評）: builder が投稿対象の finding と event だけから決定論的に生成する。`review.md` の `## 総評` は転記しない。件数は表示せず、投稿しない severity と `withheld` には一切言及しない（#120）。生成ルール:
+    - event 行: `REQUEST_CHANGES` は「Must Fix を検出しました。マージ前に修正が必要です。」とし、件数は表示しない（cluster 代表への集約により canonical 件数と投稿コメント数が一致しないため）。本文退避がある場合は「（一部は）行コメント不可のため本文末尾に記載しています。」を続ける。公開可能な Must Fix が 0 件の場合（withheld のみ等）は event の言い換えだけの汎用文「このレビューは変更をリクエストします。」とし、withheld の存在・件数・カテゴリを新たに公開しない。`APPROVE` は「Must Fix はありません。承認します。」、CI 抑止の `COMMENT` は「Must Fix はありませんが、CI が {state} のため承認を保留します。」
+    - severity 行: `--include-should-fix` / `--include-nit` で実際に投稿した Should Fix / Nit がある場合のみ、severity ごとに投稿先（inline / 行コメント不可による本文末尾）を 1 行で付加する。件数は表示せず、投稿 0 件の severity には言及しない
   - `$good_points` が非空の場合:
     ```
-    <$summary>
+    <$posted_summary>
 
     ## 良い点
 
@@ -459,7 +462,7 @@ builder は以下のルールを実装している:
     ```
   - `$good_points` が空の場合:
     ```
-    <$summary>
+    <$posted_summary>
     ```
   - `event == "APPROVE"` の場合は、承認根拠として body 末尾に以下を追加する。`$reviewed_files` は `metadata.json.files[]` から、`$reviewed_scope` は `review.md` / `run-plan.json` / `ci-summary.md` から確認済みの観点だけを抽出し、推測した観点を混ぜない:
     ```
@@ -488,9 +491,9 @@ builder は以下のルールを実装している:
   - `body` (Step 3 の body フォーマット)
   - `start_line` / `start_side` は範囲指定の場合のみ含める
 
-範囲検証後の `$must_fix` / `$inline_should_fix` / `$inline_nit` が空だった場合、Must Fix 0 件の結論として `event: "APPROVE"` + body (総評 + 良い点 + 確認した範囲) で投稿する。ただし `$out_of_range_comments` に `Must Fix` が含まれる場合の `event` は上記ルールどおり `"REQUEST_CHANGES"` とし、`ci-status.json.state` が `failure` / `pending` の場合は `event: "COMMENT"` に抑止して CI 状態を body と Step 5 に表示する。
+範囲検証後の `$must_fix` / `$inline_should_fix` / `$inline_nit` が空でも、`event` は canonical（`findings.verified.json`）の Must Fix 件数（cluster 非代表 member / `withheld` を含む）で決める。canonical の Must Fix が 0 件なら、Must Fix 0 件の結論として `event: "APPROVE"` + body (総評 + 良い点 + 確認した範囲) で投稿する。ただし canonical に Must Fix が 1 件以上ある場合（`$out_of_range_comments` の `Must Fix` や `withheld` のみの場合を含む）の `event` は上記ルールどおり `"REQUEST_CHANGES"` とし、Must Fix 0 件で `ci-status.json.state` が `failure` / `pending` の場合は `event: "COMMENT"` に抑止して CI 状態を body と Step 5 に表示する。
 
-body のセクション順は必ず `総評` → `## 良い点`（存在する場合）→ `## 確認した範囲`（`APPROVE` の場合）→ `## CI 状態`（CI 抑止 `COMMENT` の場合）→ `## 行コメント不可 (diff 範囲外)`（存在する場合）とする。diff 範囲内の Should Fix / Nit は body section ではなく `comments[]` の inline comment とする。diff 範囲外の Must Fix / Should Fix / Nit は body の `## 行コメント不可 (diff 範囲外)` へ退避する。
+body のセクション順は必ず `総評`（`$posted_summary`） → `## 良い点`（存在する場合）→ `## 確認した範囲`（`APPROVE` の場合）→ `## CI 状態`（CI 抑止 `COMMENT` の場合）→ `## 行コメント不可 (diff 範囲外)`（存在する場合）とする。diff 範囲内の Should Fix / Nit は body section ではなく `comments[]` の inline comment とする。diff 範囲外の Must Fix / Should Fix / Nit は body の `## 行コメント不可 (diff 範囲外)` へ退避する。
 
 payload は builder が `--output` で `~/claude-loop-pr-codex/$dir_name/review-payload.json` に整形 JSON（インデント 2）として書き出す。同時に `--manifest` で `payload-manifest.json`（`payload-manifest.v1`）を書き出し、`comment_index → finding_id` の対応表（`comment_map`）、body 退避一覧（`out_of_range`）、非公開一覧（`withheld`。local_only / suppress の Must Fix で、body にも載せない）、semantic 対象の全 Must Fix finding id（`semantic_targets`。cluster 非代表 member を含む）、active severity flags（`flags`）、件数（`counts`）、event、および role 付きの sha256 digest（`files`。required: findings / review / metadata / ranges / payload、optional: sarif / diff / ci_status / run_plan / ci_summary）を記録する。以降の工程は location 文字列による曖昧照合ではなく `comment_map` を使って finding と comment を対応付ける。`--verify` は manifest 構造・required role の存在・全 role の digest 照合に加えて、digest 検証済みの入力と `flags` から payload / manifest をドライラン再生成して現物と完全一致比較し（`generated_at` を除く）、payload と manifest の協調改竄も検出する。
 
@@ -509,7 +512,7 @@ builder は `--include-should-fix` / `--include-nit` の active severity flags �
 | 1. `schema_validation` | Python (`validate_findings.py` / `validate_findings_sarif.py`) | `findings.verified.json` の schema / fingerprint 再計算 / `metadata.json` との PR context 一致（Step 3 で実行済み）、`findings.sarif` の schema validation、canonical ↔ `review.md` ↔ `review-payload.json` ↔ SARIF の Must Fix count 整合 |
 | 2. `range_validation` | Python (`build_review_payload.py`) | `payload.comments[]` の `path` / `line` が `metadata.json.files[]` と `pr.diff.ranges.txt` の hunk 範囲内にあること。builder が構築時に enforcement し、`--verify` の manifest digest 再確認で構築後の改竄・手編集を検出する |
 | 3. `semantic_preflight` | Codex (GPT-5.6) | payload 投稿対象の各 Must Fix finding の実在性判定（confirmed / refuted / insufficient_evidence の 3 値） |
-| 4. `payload_consistency` | Python (`build_review_payload.py`) | event 判定（'Must Fix が1件以上（body 末尾へ退避した範囲外 Must Fix も含む）→ REQUEST_CHANGES / Must Fix 0件かつ ci-status.json.state が failure または pending → COMMENT / Must Fix 0件かつ ci-status.json.state が success・skipped・未取得 → APPROVE'）、body セクション順（payload.event が APPROVE の場合は payload.body に '## 確認した範囲' を含む）、counts。builder が生成時に決定論的に保証し、`--verify` で再確認する |
+| 4. `payload_consistency` | Python (`build_review_payload.py`) | event 判定（'canonical Must Fix が1件以上（cluster 非代表 member / withheld / body 末尾へ退避した範囲外 Must Fix を含む）→ REQUEST_CHANGES / Must Fix 0件かつ ci-status.json.state が failure または pending → COMMENT / Must Fix 0件かつ ci-status.json.state が success・skipped・未取得 → APPROVE'）、body セクション順（payload.event が APPROVE の場合は payload.body に '## 確認した範囲' を含む）、counts。builder が生成時に決定論的に保証し、`--verify` で再確認する |
 
 semantic preflight は canonical の `severity == "must_fix"` 全 finding（cluster 非代表 member と `withheld` を含む。`payload-manifest.json` の `semantic_targets`）に適用する。cluster member の要約も代表 comment の body に掲載されるため、代表だけに縮めない。Codex は各 Must Fix finding について「この指摘が誤りである可能性」を 1 つだけ探索し、3 値で判定する。「反証あり」と「調査不足」を区別する:
 
@@ -676,7 +679,7 @@ findings source: ~/claude-loop-pr-codex/<$dir_name>/findings.verified.json
 review file: ~/claude-loop-pr-codex/<$dir_name>/review.md
 SARIF artifact: ~/claude-loop-pr-codex/<$dir_name>/findings.sarif (local-only, Code Scanning upload なし)
 body プレビュー:
-  <$summary の先頭 200 文字。長ければ "..." で省略>
+  <$posted_summary の先頭 200 文字。長ければ "..." で省略>
 インラインコメント: Must Fix N 件
 Should Fix inline comments: included <yes|no> (<included_count>/<candidate_count> 件、--include-should-fix で投稿可能候補を含める)
 Nit inline comments: included <yes|no> (<included_count>/<candidate_count> 件、--include-nit で投稿可能候補を含める)
