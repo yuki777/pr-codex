@@ -495,19 +495,15 @@ fingerprint は LLM では計算できないため、`/pr-codex:review` Step 4c 
 
 ## バージョンアップ（作者向け）
 
-利用者が `/plugin update pr-codex` で最新化できるようにするには、以下の手順でリリースする。
+リリースは [tagpr](https://github.com/Songmu/tagpr) で自動化されている。バージョンの正（唯一の管理場所）は `.claude-plugin/plugin.json` の `version` のみで、`marketplace.json` には `version` を持たせない。
 
-1. `.claude-plugin/plugin.json` と `.claude-plugin/marketplace.json` の `version` を同じ値に bump する（semver: パッチ `1.0.0` → `1.0.1`、マイナー `1.0.0` → `1.1.0`、メジャー `1.0.0` → `2.0.0`）
-2. 変更を commit する
-   ```bash
-   git commit -am "Bump version to 1.0.1"
-   ```
-3. リモートへ push する
-   ```bash
-   git push
-   ```
+1. 通常のPRを main にマージすると、tagpr がリリースPR（`.claude-plugin/plugin.json` を次版に書き換え済み）を自動作成・更新する
+2. リリースしたいタイミングでそのリリースPRをマージする
+3. タグ（例: `v2.13.1`）と GitHub Release が自動作成される
 
-利用者側は `/plugin update pr-codex` で最新版に更新できる。`version` が上がっていないとキャッシュで古い内容が使われる場合があるため、コード変更と同じコミットで必ず `version` を bump すること。
+バンプ幅はデフォルトで patch。minor / major にしたい場合は、取り込むPRに `minor` / `major` ラベルを付けるか、リリースPRに `tagpr:minor` / `tagpr:major` ラベルを付ける。
+
+利用者への更新配信は main 上の `plugin.json` の `version` 文字列の変化で判定されるため、リリースPRをマージするまで利用者には新しい内容が届かない。コード変更をマージしたら、リリースPRのマージを忘れないこと。利用者側は `/plugin update pr-codex` で最新版に更新できる。
 
 ## ライセンス
 
