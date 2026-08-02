@@ -484,6 +484,15 @@ builder は以下のルールを実装している:
     - 理由: <理由文>
     - 提案: <提案文>
     ```
+  - body 末尾に必ず自動レビューのフッターを追加する（#124）。builder が `findings.verified.json` の `producer.version` と `metadata.json.review_engines[]`（`{name, model, effort}` の配列。review 側 Step 3 が記録）から決定論的に生成する:
+    ```
+    ---
+    これは [pr-codex](https://github.com/yuki777/pr-codex):v<producer.version> による自動レビューです。
+    レビューは <name> <model> (<effort>) と <name> <model> (<effort>) により行われました。
+    投稿前検証 (semantic preflight) は Codex gpt-5.6-sol (high) により行われました。
+    ```
+    builder は `producer.version` と `review_engines[]` を必須入力として検証する。`review_engines[]` は実行順の `Claude Code`、`Codex` の2件ちょうどで、各要素の `name` / `model` / `effort` がすべて非空文字列でなければならない。欠落・不正なら deterministic failure として非ゼロ終了する（フッターを省略した投稿は行わない fail-closed。#124）。`review_engines` 記録前の旧バージョン review artifact を send する場合は、`/pr-codex:review` を再実行して metadata を再生成する。
+    3 行目（投稿前検証）は `counts.must_fix_total` が 1 件以上の場合のみ builder が追加する。Step 4.5 の semantic preflight は Must Fix があるときだけ実行され、失敗時は投稿自体が中止されるため、投稿された body の表示は常に実行事実と一致する。Must Fix 0 件の skip 時は表示しない。文言に Must Fix を含めず、行の有無は event（`REQUEST_CHANGES` ⇔ Must Fix 1 件以上）と等価な情報のみで、`withheld` の存在・件数・カテゴリを新たに公開しない（#120 と整合）。verifier は send 実行時の構成のため `metadata.json` には記録せず、builder 同梱の固定値 `SEMANTIC_VERIFIER_ENGINE` を使う。Step 4.5 の Codex テンプレートのモデル・effort を変更する場合は builder の固定値も併せて更新する（`tasks/test_issue124_docs.py` が一致を検証する）。表示する effort は CLI 語彙の最大 tier を `max` に正規化する（現行 hunter の実行値・記録値は `max`。旧 artifact の `xhigh` も builder の `EFFORT_DISPLAY_LABELS` で `max` と表示し、最大 tier 以外（semantic preflight の `high` 等）は実値のまま表示する）
 - `comments`: `$must_fix` + `$inline_should_fix` + `$inline_nit`（それぞれ `findings.verified.json` の順序を保つ）。Should Fix / Nit も `path` / `line` / `side` / `body` を持つ inline comment として投稿する。各要素は以下のキーを含む:
   - `path` (必須)
   - `line` (必須)
@@ -493,7 +502,7 @@ builder は以下のルールを実装している:
 
 範囲検証後の `$must_fix` / `$inline_should_fix` / `$inline_nit` が空でも、`event` は canonical（`findings.verified.json`）の Must Fix 件数（cluster 非代表 member / `withheld` を含む）で決める。canonical の Must Fix が 0 件なら、Must Fix 0 件の結論として `event: "APPROVE"` + body (総評 + 良い点 + 確認した範囲) で投稿する。ただし canonical に Must Fix が 1 件以上ある場合（`$out_of_range_comments` の `Must Fix` や `withheld` のみの場合を含む）の `event` は上記ルールどおり `"REQUEST_CHANGES"` とし、Must Fix 0 件で `ci-status.json.state` が `failure` / `pending` の場合は `event: "COMMENT"` に抑止して CI 状態を body と Step 5 に表示する。
 
-body のセクション順は必ず `総評`（`$posted_summary`） → `## 良い点`（存在する場合）→ `## 確認した範囲`（`APPROVE` の場合）→ `## CI 状態`（CI 抑止 `COMMENT` の場合）→ `## 行コメント不可 (diff 範囲外)`（存在する場合）とする。diff 範囲内の Should Fix / Nit は body section ではなく `comments[]` の inline comment とする。diff 範囲外の Must Fix / Should Fix / Nit は body の `## 行コメント不可 (diff 範囲外)` へ退避する。
+body のセクション順は必ず `総評`（`$posted_summary`） → `## 良い点`（存在する場合）→ `## 確認した範囲`（`APPROVE` の場合）→ `## CI 状態`（CI 抑止 `COMMENT` の場合）→ `## 行コメント不可 (diff 範囲外)`（存在する場合）→ 自動レビューフッター（常に最終セクション。#124）とする。diff 範囲内の Should Fix / Nit は body section ではなく `comments[]` の inline comment とする。diff 範囲外の Must Fix / Should Fix / Nit は body の `## 行コメント不可 (diff 範囲外)` へ退避する。
 
 payload は builder が `--output` で `~/claude-loop-pr-codex/$dir_name/review-payload.json` に整形 JSON（インデント 2）として書き出す。同時に `--manifest` で `payload-manifest.json`（`payload-manifest.v1`）を書き出し、`comment_index → finding_id` の対応表（`comment_map`）、body 退避一覧（`out_of_range`）、非公開一覧（`withheld`。local_only / suppress の Must Fix で、body にも載せない）、semantic 対象の全 Must Fix finding id（`semantic_targets`。cluster 非代表 member を含む）、active severity flags（`flags`）、件数（`counts`）、event、および role 付きの sha256 digest（`files`。required: findings / review / metadata / ranges / payload、optional: sarif / diff / ci_status / run_plan / ci_summary）を記録する。以降の工程は location 文字列による曖昧照合ではなく `comment_map` を使って finding と comment を対応付ける。`--verify` は manifest 構造・required role の存在・全 role の digest 照合に加えて、digest 検証済みの入力と `flags` から payload / manifest をドライラン再生成して現物と完全一致比較し（`generated_at` を除く）、payload と manifest の協調改竄も検出する。
 
@@ -635,7 +644,7 @@ codex \
 フラグの説明:
 
 - `--ask-for-approval never` / `-m gpt-5.6-sol` / `-c ...` は global flag のため、すべて `exec` の前に置く
-- `-m gpt-5.6-sol` — semantic preflight の実行モデルを GPT-5.6 に固定する（#110 の担当替え。hunter の `-m gpt-5.5` とは独立）。素の `gpt-5.6` slug は ChatGPT アカウントの Codex では 400 で拒否されるため、動作確認済みの `gpt-5.6-sol` を使う
+- `-m gpt-5.6-sol` — semantic preflight の実行モデルを GPT-5.6 Sol に固定する（#110 の担当替え）。hunter と同じモデルだが、投稿直前の反証確認という別用途のため effort は実測に基づく `high` を維持する。素の `gpt-5.6` slug は ChatGPT アカウントの Codex では 400 で拒否されるため、動作確認済みの `gpt-5.6-sol` を使う
 - `-c 'model_reasoning_effort="high"'` — 7,301-byte の prompt と upstream findings 入力を high / xhigh 間で byte-identical に揃えて再実測し、両方が同じ Must Fix 2件を confirmed、exact / acceptable / false-positive / recall も同値だった。保存 run では high が 14,890 ms / 23,003 tokens、xhigh が 34,217 ms / 23,326 tokens だったため、semantic preflight は high に固定する
 - `-c sandbox_mode=read-only` — シェル実行を read-only サンドボックスに固定する。`--sandbox read-only` と等価だが、config override として明示するため `-c` に統一する
 - `--ignore-user-config` — 投稿前検証中のみ `$CODEX_HOME/config.toml` / `~/.codex/config.toml` を読み込まない。auth は引き続き `CODEX_HOME` を使うため、古い MCP 設定や無効な `model_reasoning_effort` による config 検証エラーから Step 4.5 preflight を切り離せる
