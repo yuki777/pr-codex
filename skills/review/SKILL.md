@@ -513,11 +513,12 @@ jq -n --arg started_at "$started_at" --arg head_sha "$head_sha" '{state:"running
 - 判定条件: `metadata.json` が作成される
 - 次アクション: `run-plan.json` 作成へ進む
 
-`$claude_model` は、現在のメインコンテキストが実行している Claude モデルの ID（例: `claude-fable-5-20260115`）を実値で設定する。Step 4a の Claude hunter はこの同じ値を `--model "$claude_model"` で明示指定して実行するため、`review_engines` の記録値と hunter の実行モデルは常に一致する（#124）。プレースホルダや推測値を書いてはならない。値が無効な場合は Step 4a が CLI エラーで即失敗し、Step 5 の failed 更新へ遷移する（誤った記録のまま投稿へ進まない）。
+`$claude_model` は、Claude CLI が full model name として受け付ける `claude-fable-5` に固定する。Step 4a の Claude hunter はこの同じ値を `--model "$claude_model"` で明示指定して実行するため、`review_engines` の記録値と hunter の実行モデルは常に一致する（#124）。CLI の既定値やメインコンテキストのモデルを推測してはならない。モデルを変更する場合は直後の代入を明示的に更新し、値が無効な場合は Step 4a の CLI エラーから Step 5 の failed 更新へ遷移する（誤った記録のまま投稿へ進まない）。
 
 `review_engines` は Step 4a / 4b の実行構成（Claude Code: `--model "$claude_model"` + `--effort max`、Codex: `-m gpt-5.5` + `model_reasoning_effort="xhigh"`）を send の投稿フッター用に記録する配列である（#124）。effort は両 hunter とも最大値に固定する（Claude CLI の最大は `max`、Codex CLI の最大は `xhigh` で、`max` という値は Codex には存在しない）。4a / 4b のコマンドテンプレートのモデル・effort を変更する場合は、この `review_engines` の値も併せて更新する。記録する effort は実行リテラル（`max` / `xhigh`）のままとし、send の builder が表示時に最大 tier を `max` へ正規化する（#124）。
 
 ```bash
+claude_model="claude-fable-5"
 jq -n --arg org "$org" --arg repository "$repository" --arg repository_full_name "$repository_full_name" --argjson pr_number "$pr_number" --arg pr_url "$pr_url" --arg head_sha "$head_sha" --arg base_sha "$base_sha" --arg branch "$branch" --arg base_branch "$base_branch" --arg merge_commit_sha "$merge_commit_sha" --arg title "$title" --argjson files "$files_json" --arg claude_model "$claude_model" '{org:$org,repository:$repository,repository_full_name:$repository_full_name,pr_number:$pr_number,pr_url:$pr_url,head_sha:$head_sha,base_sha:$base_sha,branch:$branch,base_branch:$base_branch,merge_commit_sha:(if $merge_commit_sha == "" then null else $merge_commit_sha end),title:$title,files:$files,review_engines:[{name:"Claude Code",model:$claude_model,effort:"max"},{name:"Codex",model:"gpt-5.5",effort:"xhigh"}]}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json
 ```
 
@@ -849,7 +850,7 @@ env -u CLAUDECODE claude -p \
 - prompt は `hunter-claude-prompt.md` からの stdin redirection で渡す。Bash ツールへ渡すコマンド文字列に prompt 本文を直接埋め込んではならない。prompt 本文には Markdown backtick / JSON double quote が含まれ、shell の double-quoted argument として渡すと command substitution / quote 分割で壊れるため（旧 4 文字エスケープ規則は廃止済み）
 - `env -u CLAUDECODE` — 環境変数 `CLAUDECODE` をクリアし、ネスト起動制限を回避する
 - `--permission-mode dontAsk` — 確認プロンプトを出さない非対話モード。事前許可のないツール呼び出しは自動拒否される
-- `--model "$claude_model"` — Step 3 で解決した `$claude_model`（`metadata.json.review_engines` に記録した Claude モデル ID）と同じ実値に置換して hunter の実行モデルを明示固定する。記録値と実行モデルの一致を構成的に保証し、CLI 既定モデルや環境変数（`ANTHROPIC_MODEL` 等）由来のドリフトを防ぐ（#124）。値が無効なら hunter は CLI エラーで即失敗し、Step 5 の failed 更新へ遷移する（誤った記録のまま投稿しない fail-closed）
+- `--model "$claude_model"` — Step 3 で `claude-fable-5` に固定した `$claude_model`（`metadata.json.review_engines` に記録した Claude モデル ID）と同じ実値に置換して hunter の実行モデルを明示固定する。記録値と実行モデルの一致を構成的に保証し、CLI 既定モデルや環境変数（`ANTHROPIC_MODEL` 等）由来のドリフトを防ぐ（#124）。値が無効なら hunter は CLI エラーで即失敗し、Step 5 の failed 更新へ遷移する（誤った記録のまま投稿しない fail-closed）
 - `--setting-sources ""` — user / project / local の settings を一切読み込まない。settings 側 `permissions.allow` の事前許可（`Bash(gh *)` / `Bash(curl *)` / `WebFetch(...)` 等）を子プロセスへ引き継がないため、`dontAsk` の自動拒否がテンプレートの `--allowedTools` だけを基準に働く
 - `--tools "Read,Glob,Grep,Bash"` — 子プロセスへ公開する built-in ツールセット自体を限定し、WebFetch / WebSearch / Edit / Write 等を除外する。ネットワーク到達とローカル書き込みの経路をツールレベルでも遮断する（Bash の個別コマンドは `--allowedTools` の事前許可で git read-only に絞る）
 - `--allowedTools` — 確認なしで実行を許可するツールの指定であり、利用可能ツールを制限する allowlist ではない。ここでは read-only の git コマンドとローカルファイル読み取りだけを事前許可する（git diff/show/log/rev-parse）。`gh` コマンドは事前許可しないため `dontAsk` 下では拒否される

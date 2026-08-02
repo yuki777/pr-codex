@@ -22,6 +22,9 @@ PR_CODEX_REPO_URL = "https://github.com/yuki777/pr-codex"
 # `model_reasoning_effort` literals in skills/send/SKILL.md; the pairing is
 # enforced by tasks/test_issue124_docs.py.
 SEMANTIC_VERIFIER_ENGINE = ("Codex", "gpt-5.6-sol", "high")
+# review Step 3 records the two unconditional hunters in execution order.
+# The footer must not claim a partial, duplicated, or unknown reviewer set.
+REQUIRED_REVIEW_ENGINE_NAMES = ("Claude Code", "Codex")
 # Human-facing effort labels: each CLI's maximum tier is normalized to
 # "max" in the posted footer, while config/metadata keep the exact literal
 # (Claude CLI: max; Codex CLI: xhigh — Codex has no "max" value).
@@ -262,6 +265,12 @@ def validate_build_inputs(findings_data: Any, metadata: Any, markdown: str) -> t
                 value = engine.get(key)
                 if not isinstance(value, str) or not value.strip():
                     errors.append(f"metadata.review_engines[{index}].{key}: must be a non-empty string")
+        engine_names = [engine.get("name") if isinstance(engine, dict) else None for engine in engines]
+        if engine_names != list(REQUIRED_REVIEW_ENGINE_NAMES):
+            errors.append(
+                "metadata.review_engines: must contain exactly one 'Claude Code' engine "
+                "followed by exactly one 'Codex' engine"
+            )
 
     pr = findings_data.get("pr")
     if not isinstance(pr, dict):

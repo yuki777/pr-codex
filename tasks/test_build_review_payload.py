@@ -649,6 +649,42 @@ class BuildReviewPayloadTest(unittest.TestCase):
         empty_engines["review_engines"] = []
         cases.append(("engines-empty", copy.deepcopy(base), empty_engines, None, "metadata.review_engines: must be a non-empty array"))
 
+        incomplete_engines = metadata()
+        incomplete_engines["review_engines"] = incomplete_engines["review_engines"][:1]
+        cases.append(
+            (
+                "engines-incomplete",
+                copy.deepcopy(base),
+                incomplete_engines,
+                None,
+                "metadata.review_engines: must contain exactly one 'Claude Code' engine followed by exactly one 'Codex' engine",
+            )
+        )
+
+        duplicate_engines = metadata()
+        duplicate_engines["review_engines"][1]["name"] = "Claude Code"
+        cases.append(
+            (
+                "engines-duplicate",
+                copy.deepcopy(base),
+                duplicate_engines,
+                None,
+                "metadata.review_engines: must contain exactly one 'Claude Code' engine followed by exactly one 'Codex' engine",
+            )
+        )
+
+        reversed_engines = metadata()
+        reversed_engines["review_engines"].reverse()
+        cases.append(
+            (
+                "engines-reversed",
+                copy.deepcopy(base),
+                reversed_engines,
+                None,
+                "metadata.review_engines: must contain exactly one 'Claude Code' engine followed by exactly one 'Codex' engine",
+            )
+        )
+
         non_object_engine = metadata()
         non_object_engine["review_engines"] = ["not-an-object"]
         cases.append(("engine-non-object", copy.deepcopy(base), non_object_engine, None, "metadata.review_engines[0]: must be an object"))

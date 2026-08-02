@@ -30,6 +30,7 @@ class Issue124DocsTest(unittest.TestCase):
             "Must Fix 0 件の skip 時は表示しない",
             "`withheld` の存在・件数・カテゴリを新たに公開しない（#120 と整合）",
             "表示する effort は CLI 語彙の最大 tier を `max` に正規化する",
+            "`review_engines[]` は実行順の `Claude Code`、`Codex` の2件ちょうど",
             "→ 自動レビューフッター（常に最終セクション。#124）とする",
         ):
             self.assertIn(snippet, skill)
@@ -37,8 +38,9 @@ class Issue124DocsTest(unittest.TestCase):
     def test_review_records_engines_for_footer(self) -> None:
         skill = REVIEW_SKILL.read_text(encoding="utf-8")
         for snippet in (
+            'claude_model="claude-fable-5"',
             '--arg claude_model "$claude_model"',
-            "`$claude_model` は、現在のメインコンテキストが実行している Claude モデルの ID",
+            "`$claude_model` は、Claude CLI が full model name として受け付ける `claude-fable-5` に固定する",
             "`review_engines` の記録値と hunter の実行モデルは常に一致する（#124）",
             "effort は両 hunter とも最大値に固定する",
             "4a / 4b のコマンドテンプレートのモデル・effort を変更する場合は、この `review_engines` の値も併せて更新する",
@@ -75,6 +77,14 @@ class Issue124DocsTest(unittest.TestCase):
         self.assertEqual(pinned_models[0], claude_engine.group(1))
         self.assertEqual(pinned_models[0], "$claude_model")
 
+        claude_model_assignments = re.findall(r'^claude_model="([^"]+)"$', skill, re.MULTILINE)
+        self.assertEqual(claude_model_assignments, ["claude-fable-5"])
+
+    def test_builder_requires_complete_review_engine_set(self) -> None:
+        builder = BUILDER.read_text(encoding="utf-8")
+        self.assertIn('REQUIRED_REVIEW_ENGINE_NAMES = ("Claude Code", "Codex")', builder)
+        self.assertIn("engine_names != list(REQUIRED_REVIEW_ENGINE_NAMES)", builder)
+
     def test_semantic_verifier_constant_matches_send_template(self) -> None:
         builder = BUILDER.read_text(encoding="utf-8")
         skill = SEND_SKILL.read_text(encoding="utf-8")
@@ -93,7 +103,7 @@ class Issue124DocsTest(unittest.TestCase):
     def test_readme_documents_footer(self) -> None:
         readme = README.read_text(encoding="utf-8")
         for snippet in (
-            "自動レビューフッターの付加（body 末尾に pr-codex のバージョン（`producer.version`）とレビューに使ったモデル・effort（`metadata.json.review_engines`）を明記し、Must Fix があり Step 4.5 の semantic preflight を実行する投稿では検証側モデル・effort も表示する。欠落・不正なら builder が非ゼロ終了する fail-closed。#124）",
+            "自動レビューフッターの付加（body 末尾に pr-codex のバージョン（`producer.version`）とレビューに使ったモデル・effort（実行順の `Claude Code`、`Codex` の2件ちょうどを要求する `metadata.json.review_engines`）を明記し、Must Fix があり Step 4.5 の semantic preflight を実行する投稿では検証側モデル・effort も表示する。欠落・不正なら builder が非ゼロ終了する fail-closed。#124）",
             "hunter の reasoning effort は Codex CLI の最大値 `model_reasoning_effort=\"xhigh\"` に固定する（#124",
         ):
             self.assertIn(snippet, readme)
