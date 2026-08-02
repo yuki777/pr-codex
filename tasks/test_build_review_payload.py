@@ -56,6 +56,7 @@ def finding(
 def artifact(findings: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "schema_version": "findings.v1",
+        "producer": {"name": "pr-codex", "version": "9.9.9", "run_id": "acme-widgets-42"},
         "pr": {
             "repository": "acme/widgets",
             "number": 42,
@@ -80,6 +81,10 @@ def metadata() -> dict[str, Any]:
         "merge_commit_sha": None,
         "title": "Review payload",
         "files": ["src/App.py", "src/Other.py"],
+        "review_engines": [
+            {"name": "Claude Code", "model": "claude-fable-5", "effort": "max"},
+            {"name": "Codex", "model": "gpt-5.5", "effort": "xhigh"},
+        ],
     }
 
 
@@ -267,6 +272,7 @@ class BuildReviewPayloadTest(unittest.TestCase):
         self.assertIn("Must Fix はありませんが、CI が failure のため承認を保留します。", payload["body"])
         self.assertNotIn("## 確認した範囲", payload["body"])
         self.assertIn("## CI 状態\n\n- 状態: failure\n- 要約: unit tests failed", payload["body"])
+        self.assertNotIn("投稿前検証", payload["body"])
 
     def test_must_fix_out_of_range_is_moved_to_body(self) -> None:
         item = finding("far-away", start_line=120)
@@ -419,6 +425,10 @@ class BuildReviewPayloadTest(unittest.TestCase):
                     [{"finding_id": identifier, "kind": "Must Fix", "reason": expected_reason}],
                 )
                 self.assertEqual(manifest["semantic_targets"], [identifier])
+                self.assertIn(
+                    "投稿前検証 (semantic preflight) は Codex gpt-5.6-sol (high) により行われました。",
+                    payload["body"],
+                )
                 self.assertEqual(manifest["counts"]["must_fix_withheld"], 1)
 
 
@@ -623,6 +633,34 @@ class BuildReviewPayloadTest(unittest.TestCase):
         empty_summary = artifact([])
         cases.append(("summary", empty_summary, metadata(), "## 総評\n\n\n## 重大な問題 (Must Fix)\n\nなし\n", "summary is empty"))
 
+        missing_producer = artifact([finding("no-producer")])
+        del missing_producer["producer"]
+        cases.append(("producer-missing", missing_producer, metadata(), None, "findings.producer.version: must be a non-empty string"))
+
+        blank_version = artifact([finding("blank-version")])
+        blank_version["producer"]["version"] = "  "
+        cases.append(("producer-blank-version", blank_version, metadata(), None, "findings.producer.version: must be a non-empty string"))
+
+        missing_engines = metadata()
+        del missing_engines["review_engines"]
+        cases.append(("engines-missing", copy.deepcopy(base), missing_engines, None, "metadata.review_engines: must be a non-empty array"))
+
+        empty_engines = metadata()
+        empty_engines["review_engines"] = []
+        cases.append(("engines-empty", copy.deepcopy(base), empty_engines, None, "metadata.review_engines: must be a non-empty array"))
+
+        non_object_engine = metadata()
+        non_object_engine["review_engines"] = ["not-an-object"]
+        cases.append(("engine-non-object", copy.deepcopy(base), non_object_engine, None, "metadata.review_engines[0]: must be an object"))
+
+        malformed_engine_fields = metadata()
+        malformed_engine_fields["review_engines"] = [
+            {"name": "Claude Code", "model": "claude-fable-5", "effort": "max"},
+            {"name": "Codex", "model": "", "effort": 3},
+        ]
+        cases.append(("engine-blank-model", copy.deepcopy(base), malformed_engine_fields, None, "metadata.review_engines[1].model: must be a non-empty string"))
+        cases.append(("engine-non-string-effort", copy.deepcopy(base), copy.deepcopy(malformed_engine_fields), None, "metadata.review_engines[1].effort: must be a non-empty string"))
+
         for name, data, meta, review_text, fragment in cases:
             with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
                 completed, _, _, _ = self.run_build(Path(tmp), data, metadata_data=meta, review_text=review_text)
@@ -652,6 +690,7 @@ class BuildReviewPayloadTest(unittest.TestCase):
             body.index("## 良い点"),
             body.index("## 確認した範囲"),
             body.index("## 行コメント不可 (diff 範囲外)"),
+            body.index("これは [pr-codex]("),
         ]
         self.assertEqual(offsets, sorted(offsets))
 
@@ -719,6 +758,51 @@ class BuildReviewPayloadTest(unittest.TestCase):
             body = json.loads(payload_path.read_text(encoding="utf-8"))["body"]
         self.assertNotIn("Should Fix", body)
         self.assertNotIn("Nit", body)
+
+    def test_body_always_ends_with_automated_review_footer(self) -> None:
+        hunter_line = "レビューは Claude Code claude-fable-5 (max) と Codex gpt-5.5 (max) により行われました。"
+        verifier_line = "投稿前検証 (semantic preflight) は Codex gpt-5.6-sol (high) により行われました。"
+        cases = (
+            ("approve-skips-verifier", [], hunter_line),
+            ("request-changes-shows-verifier", [finding("far-away", start_line=120)], f"{hunter_line}\n{verifier_line}"),
+        )
+        for name, findings, ending in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                completed, payload_path, manifest_path, _ = self.run_build(Path(tmp), artifact(findings))
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                body = json.loads(payload_path.read_text(encoding="utf-8"))["body"]
+                verified = self.run_verify(manifest_path)
+
+            self.assertTrue(
+                body.endswith(
+                    "---\n\n"
+                    "これは [pr-codex](https://github.com/yuki777/pr-codex):v9.9.9 による自動レビューです。\n"
+                    + ending
+                ),
+                body,
+            )
+            if not findings:
+                self.assertNotIn("投稿前検証", body)
+            self.assertNotIn("(xhigh)", body)
+            self.assertEqual(verified.returncode, 0, verified.stderr)
+
+    def test_footer_normalizes_only_max_tier_effort_labels(self) -> None:
+        custom_metadata = metadata()
+        custom_metadata["review_engines"] = [
+            {"name": "Claude Code", "model": "claude-fable-5", "effort": "max"},
+            {"name": "Codex", "model": "gpt-5.5", "effort": "medium"},
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            completed, payload_path, _, _ = self.run_build(
+                Path(tmp), artifact([]), metadata_data=custom_metadata
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            body = json.loads(payload_path.read_text(encoding="utf-8"))["body"]
+
+        self.assertIn(
+            "レビューは Claude Code claude-fable-5 (max) と Codex gpt-5.5 (medium) により行われました。",
+            body,
+        )
 
     def test_manifest_hashes_all_required_files_and_verify_detects_tampering(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

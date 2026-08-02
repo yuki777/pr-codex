@@ -513,8 +513,12 @@ jq -n --arg started_at "$started_at" --arg head_sha "$head_sha" '{state:"running
 - 判定条件: `metadata.json` が作成される
 - 次アクション: `run-plan.json` 作成へ進む
 
+`$claude_model` は、現在のメインコンテキストが実行している Claude モデルの ID（例: `claude-fable-5-20260115`）を実値で設定する。Step 4a の Claude hunter はこの同じ値を `--model "$claude_model"` で明示指定して実行するため、`review_engines` の記録値と hunter の実行モデルは常に一致する（#124）。プレースホルダや推測値を書いてはならない。値が無効な場合は Step 4a が CLI エラーで即失敗し、Step 5 の failed 更新へ遷移する（誤った記録のまま投稿へ進まない）。
+
+`review_engines` は Step 4a / 4b の実行構成（Claude Code: `--model "$claude_model"` + `--effort max`、Codex: `-m gpt-5.5` + `model_reasoning_effort="xhigh"`）を send の投稿フッター用に記録する配列である（#124）。effort は両 hunter とも最大値に固定する（Claude CLI の最大は `max`、Codex CLI の最大は `xhigh` で、`max` という値は Codex には存在しない）。4a / 4b のコマンドテンプレートのモデル・effort を変更する場合は、この `review_engines` の値も併せて更新する。記録する effort は実行リテラル（`max` / `xhigh`）のままとし、send の builder が表示時に最大 tier を `max` へ正規化する（#124）。
+
 ```bash
-jq -n --arg org "$org" --arg repository "$repository" --arg repository_full_name "$repository_full_name" --argjson pr_number "$pr_number" --arg pr_url "$pr_url" --arg head_sha "$head_sha" --arg base_sha "$base_sha" --arg branch "$branch" --arg base_branch "$base_branch" --arg merge_commit_sha "$merge_commit_sha" --arg title "$title" --argjson files "$files_json" '{org:$org,repository:$repository,repository_full_name:$repository_full_name,pr_number:$pr_number,pr_url:$pr_url,head_sha:$head_sha,base_sha:$base_sha,branch:$branch,base_branch:$base_branch,merge_commit_sha:(if $merge_commit_sha == "" then null else $merge_commit_sha end),title:$title,files:$files}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json
+jq -n --arg org "$org" --arg repository "$repository" --arg repository_full_name "$repository_full_name" --argjson pr_number "$pr_number" --arg pr_url "$pr_url" --arg head_sha "$head_sha" --arg base_sha "$base_sha" --arg branch "$branch" --arg base_branch "$base_branch" --arg merge_commit_sha "$merge_commit_sha" --arg title "$title" --argjson files "$files_json" --arg claude_model "$claude_model" '{org:$org,repository:$repository,repository_full_name:$repository_full_name,pr_number:$pr_number,pr_url:$pr_url,head_sha:$head_sha,base_sha:$base_sha,branch:$branch,base_branch:$base_branch,merge_commit_sha:(if $merge_commit_sha == "" then null else $merge_commit_sha end),title:$title,files:$files,review_engines:[{name:"Claude Code",model:$claude_model,effort:"max"},{name:"Codex",model:"gpt-5.5",effort:"xhigh"}]}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json
 ```
 
 - いつ使うか: `metadata.json` 作成直後に必ず実行する
@@ -826,6 +830,7 @@ pr.diff.ranges.txt 範囲内で実発火・影響を確認できないものは 
 ```bash
 env -u CLAUDECODE claude -p \
   --permission-mode dontAsk \
+  --model "$claude_model" \
   --effort max \
   --setting-sources "" \
   --tools "Read,Glob,Grep,Bash" \
@@ -844,6 +849,7 @@ env -u CLAUDECODE claude -p \
 - prompt は `hunter-claude-prompt.md` からの stdin redirection で渡す。Bash ツールへ渡すコマンド文字列に prompt 本文を直接埋め込んではならない。prompt 本文には Markdown backtick / JSON double quote が含まれ、shell の double-quoted argument として渡すと command substitution / quote 分割で壊れるため（旧 4 文字エスケープ規則は廃止済み）
 - `env -u CLAUDECODE` — 環境変数 `CLAUDECODE` をクリアし、ネスト起動制限を回避する
 - `--permission-mode dontAsk` — 確認プロンプトを出さない非対話モード。事前許可のないツール呼び出しは自動拒否される
+- `--model "$claude_model"` — Step 3 で解決した `$claude_model`（`metadata.json.review_engines` に記録した Claude モデル ID）と同じ実値に置換して hunter の実行モデルを明示固定する。記録値と実行モデルの一致を構成的に保証し、CLI 既定モデルや環境変数（`ANTHROPIC_MODEL` 等）由来のドリフトを防ぐ（#124）。値が無効なら hunter は CLI エラーで即失敗し、Step 5 の failed 更新へ遷移する（誤った記録のまま投稿しない fail-closed）
 - `--setting-sources ""` — user / project / local の settings を一切読み込まない。settings 側 `permissions.allow` の事前許可（`Bash(gh *)` / `Bash(curl *)` / `WebFetch(...)` 等）を子プロセスへ引き継がないため、`dontAsk` の自動拒否がテンプレートの `--allowedTools` だけを基準に働く
 - `--tools "Read,Glob,Grep,Bash"` — 子プロセスへ公開する built-in ツールセット自体を限定し、WebFetch / WebSearch / Edit / Write 等を除外する。ネットワーク到達とローカル書き込みの経路をツールレベルでも遮断する（Bash の個別コマンドは `--allowedTools` の事前許可で git read-only に絞る）
 - `--allowedTools` — 確認なしで実行を許可するツールの指定であり、利用可能ツールを制限する allowlist ではない。ここでは read-only の git コマンドとローカルファイル読み取りだけを事前許可する（git diff/show/log/rev-parse）。`gh` コマンドは事前許可しないため `dontAsk` 下では拒否される
@@ -916,6 +922,7 @@ pr.diff.ranges.txt 範囲内で実発火・影響を確認できないものは 
 codex \
   --ask-for-approval never \
   -m gpt-5.5 \
+  -c 'model_reasoning_effort="xhigh"' \
   -c sandbox_mode=read-only \
   exec \
   --ignore-user-config \
@@ -933,7 +940,8 @@ codex \
 
 - `$plugin_root` — `$org` などと同じ置換対象変数。セットアップで解決した絶対パスの実値に置換してから Bash ツールへ渡す（コマンド構造は変えない）
 - `--ask-for-approval never` — 承認プロンプトを無効化し非対話で実行する。global flag のため `exec` の前に置く（`exec` の後ろに付けると `unexpected argument` で拒否される）
-- `-m gpt-5.5` — Codex CLI の実行モデルを GPT-5.5 に固定する。global flag のため `exec` の前に置く。`--ignore-user-config` により user config は読まないため、`model_reasoning_effort` は Codex CLI の default 値で実行される
+- `-m gpt-5.5` — Codex CLI の実行モデルを GPT-5.5 に固定する。global flag のため `exec` の前に置く。モデルを変更する場合は Step 3 の `review_engines`（投稿フッター用の記録。#124）も併せて更新する
+- `-c 'model_reasoning_effort="xhigh"'` — hunter の reasoning effort を Codex CLI の最大値 `xhigh` に明示固定する（#124。Claude hunter の `--effort max` に対応し、Step 3 の `review_engines` の記録値と一致させる）。`--ignore-user-config` により user config は読まないため、固定しない場合は CLI 既定値で実行されてしまい、投稿フッターの表示と実行構成が乖離し得る。global flag のため `exec` の前に置く（`codex-cli 0.146.0` + `gpt-5.5` で動作確認済み）
 - `-c sandbox_mode=read-only` — シェル実行を read-only サンドボックスに固定し、ローカルファイル書き込みを禁止する（レビュー専用）。`--sandbox read-only` と等価だが、config override として明示するため `-c` に統一する
 - `exec` — 非対話サブコマンド。prompt は位置引数 `-`（stdin から読む指定）と stdin redirection で渡す（Codex の `-p` は `--profile` のため使わない）。この時点ではすでに global flag は前置されている
 - `--ignore-user-config` — `$CODEX_HOME/config.toml` / `~/.codex/config.toml` を読み込まず、user config 由来の外部 MCP（`github-mcp-server` / `backlog-mcp-server` / `docbase-mcp-server` 等）を hunter から切り離す。auth は引き続き `CODEX_HOME` を使う。`exec` サブコマンド側の option のため `exec` の後ろに置く
@@ -1374,7 +1382,7 @@ $CLAUDE_PLUGIN_ROOT/schemas/
 ~/claude-loop-pr-codex/
   └── $org-$repository-$pr_number/
         ├── status.json
-        ├── metadata.json        ← org/repository/repository_full_name/pr_number/pr_url/head_sha/base_sha/branch/base_branch/merge_commit_sha/title/files を含む
+        ├── metadata.json        ← org/repository/repository_full_name/pr_number/pr_url/head_sha/base_sha/branch/base_branch/merge_commit_sha/title/files/review_engines (投稿フッター用のモデル・effort 記録。#124) を含む
         ├── run-plan.json        ← preflight 指標。Step 5 成功時に actual_duration_ms / actual_tokens / review_loop.round_metrics を追記
         ├── run-plan.json        ← preflight 指標と routing_decision。Step 5 成功時に actual_duration_ms / actual_tokens を追記
         ├── pr.diff              ← PR 差分 (unified diff)。Step 4a/4b のスコープ確定情報源
