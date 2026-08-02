@@ -83,7 +83,7 @@ def metadata() -> dict[str, Any]:
         "files": ["src/App.py", "src/Other.py"],
         "review_engines": [
             {"name": "Claude Code", "model": "claude-fable-5", "effort": "max"},
-            {"name": "Codex", "model": "gpt-5.5", "effort": "xhigh"},
+            {"name": "Codex", "model": "gpt-5.6-sol", "effort": "max"},
         ],
     }
 
@@ -796,7 +796,7 @@ class BuildReviewPayloadTest(unittest.TestCase):
         self.assertNotIn("Nit", body)
 
     def test_body_always_ends_with_automated_review_footer(self) -> None:
-        hunter_line = "レビューは Claude Code claude-fable-5 (max) と Codex gpt-5.5 (max) により行われました。"
+        hunter_line = "レビューは Claude Code claude-fable-5 (max) と Codex gpt-5.6-sol (max) により行われました。"
         verifier_line = "投稿前検証 (semantic preflight) は Codex gpt-5.6-sol (high) により行われました。"
         cases = (
             ("approve-skips-verifier", [], hunter_line),
@@ -823,10 +823,25 @@ class BuildReviewPayloadTest(unittest.TestCase):
             self.assertEqual(verified.returncode, 0, verified.stderr)
 
     def test_footer_normalizes_only_max_tier_effort_labels(self) -> None:
+        legacy_metadata = metadata()
+        legacy_metadata["review_engines"][1]["effort"] = "xhigh"
+        with tempfile.TemporaryDirectory() as tmp:
+            completed, payload_path, _, _ = self.run_build(
+                Path(tmp), artifact([]), metadata_data=legacy_metadata
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            body = json.loads(payload_path.read_text(encoding="utf-8"))["body"]
+
+        self.assertIn(
+            "レビューは Claude Code claude-fable-5 (max) と Codex gpt-5.6-sol (max) により行われました。",
+            body,
+        )
+        self.assertNotIn("(xhigh)", body)
+
         custom_metadata = metadata()
         custom_metadata["review_engines"] = [
             {"name": "Claude Code", "model": "claude-fable-5", "effort": "max"},
-            {"name": "Codex", "model": "gpt-5.5", "effort": "medium"},
+            {"name": "Codex", "model": "gpt-5.6-sol", "effort": "medium"},
         ]
         with tempfile.TemporaryDirectory() as tmp:
             completed, payload_path, _, _ = self.run_build(
@@ -836,7 +851,7 @@ class BuildReviewPayloadTest(unittest.TestCase):
             body = json.loads(payload_path.read_text(encoding="utf-8"))["body"]
 
         self.assertIn(
-            "レビューは Claude Code claude-fable-5 (max) と Codex gpt-5.5 (medium) により行われました。",
+            "レビューは Claude Code claude-fable-5 (max) と Codex gpt-5.6-sol (medium) により行われました。",
             body,
         )
 

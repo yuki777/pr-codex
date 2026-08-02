@@ -492,7 +492,7 @@ builder は以下のルールを実装している:
     投稿前検証 (semantic preflight) は Codex gpt-5.6-sol (high) により行われました。
     ```
     builder は `producer.version` と `review_engines[]` を必須入力として検証する。`review_engines[]` は実行順の `Claude Code`、`Codex` の2件ちょうどで、各要素の `name` / `model` / `effort` がすべて非空文字列でなければならない。欠落・不正なら deterministic failure として非ゼロ終了する（フッターを省略した投稿は行わない fail-closed。#124）。`review_engines` 記録前の旧バージョン review artifact を send する場合は、`/pr-codex:review` を再実行して metadata を再生成する。
-    3 行目（投稿前検証）は `counts.must_fix_total` が 1 件以上の場合のみ builder が追加する。Step 4.5 の semantic preflight は Must Fix があるときだけ実行され、失敗時は投稿自体が中止されるため、投稿された body の表示は常に実行事実と一致する。Must Fix 0 件の skip 時は表示しない。文言に Must Fix を含めず、行の有無は event（`REQUEST_CHANGES` ⇔ Must Fix 1 件以上）と等価な情報のみで、`withheld` の存在・件数・カテゴリを新たに公開しない（#120 と整合）。verifier は send 実行時の構成のため `metadata.json` には記録せず、builder 同梱の固定値 `SEMANTIC_VERIFIER_ENGINE` を使う。Step 4.5 の Codex テンプレートのモデル・effort を変更する場合は builder の固定値も併せて更新する（`tasks/test_issue124_docs.py` が一致を検証する）。表示する effort は CLI 語彙の最大 tier を `max` に正規化する（Codex の実行値・記録値 `xhigh` は `max` と表示する。builder の `EFFORT_DISPLAY_LABELS`。最大 tier 以外（semantic preflight の `high` 等）は実値のまま表示する）
+    3 行目（投稿前検証）は `counts.must_fix_total` が 1 件以上の場合のみ builder が追加する。Step 4.5 の semantic preflight は Must Fix があるときだけ実行され、失敗時は投稿自体が中止されるため、投稿された body の表示は常に実行事実と一致する。Must Fix 0 件の skip 時は表示しない。文言に Must Fix を含めず、行の有無は event（`REQUEST_CHANGES` ⇔ Must Fix 1 件以上）と等価な情報のみで、`withheld` の存在・件数・カテゴリを新たに公開しない（#120 と整合）。verifier は send 実行時の構成のため `metadata.json` には記録せず、builder 同梱の固定値 `SEMANTIC_VERIFIER_ENGINE` を使う。Step 4.5 の Codex テンプレートのモデル・effort を変更する場合は builder の固定値も併せて更新する（`tasks/test_issue124_docs.py` が一致を検証する）。表示する effort は CLI 語彙の最大 tier を `max` に正規化する（現行 hunter の実行値・記録値は `max`。旧 artifact の `xhigh` も builder の `EFFORT_DISPLAY_LABELS` で `max` と表示し、最大 tier 以外（semantic preflight の `high` 等）は実値のまま表示する）
 - `comments`: `$must_fix` + `$inline_should_fix` + `$inline_nit`（それぞれ `findings.verified.json` の順序を保つ）。Should Fix / Nit も `path` / `line` / `side` / `body` を持つ inline comment として投稿する。各要素は以下のキーを含む:
   - `path` (必須)
   - `line` (必須)
@@ -644,7 +644,7 @@ codex \
 フラグの説明:
 
 - `--ask-for-approval never` / `-m gpt-5.6-sol` / `-c ...` は global flag のため、すべて `exec` の前に置く
-- `-m gpt-5.6-sol` — semantic preflight の実行モデルを GPT-5.6 に固定する（#110 の担当替え。hunter の `-m gpt-5.5` とは独立）。素の `gpt-5.6` slug は ChatGPT アカウントの Codex では 400 で拒否されるため、動作確認済みの `gpt-5.6-sol` を使う
+- `-m gpt-5.6-sol` — semantic preflight の実行モデルを GPT-5.6 Sol に固定する（#110 の担当替え）。hunter と同じモデルだが、投稿直前の反証確認という別用途のため effort は実測に基づく `high` を維持する。素の `gpt-5.6` slug は ChatGPT アカウントの Codex では 400 で拒否されるため、動作確認済みの `gpt-5.6-sol` を使う
 - `-c 'model_reasoning_effort="high"'` — 7,301-byte の prompt と upstream findings 入力を high / xhigh 間で byte-identical に揃えて再実測し、両方が同じ Must Fix 2件を confirmed、exact / acceptable / false-positive / recall も同値だった。保存 run では high が 14,890 ms / 23,003 tokens、xhigh が 34,217 ms / 23,326 tokens だったため、semantic preflight は high に固定する
 - `-c sandbox_mode=read-only` — シェル実行を read-only サンドボックスに固定する。`--sandbox read-only` と等価だが、config override として明示するため `-c` に統一する
 - `--ignore-user-config` — 投稿前検証中のみ `$CODEX_HOME/config.toml` / `~/.codex/config.toml` を読み込まない。auth は引き続き `CODEX_HOME` を使うため、古い MCP 設定や無効な `model_reasoning_effort` による config 検証エラーから Step 4.5 preflight を切り離せる

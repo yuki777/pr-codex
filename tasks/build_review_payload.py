@@ -25,9 +25,8 @@ SEMANTIC_VERIFIER_ENGINE = ("Codex", "gpt-5.6-sol", "high")
 # review Step 3 records the two unconditional hunters in execution order.
 # The footer must not claim a partial, duplicated, or unknown reviewer set.
 REQUIRED_REVIEW_ENGINE_NAMES = ("Claude Code", "Codex")
-# Human-facing effort labels: each CLI's maximum tier is normalized to
-# "max" in the posted footer, while config/metadata keep the exact literal
-# (Claude CLI: max; Codex CLI: xhigh — Codex has no "max" value).
+# Human-facing effort labels: current hunters record "max" directly. Keep the
+# legacy xhigh mapping so older metadata still renders the maximum tier as max.
 EFFORT_DISPLAY_LABELS = {"xhigh": "max"}
 MANIFEST_REQUIRED_ROLES = ("findings", "review", "metadata", "ranges", "payload")
 MANIFEST_OPTIONAL_ROLES = ("sarif", "diff", "ci_status", "run_plan", "ci_summary")
@@ -569,7 +568,7 @@ def compose_review_footer(findings_data: dict[str, Any], metadata_data: dict[str
     version and every hunter engine with its model and effort; deficient
     inputs fail the build (fail-closed) instead of degrading the disclosure.
     Each CLI's maximum effort tier is displayed as "max" while metadata keeps
-    the exact execution literal (for example, Codex records "xhigh").
+    the exact execution literal (legacy Codex metadata may record "xhigh").
 
     The semantic-preflight verifier line appears exactly when must_fix_total
     >= 1: send Step 4.5 always runs the Codex semantic preflight for such

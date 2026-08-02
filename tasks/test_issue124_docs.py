@@ -44,7 +44,7 @@ class Issue124DocsTest(unittest.TestCase):
             "`review_engines` の記録値と hunter の実行モデルは常に一致する（#124）",
             "effort は両 hunter とも最大値に固定する",
             "4a / 4b のコマンドテンプレートのモデル・effort を変更する場合は、この `review_engines` の値も併せて更新する",
-            "send の builder が表示時に最大 tier を `max` へ正規化する（#124）",
+            "send の builder は旧 artifact に残る `xhigh` も表示時だけ最大 tier の `max` へ正規化する（#124）",
         ):
             self.assertIn(snippet, skill)
 
@@ -58,10 +58,11 @@ class Issue124DocsTest(unittest.TestCase):
         self.assertEqual(codex_engine.group(1), codex_models[0])
         # The recorded effort must match every `-c 'model_reasoning_effort="..."'`
         # literal in the review skill, and both hunters are pinned to their
-        # maximum tier (Claude: max, Codex: xhigh — Codex has no "max" value).
+        # maximum tier (Claude: max, Codex GPT-5.6 Sol: max).
         codex_efforts = set(EFFORT_OVERRIDE_RE.findall(skill))
         self.assertEqual(codex_efforts, {codex_engine.group(2)})
-        self.assertEqual(codex_engine.group(2), "xhigh")
+        self.assertEqual(codex_engine.group(1), "gpt-5.6-sol")
+        self.assertEqual(codex_engine.group(2), "max")
 
         claude_engine = re.search(r'\{name:"Claude Code",model:(\$[a-z_]+),effort:"([^"]+)"\}', skill)
         self.assertIsNotNone(claude_engine, "review_engines must record the Claude hunter engine")
@@ -104,7 +105,7 @@ class Issue124DocsTest(unittest.TestCase):
         readme = README.read_text(encoding="utf-8")
         for snippet in (
             "自動レビューフッターの付加（body 末尾に pr-codex のバージョン（`producer.version`）とレビューに使ったモデル・effort（実行順の `Claude Code`、`Codex` の2件ちょうどを要求する `metadata.json.review_engines`）を明記し、Must Fix があり Step 4.5 の semantic preflight を実行する投稿では検証側モデル・effort も表示する。欠落・不正なら builder が非ゼロ終了する fail-closed。#124）",
-            "hunter の reasoning effort は Codex CLI の最大値 `model_reasoning_effort=\"xhigh\"` に固定する（#124",
+            "Codex CLI 側のレビュー (hunter) は、スキル内で `-m gpt-5.6-sol` と `model_reasoning_effort=\"max\"` を指定して実行する（#124）",
         ):
             self.assertIn(snippet, readme)
 
