@@ -138,6 +138,16 @@ class Issue127DocsTest(unittest.TestCase):
         # 旧契約（running 未書き込み前提のスキップ文言）が残っていないこと。
         self.assertNotIn("`status.json` を `running` に更新しないまま", self.skill)
 
+    def test_failed_template_usage_covers_early_failures(self) -> None:
+        # 通常 failed テンプレートの「いつ使うか」が Step 4 系の失敗に限定されず、
+        # そこへ誘導している早期失敗（files / diff / Step 3a / clone）も含むこと。
+        for snippet in (
+            "- いつ使うか: `$head_sha` 取得済みの状態で `state=failed` を記録するすべての失敗で実行する。",
+            "Step 2b の files 取得失敗、Step 3 の `gh pr diff` 失敗、Step 3a の CI artifact 再取得失敗・再取得後の非 success 中止・clone / fetch / checkout 失敗、`run-plan.json` 生成失敗、Step 4a または 4b が timeout / 非ゼロ終了した場合",
+            "`$head_sha` が未取得の場合は、代わりに下の `head_sha` キー省略テンプレートを使う",
+        ):
+            self.assertIn(snippet, self.skill)
+
     def test_step3a_tool_and_clone_failures_close_running(self) -> None:
         # running 書き込み後の CI artifact 再取得・clone / fetch / checkout の
         # 非ゼロ終了でも、$finished_at 取得 → failed 更新で running を必ず閉じる。
