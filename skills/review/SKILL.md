@@ -213,13 +213,33 @@ jq -r '.started_at' ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.js
 
 ### Step 2b: 選定PRの `repository_full_name` / `head_sha` / `base_sha` / `branch` / `base_branch` / `merge_commit_sha` / `title` / `pr_url` / `files` を取得
 
-Step 2 で対象PRを1件選定候補にした直後、または Step 0 で直接指定 PR を解決した直後、未レビュー / failed / stale / completed のどの経路でもまず `repository_full_name` / `head_sha` / `base_sha` / `branch` / `base_branch` / `merge_commit_sha` / `title` / `pr_url` を取得する。`repository_full_name` は fork head repo ではなく、GitHub review の投稿先と同じ **base repo** (`.base.repo.full_name`) とする。`state == "completed"` の場合はこの時点で保存済み `head_sha` と比較し、同一ならスキップして PR 変更ファイル一覧は取得しない。`$target_mode == "auto"` では、未レビュー / failed / stale、または completed だが `head_sha` が変わっている候補に対して、PR 変更ファイル一覧を取得する前に current head の CI success gate を通す。`ci-status.json.state != "success"`、CI 未取得、または取得結果の `head_sha` が current `$head_sha` と一致しない場合は、この PR を選定せず Step 2 の次候補に戻る。CI success gate を通過した場合、または `$target_mode == "direct"` の場合だけ、完全な `files[]` を REST API paginate で取得して Step 3 へ進む。Step 3 の clone と `metadata.json` / `run-plan.json` 作成・Step 4 の PR 差分スコープ制御・Step 4c の canonical findings 生成は `$repository_full_name` / `$head_sha` / `$base_sha` / `$branch` / `$base_branch` / `$merge_commit_sha` / `$title` / `$pr_url` / `$files_json` に依存するため、選定後に欠落すると後続が破綻する。
+Step 2 で対象PRを1件選定候補にした直後、または Step 0 で直接指定 PR を解決した直後、未レビュー / failed / stale / completed のどの経路でもまず作業ディレクトリと `$started_at` を確保し、続いて `repository_full_name` / `head_sha` / `base_sha` / `branch` / `base_branch` / `merge_commit_sha` / `title` / `pr_url` を取得する。`repository_full_name` は fork head repo ではなく、GitHub review の投稿先と同じ **base repo** (`.base.repo.full_name`) とする。`state == "completed"` の場合はこの時点で保存済み `head_sha` と比較し、同一ならスキップして PR 変更ファイル一覧は取得しない。`$target_mode == "auto"` では、未レビュー / failed / stale、または completed だが `head_sha` が変わっている候補に対して、PR 変更ファイル一覧を取得する前に current head の CI success gate を通す。`ci-status.json.state != "success"`、CI 未取得、または取得結果の `head_sha` が current `$head_sha` と一致しない場合は、この PR を選定せず Step 2 の次候補に戻る。CI success gate を通過した場合、または `$target_mode == "direct"` の場合だけ、完全な `files[]` を REST API paginate で取得して Step 3 へ進む。Step 3 の `state=running` 書き込み・PR 差分取得と `metadata.json` / `run-plan.json` 作成・Step 4 の PR 差分スコープ制御・Step 4c の canonical findings 生成は `$repository_full_name` / `$head_sha` / `$base_sha` / `$branch` / `$base_branch` / `$merge_commit_sha` / `$title` / `$pr_url` / `$files_json` に依存するため、選定後に欠落すると後続が破綻する。
 
-まず `repository_full_name` / `head_sha` / `base_sha` / `branch` / `base_branch` / `merge_commit_sha` / `title` / `pr_url` を取得する。
+#### 作業ディレクトリ作成と `$started_at` の取得（Step 2b 進出確定直後。#127）
 
-- いつ使うか: Step 2 で対象PRを1件選定した直後、または Step 0 で直接指定 PR を解決した直後に必ず実行する
+候補が Step 2b へ進むことが確定した直後（`$target_mode == "auto"` は Step 2 の reviewer / approve / status 判定の通過直後、`$target_mode == "direct"` は Step 0 の解決と直接指定 PR の status 判定の通過直後）に、metadata 取得より先に作業ディレクトリと `$started_at` を確保する。これにより、Step 2b の metadata / files 取得失敗、Step 3 の `gh pr diff` 失敗、Step 3a の CI artifact 再取得失敗、clone 失敗を含む、`state=failed` を記録するすべての経路で、保存先ディレクトリと timestamp が契約上定義済みになる（#127）。`$started_at` は実際の処理開始時刻を表し、`running` の 30 分 stale 判定と `actual_duration_ms` の基準になる。
+
+- いつ使うか: 候補の Step 2b 進出が確定した直後に必ず実行する。auto mode で候補をスキップして次候補へ進んだ場合は、次候補で作業ディレクトリ作成と `$started_at` の取得を改めて実行する
+- 判定条件: 作業ディレクトリが存在する
+- 次アクション: `$started_at` の取得へ進む
+
+```bash
+install -d ~/claude-loop-pr-codex/$org-$repository-$pr_number
+```
+
+- いつ使うか: 作業ディレクトリ作成直後に必ず実行する（出力を `$started_at` として保持する）
+- 判定条件: RFC3339 形式の UTC 現在時刻が 1 行出力される
+- 次アクション: metadata 取得へ進む
+
+```bash
+date -u +%Y-%m-%dT%H:%M:%S+00:00
+```
+
+続いて `repository_full_name` / `head_sha` / `base_sha` / `branch` / `base_branch` / `merge_commit_sha` / `title` / `pr_url` を取得する。
+
+- いつ使うか: 作業ディレクトリと `$started_at` の確保直後に必ず実行する
 - 判定条件: 標準出力に `{"repository_full_name":"...","head_sha":"...","base_sha":"...","branch":"...","base_branch":"...","merge_commit_sha":"...","title":"...","pr_url":"..."}` の JSON が出力される（required field のいずれかが欠落した場合は `gh api --jq` が非ゼロ終了し、stderr に `missing <field>` が出る。`merge_commit_sha` は open PR では空文字列でよい）
-- 次アクション: 出力 JSON の `.repository_full_name` を `$repository_full_name`、`.head_sha` を `$head_sha`、`.base_sha` を `$base_sha`、`.branch` を `$branch`、`.base_branch` を `$base_branch`、`.merge_commit_sha` を `$merge_commit_sha`、`.title` を `$title`、`.pr_url` を `$pr_url` に保持する。`state == "completed"` の場合は、続く保存済み `head_sha` 比較テンプレートを先に実行する。一致したらこの候補をスキップし、異なる場合だけ **別テンプレートで完全な `files[]` を取得**して Step 3 へ進む。`state != "completed"` の場合はそのまま完全な `files[]` を取得する
+- 次アクション: 出力 JSON の `.repository_full_name` を `$repository_full_name`、`.head_sha` を `$head_sha`、`.base_sha` を `$base_sha`、`.branch` を `$branch`、`.base_branch` を `$base_branch`、`.merge_commit_sha` を `$merge_commit_sha`、`.title` を `$title`、`.pr_url` を `$pr_url` に保持する。`state == "completed"` の場合は、続く保存済み `head_sha` 比較テンプレートを先に実行する。一致したらこの候補をスキップし、異なる場合だけ **別テンプレートで完全な `files[]` を取得**して Step 3 へ進む。`state != "completed"` の場合はそのまま完全な `files[]` を取得する。このテンプレートが非ゼロ終了した場合（stderr の `missing <field>` を含む）は、その場で `date -u +%Y-%m-%dT%H:%M:%S+00:00` により `$finished_at` を取得し、`$head_sha` が未取得のため Step 5 の **`head_sha` キーを省略した failed 更新テンプレート**（`$failed_stage=ranker`）を実行して、その回は終了する（#127）
 
 ```bash
 gh api repos/$org/$repository/pulls/$pr_number --jq '
@@ -289,7 +309,7 @@ jq -e --arg head_sha "$head_sha" '
 
 - いつ使うか: `state != "completed"` の候補、または `state == "completed"` だが保存済み `head_sha` と現在の `$head_sha` が異なる候補に対して実行する
 - 判定条件: 標準出力に `[` で始まる非空の JSON 配列が出力される。`set -o pipefail` により `gh api --paginate` が途中ページ出力後に失敗した場合もパイプライン全体が非ゼロ終了する
-- 次アクション: 出力された JSON 配列そのものを `$files_json` として保持する（Bash 変数には JSON 配列文字列をそのまま入れる）。empty files の PR は `missing files` エラーで fail-fast する
+- 次アクション: 出力された JSON 配列そのものを `$files_json` として保持する（Bash 変数には JSON 配列文字列をそのまま入れる）。empty files の PR は `missing files` エラーで fail-fast する。このテンプレートが非ゼロ終了した場合（`missing files` を含む）は、その場で `date -u +%Y-%m-%dT%H:%M:%S+00:00` により `$finished_at` を取得し、Step 5 の failed 更新テンプレート（`$failed_stage=ranker`。`$head_sha` は取得済みのため `head_sha` キーを含む通常のテンプレート）を実行して、その回は終了する（#127）
 
 ```bash
 set -o pipefail && gh api repos/$org/$repository/pulls/$pr_number/files --paginate | jq -sce '[.[][] | .filename] | if length == 0 then error("missing files") else . end'
@@ -313,21 +333,53 @@ set -o pipefail && gh api repos/$org/$repository/pulls/$pr_number/files --pagina
 
 `$files_json` は 2つ目のテンプレートの標準出力そのままを JSON 配列文字列として保持したもの。`$repository_full_name` は canonical findings の `pr.repository` にそのまま使うが、必ず `.base.repo.full_name` 由来の投稿先 repo とし、`.head.repo.full_name` 由来の fork repo を入れてはならない。`$base_sha` は `pr.base_sha` と `metadata.json.base_sha` の両方に使う。`$merge_commit_sha` は empty string の場合に限り metadata では `null` に正規化してよい。`$title` / `$pr_url` は Search API や URL parse 由来の値より Step 2b の Pulls API 由来を優先する。抽出は Claude 側で 2 回の出力を読み取って変数へ分解する（シェル側で追加の `jq` パイプは挟まない。1 テンプレート = 1 シェル実行単位の原則に従う）。
 
-### Step 3: 作業ディレクトリの準備
+### Step 3: 選定確定（`state=running` 書き込み）と PR 差分の取得（fail-fast）
 
-- いつ使うか: Step 2 で対象PRを1件選定した直後に実行する
-- 判定条件: 作業ディレクトリが存在する
-- 次アクション: Desktop シンボリックリンク作成へ進む
+Step 2b の files 取得まで成功したら選定を確定する。作業ディレクトリと `$started_at` は Step 2b 進出確定直後に確保済みのため、ここでは再作成しない。まず `status.json` を `state=running` で作成し、選定確定後の全区間（PR 差分取得・CI artifact 再取得・clone・hunter 実行）で二重実行防止を有効にする（#127）。auto mode の CI success gate 不通過候補は Step 2b で `status.json` を書かずにスキップ済みのため、gate 不通過候補に「running から 30 分」の再評価ペナルティは発生しない。
+
+- いつ使うか: Step 2b の files 取得まで成功し、選定が確定した直後に必ず実行する（auto mode は CI success gate 通過済み。`$head_sha` / `$started_at` は確定済み）
+- 判定条件: `status.json` が `running` で作成され、`tasks/validate_status.py` を通過する
+- 次アクション: PR 差分の取得へ進む
 
 ```bash
-install -d ~/claude-loop-pr-codex/$org-$repository-$pr_number
+jq -n --arg started_at "$started_at" --arg head_sha "$head_sha" '{state:"running",started_at:$started_at,head_sha:$head_sha,stage:"ranker",failed_stage:null}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json && python3 "$plugin_root/tasks/validate_status.py" --data ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json
 ```
+
+続けて、PR 差分を unified diff として保存する。Step 4a / 4b のレビュー対象スコープ制御に使う。このテンプレートの入力は `$pr_number` / `$org` / `$repository` のみで clone に依存しないため、Step 3a の CI artifact 再取得・clone より前に実行し、diff 取得失敗をここで fail-fast に確定させる（#127。失敗 run の所要を数分から数十秒に抑える。成功パスの所要は作業の順番が変わるだけで不変）。
+
+- いつ使うか: `state=running` 書き込み直後、Step 3a の CI artifact 再取得・clone より前に必ず実行する（初回/再実行どちらも）
+- 判定条件: `pr.diff` が非空で生成される
+- 次アクション: コメント可能行範囲の抽出へ進む。`gh pr diff` が失敗または空出力の場合はここで非ゼロ終了し、Step 3a の CI artifact 再取得・clone は行わず、`date -u +%Y-%m-%dT%H:%M:%S+00:00` で `$finished_at` を取得してから Step 5 の failed 更新（`$failed_stage=ranker`）を実行して、その回は終了する。失敗の報告は下の「diff 取得失敗時の報告契約」に従う
+
+```bash
+gh pr diff $pr_number --repo $org/$repository > ~/claude-loop-pr-codex/$org-$repository-$pr_number/pr.diff && test -s ~/claude-loop-pr-codex/$org-$repository-$pr_number/pr.diff
+```
+
+`pr.diff` から GitHub Reviews API でコメント可能な新ファイル側 hunk 範囲を抽出し、`pr.diff.ranges.txt` として保存する。Step 4a / 4b のレビュー生成と Step 4c の統合時自己検証に使う。
+
+- いつ使うか: `pr.diff` 生成直後に必ず実行する
+- 判定条件: `pr.diff.ranges.txt` が作成される
+- 次アクション: Step 3a の CI artifact 再取得へ進む
+
+```bash
+test -f "$plugin_root/skills/lib/extract-diff-ranges.awk" && awk -f "$plugin_root/skills/lib/extract-diff-ranges.awk" ~/claude-loop-pr-codex/$org-$repository-$pr_number/pr.diff > ~/claude-loop-pr-codex/$org-$repository-$pr_number/pr.diff.ranges.txt
+```
+
+`plugin_root` はセットアップで自己解決済みの値を使う。`test -f` が失敗した場合は、セットアップの fallback block を再実行して plugin root を再解決し、まだ root を確定できない場合は silent な空ファイル生成を避けるため、`date -u` で `$finished_at` を取得してから Step 5 の failed 更新へ遷移する。
+
+#### diff 取得失敗時の報告契約（#127）
+
+`gh pr diff` の失敗（HTTP 406 等）を報告するときは、次の契約に従う。
+
+- `gh pr diff` の実エラー出力（stderr）を引用して報告する。ただし組織名・リポジトリ名・PR 番号・URL 等の識別子はサニタイズし、raw stderr はディスクに永続化しない（メモリ上で即サニタイズし、匿名化済みの診断だけを扱う）
+- HTTP 406 の場合は「一時エラーの可能性があります。`state=failed` は次回の /loop で自動的に再試行されます」と案内する
+- 原因を推測で断定しない。「恒久的」「変更ファイルが 300 件を超えているため」等の断定と、`files_changed` などサイズによる選定前スキップの改修提案を禁止する（ファイル数から 406 は予測できず、406 の真因は未特定。#127）
 
 ### Step 3a: CI read-only gate artifact の生成
 
 対象 PR の GitHub Actions / status checks を read-only で取得し、`ci-status.json` と `ci-summary.md` を生成する。ここでは GitHub への write、workflow rerun、cancel は行わない。`$target_mode == "auto"` では Step 2b の CI success gate で既に生成済みでも、review hunter を起動する直前に再取得して current head の状態を確認する。再取得した `ci-status.json.state` が `success` ではなくなっていた場合、この PR のレビューは開始せず、`status.json` を `running` に更新しないまま Step 2 の次候補へ戻る。`$target_mode == "direct"` では CI success gate としては扱わず、`failure` / `pending` も reviewer へ渡す context として記録してレビューを継続できる。`statusCheckRollup` が使えない古い `gh` 環境では、同じ `ci_status.py` に REST の `pulls/{number}` と checks/status endpoint の JSON を渡す fallback を使う。
 
-- いつ使うか: 作業ディレクトリ作成後、review hunter を起動する前に必ず実行する
+- いつ使うか: Step 3 の `pr.diff` / `pr.diff.ranges.txt` 生成成功後、review hunter を起動する前に必ず実行する
 - 判定条件: `ci-status.json` と `ci-summary.md` が生成され、`ci-status.json.policy.github_writes == false` / `rerun == false` / `cancel == false` である
 - 次アクション: `ci-status.json.state` を review/send/developer bridge の判断材料として保持する。`$target_mode == "auto"` で `success` 以外なら候補スキップとして Step 2 へ戻り、`$target_mode == "direct"` なら `failure` / `pending` を reviewer へコンテキストとして渡す。この step 自体で投稿や rerun はしない
 
@@ -360,7 +412,7 @@ python3 "$plugin_root/tasks/ci_status.py" \
   --out-md ~/claude-loop-pr-codex/$org-$repository-$pr_number/ci-summary.md
 ```
 
-- いつ使うか: 作業ディレクトリ作成後に実行する
+- いつ使うか: Step 3a の CI artifact 生成後に実行する
 - 判定条件: Desktop シンボリックリンクが存在する
 - 次アクション: clone の初回作成または更新へ進む
 
@@ -396,7 +448,7 @@ gh repo clone $org/$repository ~/claude-loop-pr-codex/$org-$repository-$pr_numbe
 
 - いつ使うか: 上の `clone-codex` 初回 clone 直後に実行する
 - 判定条件: `base_branch` が clone 内に fetch される
-- 次アクション: PR diff 生成テンプレートへ進む
+- 次アクション: `clone-claude` / `clone-codex` の準備完了として、既存レビューコメントの取得（下の pr-review-comments 取得）へ進む
 
 ```bash
 git -C ~/claude-loop-pr-codex/$org-$repository-$pr_number/clone-codex fetch origin $base_branch --depth 50
@@ -428,37 +480,15 @@ git -C ~/claude-loop-pr-codex/$org-$repository-$pr_number/clone-codex fetch orig
 
 - いつ使うか: 上の `clone-codex` 再実行 fetch/checkout 直後に実行する
 - 判定条件: `base_branch` が最新化される
-- 次アクション: PR diff 生成テンプレートへ進む
+- 次アクション: `clone-claude` / `clone-codex` の準備完了として、既存レビューコメントの取得（下の pr-review-comments 取得）へ進む
 
 ```bash
 git -C ~/claude-loop-pr-codex/$org-$repository-$pr_number/clone-codex fetch origin $base_branch --depth 50
 ```
 
-PR 差分を unified diff として保存する。Step 4a / 4b のレビュー対象スコープ制御に使う。
-
-- いつ使うか: 両 clone と base fetch が完了した直後に必ず実行する（初回/再実行どちらも）
-- 判定条件: `pr.diff` が非空で生成される
-- 次アクション: コメント可能行範囲の抽出へ進む。`gh pr diff` が失敗または空出力の場合はここで非ゼロ終了し、Step 5 の failed 更新へ遷移する
-
-```bash
-gh pr diff $pr_number --repo $org/$repository > ~/claude-loop-pr-codex/$org-$repository-$pr_number/pr.diff && test -s ~/claude-loop-pr-codex/$org-$repository-$pr_number/pr.diff
-```
-
-`pr.diff` から GitHub Reviews API でコメント可能な新ファイル側 hunk 範囲を抽出し、`pr.diff.ranges.txt` として保存する。Step 4a / 4b のレビュー生成と Step 4c の統合時自己検証に使う。
-
-- いつ使うか: `pr.diff` 生成直後に必ず実行する
-- 判定条件: `pr.diff.ranges.txt` が作成される
-- 次アクション: PR の説明文と既存レビューコメントの取得（下の pr-context 生成）へ進む
-
-```bash
-test -f "$plugin_root/skills/lib/extract-diff-ranges.awk" && awk -f "$plugin_root/skills/lib/extract-diff-ranges.awk" ~/claude-loop-pr-codex/$org-$repository-$pr_number/pr.diff > ~/claude-loop-pr-codex/$org-$repository-$pr_number/pr.diff.ranges.txt
-```
-
-`plugin_root` はセットアップで自己解決済みの値を使う。`test -f` が失敗した場合は、セットアップの fallback block を再実行して plugin root を再解決し、まだ root を確定できない場合は silent な空ファイル生成を避けるため Step 5 の failed 更新へ遷移する。
-
 続けて、PR の説明文と既存レビューコメントを read-only で取得し、hunter への追加文脈（sanitized context pack。子プロセスへ渡す前に親が整形した文脈まとめ）の材料として保存する。Step 4a / 4b の hunter には外部 MCP / ネットワークアクセスを与えないため、GitHub 由来のレビュー文脈は hunter 自身に取得させず、ここで親（メインコンテキスト）が取得して静的ファイルとして渡す。
 
-- いつ使うか: `pr.diff.ranges.txt` 生成直後に必ず実行する
+- いつ使うか: 両 clone と base fetch の完了直後に必ず実行する（初回/再実行どちらも）
 - 判定条件: 終了コード 0 で `pr-review-comments.json` が生成される（既存コメント 0 件なら空配列 `[]`）
 - 次アクション: `pr-context.md` の Write へ進む。このテンプレートが非ゼロ終了した場合（`set -o pipefail` により API / `jq` の失敗で非ゼロになる）は取得失敗として扱い、不完全な `pr-review-comments.json` は使わず、`pr-context.md` の該当セクションに `取得失敗` と明記してレビューを継続する（Step 5 の failed 更新へは遷移しない）
 
@@ -493,23 +523,9 @@ BEAR.Sunday 判定は `bear/sunday` dependency だけを見る。`bear/resource`
 - `pr.diff` は両ツール共通の「PR 差分の確定情報源」として Step 4 で参照される
 - `pr.diff.ranges.txt` は `pr.diff` から抽出した「コメント可能行範囲」の確定情報源として Step 4 で参照される
 
-以下の `status.json` / `metadata.json` / `run-plan.json` は Bash で作成する（`jq -n --arg` / `--argjson` / `--slurpfile` / `--rawfile` の出力を `>` でリダイレクト）。`findings.candidates.json` は Step 4c で `merge_hunter_results.py` の `--output` により `*.tmp` として生成し、`findings.verified.json` / `validation-report.json` / `review-rounds.json` / `review.md` は Step 4c で `Write` ツールを使い、runtime gate 通過後に final path へ反映する。
+以下の `metadata.json` / `run-plan.json` は Bash で作成する（`jq -n --arg` / `--argjson` / `--slurpfile` / `--rawfile` の出力を `>` でリダイレクト）。`status.json` は Step 3 で選定確定直後に `state=running` として作成済みであり、`$started_at` も Step 2b 進出確定直後に取得済みの値を使う（#127）。`findings.candidates.json` は Step 4c で `merge_hunter_results.py` の `--output` により `*.tmp` として生成し、`findings.verified.json` / `validation-report.json` / `review-rounds.json` / `review.md` は Step 4c で `Write` ツールを使い、runtime gate 通過後に final path へ反映する。
 
-まず現在時刻を取得する（出力を `$started_at` として保持する）。
-
-```bash
-date -u +%Y-%m-%dT%H:%M:%S+00:00
-```
-
-- いつ使うか: 作業ディレクトリと clone の準備完了後に実行する
-- 判定条件: `status.json` が `running` で作成され、`tasks/validate_status.py` を通過する
-- 次アクション: metadata 作成へ進む
-
-```bash
-jq -n --arg started_at "$started_at" --arg head_sha "$head_sha" '{state:"running",started_at:$started_at,head_sha:$head_sha,stage:"ranker",failed_stage:null}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json && python3 "$plugin_root/tasks/validate_status.py" --data ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json
-```
-
-- いつ使うか: `status.json` 作成後に実行する
+- いつ使うか: Step 3b の BEAR.Sunday 判定の直後に必ず実行する
 - 判定条件: `metadata.json` が作成される
 - 次アクション: `run-plan.json` 作成へ進む
 
@@ -1214,12 +1230,20 @@ jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" --arg head
 ```
 
 - いつ使うか: Step 4a または 4b が timeout / 非ゼロ終了した場合、権限不足などで処理継続不可の場合、**または Step 4c の `merge_hunter_results.py` が `HUNTER_DIFF_UNAVAILABLE`（終了コード 3）を返した場合、もしくは hunter result の schema 不適合が 1 回の再実行でも解消しなかった場合**に実行する
-- 事前条件: `$failed_stage` を `ranker` / `hunter` / `verifier` / `explainer` のいずれか 1 つに設定する。metadata/files/diff/run-plan 生成失敗は `ranker`、4a/4b timeout/非ゼロ/`HUNTER_DIFF_UNAVAILABLE`/hunter result schema 不適合/candidate validation 失敗は `hunter`、3軸/range/fingerprint/Must Fix 件数/`findings.verified.json` validator 失敗は `verifier`、temp write または temp→final `mv` 失敗は `explainer` とする
+- 事前条件: `$failed_stage` を `ranker` / `hunter` / `verifier` / `explainer` のいずれか 1 つに設定する。metadata/files/diff/run-plan 生成失敗は `ranker`、4a/4b timeout/非ゼロ/`HUNTER_DIFF_UNAVAILABLE`/hunter result schema 不適合/candidate validation 失敗は `hunter`、3軸/range/fingerprint/Must Fix 件数/`findings.verified.json` validator 失敗は `verifier`、temp write または temp→final `mv` 失敗は `explainer` とする。また、必ず直前に `date -u +%Y-%m-%dT%H:%M:%S+00:00` で `$finished_at` を取得してから実行する（`$finished_at` の取得は正常系 Step 5 冒頭だけでなく、Step 2b の metadata / files 取得失敗・Step 3 の diff 取得失敗・clone 失敗・Step 3a の CI artifact 再取得失敗を含む、すべての failed 分岐で必須。#127）
 - 判定条件: `status.json` の `state` が `failed` かつ `failed_stage` が `$failed_stage` と一致し、`tasks/validate_status.py` を通過する
 - 次アクション: Step 6 の結果報告へ進む
 
 ```bash
 jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" --arg head_sha "$head_sha" --arg failed_stage "$failed_stage" '{state:"failed",started_at:$started_at,finished_at:$finished_at,exit_code:1,head_sha:$head_sha,stage:$failed_stage,failed_stage:$failed_stage}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json && python3 "$plugin_root/tasks/validate_status.py" --data ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json
+```
+
+- いつ使うか: Step 2b の metadata 取得失敗などで `$head_sha` が未取得のまま `state=failed` を記録する場合に、上のテンプレートの代わりに実行する。`validate_status.py` は `head_sha` を「存在する場合のみ検証する」optional キーとして扱うため、未取得時は空文字列を渡さず `head_sha` キー自体を省略する（#127）
+- 判定条件: `status.json` の `state` が `failed` かつ `failed_stage` が `$failed_stage` と一致し、`tasks/validate_status.py` を通過する
+- 次アクション: Step 6 の結果報告へ進む
+
+```bash
+jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" --arg failed_stage "$failed_stage" '{state:"failed",started_at:$started_at,finished_at:$finished_at,exit_code:1,stage:$failed_stage,failed_stage:$failed_stage}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json && python3 "$plugin_root/tasks/validate_status.py" --data ~/claude-loop-pr-codex/$org-$repository-$pr_number/status.json
 ```
 
 ### Step 6: 結果報告
@@ -1230,7 +1254,7 @@ jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" --arg head
 - レビュー結果のサマリ（総評 / 重大な問題 / 改善提案 から要約）
 - 結果ファイルのパス
 - いつ使うか: Step 5 の status 更新後
-- 次アクション: completed の場合は `review.md` / `metadata.json` / `findings.verified.json` を Read ツールで読み、failed の場合は `status.json` と失敗 stage を確認し、以下の内容をユーザーにテキストで報告して終了する
+- 次アクション: completed の場合は `review.md` / `metadata.json` / `findings.verified.json` を Read ツールで読み、failed の場合は `status.json` と失敗 stage を確認し、以下の内容をユーザーにテキストで報告して終了する。diff 取得失敗（`gh pr diff` の失敗または空出力）の報告は Step 3 の「diff 取得失敗時の報告契約」（#127）に従う: サニタイズ済みの実エラー出力を引用し、HTTP 406 は「一時エラーの可能性があります。`state=failed` は次回の /loop で自動的に再試行されます」と案内し、原因の推測断定（「恒久的」「300 件制限のため」等）とサイズによる選定前スキップの提案をしない
   - 対象PR（`$pr_url` のリンク付き）
   - レビュー結果の要約（総評 + 重大な問題の件数と代表例、改善提案の件数を含める）
   - 結果ファイルのパス（`~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.verified.json`、`~/claude-loop-pr-codex/$org-$repository-$pr_number/review-rounds.json`、`~/claude-loop-pr-codex/$org-$repository-$pr_number/review.md`）
@@ -1332,9 +1356,9 @@ auto-send phase が失敗した場合は、review 自体は completed のまま�
 F4 stage reporting として、failed 分岐では必ず `$failed_stage` を 1 つ選び `status.json.failed_stage` に残す。ranker は Step 2b/3 preflight、hunter は Step 4a/4b と `findings.candidates.json`、verifier は `findings.verified.json` の gate、explainer は `review.md` 派生と temp→final 反映を表す。
 
 - PRがclosed/merged → `skipped` としてログに記録し、次の候補へ進む
-- Step 2b の metadata `gh api --jq` / files `jq -sce` で `missing repository_full_name / head_sha / base_sha / branch / base_branch / files` が出た → `state=failed` で記録し、その回は終了（PR メタデータまたは変更ファイル一覧が必須フィールドを欠いているため信頼できるレビュー不可）
-- Step 3 の `gh pr diff` が失敗または空出力（`pr.diff` 未生成） → `state=failed` で記録し、その回は終了（PR 差分スコープが確定できないため Step 4 に進まない）
-- Step 3 の `run-plan.json` 生成が失敗 → `state=failed` で記録し、その回は終了（preflight 指標が欠落したまま Step 4 に進まない）
+- Step 2b の metadata `gh api --jq` / files `jq -sce` で `missing repository_full_name / head_sha / base_sha / branch / base_branch / files` が出た → その場で `date -u` により `$finished_at` を取得し、`state=failed` で記録して、その回は終了（PR メタデータまたは変更ファイル一覧が必須フィールドを欠いているため信頼できるレビュー不可）。metadata 失敗で `$head_sha` が未取得の場合は `head_sha` キーを省略した failed 更新テンプレートを使う（#127）
+- Step 3 の `gh pr diff` が失敗または空出力（`pr.diff` 未生成） → `date -u` により `$finished_at` を取得し、`state=failed` で記録して、その回は終了（PR 差分スコープが確定できないため Step 4 に進まない。Step 3a の CI artifact 再取得・clone は行わない fail-fast。報告は Step 3 の「diff 取得失敗時の報告契約」に従う。#127）
+- Step 3b 後の `run-plan.json` 生成が失敗 → `state=failed` で記録し、その回は終了（preflight 指標が欠落したまま Step 4 に進まない）
 - Step 5 の `run-plan.json` 追記更新が失敗 → `state=completed` を先に確定せず `state=failed` で記録し、その回は終了（壊れた `run-plan.json` を completed 扱いで残さない）
 - `claude -p` がタイムアウト（20分） → `state=failed` で記録
 - `claude -p` が非ゼロ終了 → `state=failed` で記録
@@ -1388,7 +1412,7 @@ $CLAUDE_PLUGIN_ROOT/schemas/
         ├── run-plan.json        ← preflight 指標と routing_decision。Step 5 成功時に actual_duration_ms / actual_tokens を追記
         ├── pr.diff              ← PR 差分 (unified diff)。Step 4a/4b のスコープ確定情報源
         ├── pr.diff.ranges.txt   ← コメント可能行範囲。Step 4a/4b と Step 4c の行番号検証に使う
-        ├── pr-review-comments.json ← 既存レビューコメントの read-only 取得結果（Step 3。hunter 追加文脈の材料）
+        ├── pr-review-comments.json ← 既存レビューコメントの read-only 取得結果（Step 3a。hunter 追加文脈の材料）
         ├── pr-context.md        ← hunter への sanitized context pack（PR 説明文・既存レビューコメントの転記。untrusted）
         ├── clone-claude/        ← Claude Code 用 shallow clone (depth 50, base fetch 済み)
         ├── clone-codex/         ← Codex CLI 用 shallow clone (depth 50, base fetch 済み)
@@ -1429,7 +1453,7 @@ F11 の regression eval (`score_fixture.py` / `m1_m2_gate.py`) は通常の `/pr
 5. JSON 生成は `jq -n --arg` / `--argjson` / `--slurpfile` / `--rawfile` を使う。ヒアドキュメントで JSON を直接組み立てない
 6. ファイル書き込みの使い分け:
    - `hunter-claude-prompt.md` / `hunter-codex-prompt.md` / `pr-context.md` / `findings.verified.json.tmp` / `validation-report.json.tmp` / `review-rounds.json.tmp` / `review.md.tmp` / `fingerprint-material.json` は `Write` ツールで書き出し、`findings.candidates.json.tmp` は `merge_hunter_results.py` の `--output` で、`findings.sarif.tmp` は `generate_findings_sarif.py` の `--output` で書き出し、gate 通過後に `mv` で final name へ反映する（`fingerprint-material.json` は mv 対象外の作業ファイル。`file_path` は `~` / `$...` を展開しないため、実値の絶対パスを渡す）
-   - `pr.diff.ranges.txt` は Step 3 の `awk` の標準出力を、`pr-review-comments.json` は Step 3 の `gh api --paginate | jq -sc` の標準出力を `>` でリダイレクトして作成する
+   - `pr.diff.ranges.txt` は Step 3 の `awk` の標準出力を、`pr-review-comments.json` は Step 3a の `gh api --paginate | jq -sc` の標準出力を `>` でリダイレクトして作成する
    - `claude-review.json` / `claude.log` は Step 4a の標準出力・標準エラーを `>` / `2>` でリダイレクトして作成し、`codex-review.json` は Step 4b の `--output-last-message` で、`codex.log` は Step 4b の標準出力・標準エラーを `> ... 2>&1` でまとめて作成する
 7. Step 4a / 4b は `run_in_background: true` で起動し、foreground timeout 引数を `1200000` に固定してはならない。Claude Code Bash tool の foreground timeout 上限 600000 ms を超える実行予算は `run-plan.json.estimated_timeout_ms` / `review_loop.time_budget_ms` として扱い、完了通知待ちで管理する
 8. テンプレートに明示された `git fetch` / `git checkout FETCH_HEAD` / `jq -e '.require | has("bear/sunday")' ...` / `python3 "$plugin_root/tasks/merge_hunter_results.py" ...` / `python3 "$plugin_root/tasks/validate_candidates.py" ...` / `python3 "$plugin_root/tasks/validate_findings.py" ...` / `python3 "$plugin_root/tasks/generate_findings_sarif.py" ...` / `python3 "$plugin_root/tasks/validate_findings_sarif.py" ...` / `python3 "$plugin_root/tasks/validate_status.py" ...` / temp file から final artifact への `mv` / 成果物ファイル作成以外の状態変更操作は実行しない。`$auto_send=true` の Step 6.5 だけは、send 側 Step 6 の `gh api --method POST "/repos/$org/$repository/pulls/$pr_number/reviews"` と Step 7 の `sent/` 移動を許可する。禁止例: `git push` / `git merge` / `git reset --*` / `git clean -fd[x]` / `git stash` / `git commit` / `git tag` / `git branch -D`、`rm -rf` 系、`gh pr review` / `gh pr comment` / `gh pr merge` / `gh issue` の write 操作、および GitHub / Backlog / DocBase の write 系 MCP ツール
