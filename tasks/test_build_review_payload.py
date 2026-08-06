@@ -426,7 +426,7 @@ class BuildReviewPayloadTest(unittest.TestCase):
                 )
                 self.assertEqual(manifest["semantic_targets"], [identifier])
                 self.assertIn(
-                    "投稿前検証 (semantic preflight) は Codex gpt-5.6-sol (high) により行われました。",
+                    "投稿前検証 (semantic preflight) は Codex gpt-5.6-sol により行われました。",
                     payload["body"],
                 )
                 self.assertEqual(manifest["counts"]["must_fix_withheld"], 1)
@@ -796,8 +796,8 @@ class BuildReviewPayloadTest(unittest.TestCase):
         self.assertNotIn("Nit", body)
 
     def test_body_always_ends_with_automated_review_footer(self) -> None:
-        hunter_line = "レビューは Claude Code claude-fable-5 (max) と Codex gpt-5.6-sol (max) により行われました。"
-        verifier_line = "投稿前検証 (semantic preflight) は Codex gpt-5.6-sol (high) により行われました。"
+        hunter_line = "レビューは Claude Code claude-fable-5 と Codex gpt-5.6-sol により行われました。"
+        verifier_line = "投稿前検証 (semantic preflight) は Codex gpt-5.6-sol により行われました。"
         cases = (
             ("approve-skips-verifier", [], hunter_line),
             ("request-changes-shows-verifier", [finding("far-away", start_line=120)], f"{hunter_line}\n{verifier_line}"),
@@ -822,38 +822,26 @@ class BuildReviewPayloadTest(unittest.TestCase):
             self.assertNotIn("(xhigh)", body)
             self.assertEqual(verified.returncode, 0, verified.stderr)
 
-    def test_footer_normalizes_only_max_tier_effort_labels(self) -> None:
-        legacy_metadata = metadata()
-        legacy_metadata["review_engines"][1]["effort"] = "xhigh"
-        with tempfile.TemporaryDirectory() as tmp:
-            completed, payload_path, _, _ = self.run_build(
-                Path(tmp), artifact([]), metadata_data=legacy_metadata
-            )
-            self.assertEqual(completed.returncode, 0, completed.stderr)
-            body = json.loads(payload_path.read_text(encoding="utf-8"))["body"]
-
-        self.assertIn(
-            "レビューは Claude Code claude-fable-5 (max) と Codex gpt-5.6-sol (max) により行われました。",
-            body,
+    def test_footer_never_renders_effort(self) -> None:
+        # effort は確定できないため、記録値に関係なくフッターに表示しない (#128)。
+        effort_free_line = "レビューは Claude Code claude-fable-5 と Codex gpt-5.6-sol により行われました。"
+        cases = (
+            ("current-max", "max"),
+            ("legacy-xhigh", "xhigh"),
+            ("custom-medium", "medium"),
         )
-        self.assertNotIn("(xhigh)", body)
+        for name, codex_effort in cases:
+            custom_metadata = metadata()
+            custom_metadata["review_engines"][1]["effort"] = codex_effort
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                completed, payload_path, _, _ = self.run_build(
+                    Path(tmp), artifact([]), metadata_data=custom_metadata
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                body = json.loads(payload_path.read_text(encoding="utf-8"))["body"]
 
-        custom_metadata = metadata()
-        custom_metadata["review_engines"] = [
-            {"name": "Claude Code", "model": "claude-fable-5", "effort": "max"},
-            {"name": "Codex", "model": "gpt-5.6-sol", "effort": "medium"},
-        ]
-        with tempfile.TemporaryDirectory() as tmp:
-            completed, payload_path, _, _ = self.run_build(
-                Path(tmp), artifact([]), metadata_data=custom_metadata
-            )
-            self.assertEqual(completed.returncode, 0, completed.stderr)
-            body = json.loads(payload_path.read_text(encoding="utf-8"))["body"]
-
-        self.assertIn(
-            "レビューは Claude Code claude-fable-5 (max) と Codex gpt-5.6-sol (medium) により行われました。",
-            body,
-        )
+            self.assertIn(effort_free_line, body)
+            self.assertNotIn(f"({codex_effort})", body)
 
     def test_manifest_hashes_all_required_files_and_verify_detects_tampering(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

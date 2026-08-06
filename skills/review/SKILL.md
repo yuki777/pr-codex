@@ -533,7 +533,7 @@ BEAR.Sunday 判定は `bear/sunday` dependency だけを見る。`bear/resource`
 
 `$claude_model` は、Claude CLI が full model name として受け付ける `claude-fable-5` に固定する。Step 4a の Claude hunter はこの同じ値を `--model "$claude_model"` で明示指定して実行するため、`review_engines` の記録値と hunter の実行モデルは常に一致する（#124）。CLI の既定値やメインコンテキストのモデルを推測してはならない。モデルを変更する場合は直後の代入を明示的に更新し、値が無効な場合は Step 4a の CLI エラーから Step 5 の failed 更新へ遷移する（誤った記録のまま投稿へ進まない）。
 
-`review_engines` は Step 4a / 4b の実行構成（Claude Code: `--model "$claude_model"` + `--effort max`、Codex: `-m gpt-5.6-sol` + `model_reasoning_effort="max"`）を send の投稿フッター用に記録する配列である（#124）。effort は両 hunter とも最大値に固定する（現在はいずれも `max`）。4a / 4b のコマンドテンプレートのモデル・effort を変更する場合は、この `review_engines` の値も併せて更新する。記録する effort は実行リテラルのままとし、send の builder は旧 artifact に残る `xhigh` も表示時だけ最大 tier の `max` へ正規化する（#124）。
+`review_engines` は Step 4a / 4b の実行構成（Claude Code: `--model "$claude_model"` + `--effort max`、Codex: `-m gpt-5.6-sol` + `model_reasoning_effort="max"`）を send の投稿フッター用に記録する配列である（#124）。effort は両 hunter とも最大値に固定する（現在はいずれも `max`）。4a / 4b のコマンドテンプレートのモデル・effort を変更する場合は、この `review_engines` の値も併せて更新する。記録する effort は実行リテラルのままとする。ただし実行時の実効 effort は投稿時点で確定できないため、send の builder はフッターに effort を表示せず、記録の検証にだけ使う（フッターに表示するのは name と model のみ。#128）。
 
 ```bash
 claude_model="claude-fable-5"
@@ -1412,7 +1412,7 @@ $CLAUDE_PLUGIN_ROOT/schemas/
 ~/claude-loop-pr-codex/
   └── $org-$repository-$pr_number/
         ├── status.json
-        ├── metadata.json        ← org/repository/repository_full_name/pr_number/pr_url/head_sha/base_sha/branch/base_branch/merge_commit_sha/title/files/review_engines (投稿フッター用のモデル・effort 記録。#124) を含む
+        ├── metadata.json        ← org/repository/repository_full_name/pr_number/pr_url/head_sha/base_sha/branch/base_branch/merge_commit_sha/title/files/review_engines (投稿フッター用のモデル記録。effort は記録のみで表示しない。#124, #128) を含む
         ├── run-plan.json        ← preflight 指標。Step 5 成功時に actual_duration_ms / actual_tokens / review_loop.round_metrics を追記
         ├── run-plan.json        ← preflight 指標と routing_decision。Step 5 成功時に actual_duration_ms / actual_tokens を追記
         ├── pr.diff              ← PR 差分 (unified diff)。Step 4a/4b のスコープ確定情報源

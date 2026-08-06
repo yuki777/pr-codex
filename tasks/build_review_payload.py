@@ -18,16 +18,14 @@ SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 MUST_FIX_HEADING = "## 重大な問題 (Must Fix)"
 DEFAULT_REVIEW_SCOPE = "2者レビュー (Claude/Codex hunter) + verifier 3軸 gate"
 PR_CODEX_REPO_URL = "https://github.com/yuki777/pr-codex"
-# send Step 4.5 semantic preflight engine. Must match the `-m` /
-# `model_reasoning_effort` literals in skills/send/SKILL.md; the pairing is
-# enforced by tasks/test_issue124_docs.py.
-SEMANTIC_VERIFIER_ENGINE = ("Codex", "gpt-5.6-sol", "high")
+# send Step 4.5 semantic preflight engine. Must match the `-m` literal in
+# skills/send/SKILL.md; the pairing is enforced by tasks/test_issue124_docs.py.
+# The effort is recorded nowhere here: footers never render efforts because
+# the effective effort cannot be confirmed at posting time (issue #128).
+SEMANTIC_VERIFIER_ENGINE = ("Codex", "gpt-5.6-sol")
 # review Step 3 records the two unconditional hunters in execution order.
 # The footer must not claim a partial, duplicated, or unknown reviewer set.
 REQUIRED_REVIEW_ENGINE_NAMES = ("Claude Code", "Codex")
-# Human-facing effort labels: current hunters record "max" directly. Keep the
-# legacy xhigh mapping so older metadata still renders the maximum tier as max.
-EFFORT_DISPLAY_LABELS = {"xhigh": "max"}
 MANIFEST_REQUIRED_ROLES = ("findings", "review", "metadata", "ranges", "payload")
 MANIFEST_OPTIONAL_ROLES = ("sarif", "diff", "ci_status", "run_plan", "ci_summary")
 MANIFEST_COUNT_KEYS = (
@@ -554,21 +552,15 @@ def compose_posted_summary(
     return "\n".join(lines)
 
 
-def display_effort(effort: str) -> str:
-    """Return the human-facing label for an engine effort literal."""
-
-    return EFFORT_DISPLAY_LABELS.get(effort, effort)
-
-
 def compose_review_footer(findings_data: dict[str, Any], metadata_data: dict[str, Any], must_fix_total: int) -> str:
     """Compose the automated-review footer appended to every posted body (issue #124).
 
     validate_build_inputs guarantees producer.version and review_engines are
     present and well-formed, so the footer always discloses the pr-codex
-    version and every hunter engine with its model and effort; deficient
-    inputs fail the build (fail-closed) instead of degrading the disclosure.
-    Each CLI's maximum effort tier is displayed as "max" while metadata keeps
-    the exact execution literal (legacy Codex metadata may record "xhigh").
+    version and every hunter engine with its model; deficient inputs fail
+    the build (fail-closed) instead of degrading the disclosure. Efforts stay
+    in metadata as execution records but are never rendered: the effective
+    effort cannot be confirmed at posting time (issue #128).
 
     The semantic-preflight verifier line appears exactly when must_fix_total
     >= 1: send Step 4.5 always runs the Codex semantic preflight for such
@@ -581,7 +573,7 @@ def compose_review_footer(findings_data: dict[str, Any], metadata_data: dict[str
 
     version = findings_data["producer"]["version"].strip()
     rendered = [
-        f"{engine['name'].strip()} {engine['model'].strip()} ({display_effort(engine['effort'].strip())})"
+        f"{engine['name'].strip()} {engine['model'].strip()}"
         for engine in metadata_data["review_engines"]
     ]
     lines = [
@@ -589,10 +581,9 @@ def compose_review_footer(findings_data: dict[str, Any], metadata_data: dict[str
         f"レビューは {' と '.join(rendered)} により行われました。",
     ]
     if must_fix_total >= 1:
-        verifier_name, verifier_model, verifier_effort = SEMANTIC_VERIFIER_ENGINE
+        verifier_name, verifier_model = SEMANTIC_VERIFIER_ENGINE
         lines.append(
-            f"投稿前検証 (semantic preflight) は {verifier_name} {verifier_model} "
-            f"({display_effort(verifier_effort)}) により行われました。"
+            f"投稿前検証 (semantic preflight) は {verifier_name} {verifier_model} により行われました。"
         )
     return "---\n\n" + "\n".join(lines)
 
