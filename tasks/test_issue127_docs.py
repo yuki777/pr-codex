@@ -138,6 +138,35 @@ class Issue127DocsTest(unittest.TestCase):
         # 旧契約（running 未書き込み前提のスキップ文言）が残っていないこと。
         self.assertNotIn("`status.json` を `running` に更新しないまま", self.skill)
 
+    def test_step3a_tool_and_clone_failures_close_running(self) -> None:
+        # running 書き込み後の CI artifact 再取得・clone / fetch / checkout の
+        # 非ゼロ終了でも、$finished_at 取得 → failed 更新で running を必ず閉じる。
+        ci_refetch_failure = (
+            "このテンプレート（または下の旧 `gh` fallback）自体が非ゼロ終了した場合"
+            "（`gh api` / `gh pr view` / `ci_status.py` / policy `jq -e` の失敗。CI artifact 再取得失敗）は、"
+            "`date -u +%Y-%m-%dT%H:%M:%S+00:00` で `$finished_at` を取得してから"
+            " Step 5 の failed 更新（`$failed_stage=ranker`）を実行して"
+            " Step 3 で書いた `running` を必ず閉じ、その回は終了する（#127）"
+        )
+        clone_failure = (
+            "これ以降の clone / fetch / checkout テンプレート（初回・再実行のどちらも）の"
+            "いずれかが非ゼロ終了した場合（clone 失敗）は、"
+            "`date -u +%Y-%m-%dT%H:%M:%S+00:00` で `$finished_at` を取得してから"
+            " Step 5 の failed 更新（`$failed_stage=ranker`）を実行して"
+            " Step 3 で書いた `running` を必ず閉じ、その回は終了する（#127）。"
+        )
+        for snippet in (
+            ci_refetch_failure,
+            clone_failure,
+            "- Step 3a の CI artifact 再取得テンプレート（旧 `gh` fallback を含む）が非ゼロ終了した（`gh api` / `gh pr view` / `ci_status.py` / policy `jq -e` の失敗） → `date -u` により `$finished_at` を取得し、`state=failed`（`failed_stage=ranker`）で記録して Step 3 で書いた `running` を必ず閉じ、その回は終了（#127）",
+            "- Step 3a の clone / fetch / checkout テンプレート（初回・再実行のどちらも）が非ゼロ終了した（clone 失敗） → `date -u` により `$finished_at` を取得し、`state=failed`（`failed_stage=ranker`）で記録して Step 3 で書いた `running` を必ず閉じ、その回は終了（#127）",
+            # failed_stage の割当表にも ranker として明記されていること。
+            "metadata/files/diff/run-plan 生成失敗・Step 3a の CI artifact 再取得失敗・clone / fetch / checkout 失敗は `ranker`",
+        ):
+            self.assertIn(snippet, self.skill)
+        # clone 失敗契約は最初の clone テンプレートより前に書かれていること。
+        self.assertLess(self.skill.index(clone_failure), self.skill.index(FIRST_CLONE_TEMPLATE))
+
     def test_diff_failure_report_contract(self) -> None:
         for snippet in (
             "#### diff 取得失敗時の報告契約（#127）",
