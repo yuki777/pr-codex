@@ -23,13 +23,13 @@ class Issue124DocsTest(unittest.TestCase):
             "body 末尾に必ず自動レビューのフッターを追加する（#124）",
             "`findings.verified.json` の `producer.version` と `metadata.json.review_engines[]`",
             "これは [pr-codex](https://github.com/yuki777/pr-codex):v<producer.version> による自動レビューです。",
-            "レビューは <name> <model> (<effort>) と <name> <model> (<effort>) により行われました。",
-            "投稿前検証 (semantic preflight) は Codex gpt-5.6-sol (high) により行われました。",
+            "レビューは <name> <model> と <name> <model> により行われました。",
+            "投稿前検証 (semantic preflight) は Codex gpt-5.6-sol により行われました。",
             "欠落・不正なら deterministic failure として非ゼロ終了する（フッターを省略した投稿は行わない fail-closed。#124）",
             "3 行目（投稿前検証）は `counts.must_fix_total` が 1 件以上の場合のみ builder が追加する",
             "Must Fix 0 件の skip 時は表示しない",
             "`withheld` の存在・件数・カテゴリを新たに公開しない（#120 と整合）",
-            "表示する effort は CLI 語彙の最大 tier を `max` に正規化する",
+            "effort はどのフッター行にも表示しない",
             "`review_engines[]` は実行順の `Claude Code`、`Codex` の2件ちょうど",
             "→ 自動レビューフッター（常に最終セクション。#124）とする",
         ):
@@ -44,7 +44,7 @@ class Issue124DocsTest(unittest.TestCase):
             "`review_engines` の記録値と hunter の実行モデルは常に一致する（#124）",
             "effort は両 hunter とも最大値に固定する",
             "4a / 4b のコマンドテンプレートのモデル・effort を変更する場合は、この `review_engines` の値も併せて更新する",
-            "send の builder は旧 artifact に残る `xhigh` も表示時だけ最大 tier の `max` へ正規化する（#124）",
+            "send の builder はフッターに effort を表示せず、記録の検証にだけ使う（フッターに表示するのは name と model のみ。#128）",
         ):
             self.assertIn(snippet, skill)
 
@@ -90,7 +90,7 @@ class Issue124DocsTest(unittest.TestCase):
         builder = BUILDER.read_text(encoding="utf-8")
         skill = SEND_SKILL.read_text(encoding="utf-8")
 
-        constant = re.search(r'SEMANTIC_VERIFIER_ENGINE = \("([^"]+)", "([^"]+)", "([^"]+)"\)', builder)
+        constant = re.search(r'SEMANTIC_VERIFIER_ENGINE = \("([^"]+)", "([^"]+)"\)', builder)
         self.assertIsNotNone(constant, "builder must pin the send Step 4.5 verifier engine")
         self.assertEqual(constant.group(1), "Codex")
 
@@ -98,13 +98,10 @@ class Issue124DocsTest(unittest.TestCase):
         self.assertEqual(len(send_models), 1, send_models)
         self.assertEqual(constant.group(2), send_models[0])
 
-        send_efforts = set(EFFORT_OVERRIDE_RE.findall(skill))
-        self.assertEqual(send_efforts, {constant.group(3)})
-
     def test_readme_documents_footer(self) -> None:
         readme = README.read_text(encoding="utf-8")
         for snippet in (
-            "自動レビューフッターの付加（body 末尾に pr-codex のバージョン（`producer.version`）とレビューに使ったモデル・effort（実行順の `Claude Code`、`Codex` の2件ちょうどを要求する `metadata.json.review_engines`）を明記し、Must Fix があり Step 4.5 の semantic preflight を実行する投稿では検証側モデル・effort も表示する。欠落・不正なら builder が非ゼロ終了する fail-closed。#124）",
+            "自動レビューフッターの付加（body 末尾に pr-codex のバージョン（`producer.version`）とレビューに使ったモデル（実行順の `Claude Code`、`Codex` の2件ちょうどを要求する `metadata.json.review_engines`）を明記し、Must Fix があり Step 4.5 の semantic preflight を実行する投稿では検証側モデルも表示する。effort は確定できないため表示しない（#128）。欠落・不正なら builder が非ゼロ終了する fail-closed。#124）",
             "Codex CLI 側のレビュー (hunter) は、スキル内で `-m gpt-5.6-sol` と `model_reasoning_effort=\"max\"` を指定して実行する（#124）",
         ):
             self.assertIn(snippet, readme)

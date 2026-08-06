@@ -484,15 +484,15 @@ builder は以下のルールを実装している:
     - 理由: <理由文>
     - 提案: <提案文>
     ```
-  - body 末尾に必ず自動レビューのフッターを追加する（#124）。builder が `findings.verified.json` の `producer.version` と `metadata.json.review_engines[]`（`{name, model, effort}` の配列。review 側 Step 3 が記録）から決定論的に生成する:
+  - body 末尾に必ず自動レビューのフッターを追加する（#124）。builder が `findings.verified.json` の `producer.version` と `metadata.json.review_engines[]`（`{name, model, effort}` の配列。review 側 Step 3 が記録。`effort` は記録のみでフッターには表示しない #128）から決定論的に生成する:
     ```
     ---
     これは [pr-codex](https://github.com/yuki777/pr-codex):v<producer.version> による自動レビューです。
-    レビューは <name> <model> (<effort>) と <name> <model> (<effort>) により行われました。
-    投稿前検証 (semantic preflight) は Codex gpt-5.6-sol (high) により行われました。
+    レビューは <name> <model> と <name> <model> により行われました。
+    投稿前検証 (semantic preflight) は Codex gpt-5.6-sol により行われました。
     ```
     builder は `producer.version` と `review_engines[]` を必須入力として検証する。`review_engines[]` は実行順の `Claude Code`、`Codex` の2件ちょうどで、各要素の `name` / `model` / `effort` がすべて非空文字列でなければならない。欠落・不正なら deterministic failure として非ゼロ終了する（フッターを省略した投稿は行わない fail-closed。#124）。`review_engines` 記録前の旧バージョン review artifact を send する場合は、`/pr-codex:review` を再実行して metadata を再生成する。
-    3 行目（投稿前検証）は `counts.must_fix_total` が 1 件以上の場合のみ builder が追加する。Step 4.5 の semantic preflight は Must Fix があるときだけ実行され、失敗時は投稿自体が中止されるため、投稿された body の表示は常に実行事実と一致する。Must Fix 0 件の skip 時は表示しない。文言に Must Fix を含めず、行の有無は event（`REQUEST_CHANGES` ⇔ Must Fix 1 件以上）と等価な情報のみで、`withheld` の存在・件数・カテゴリを新たに公開しない（#120 と整合）。verifier は send 実行時の構成のため `metadata.json` には記録せず、builder 同梱の固定値 `SEMANTIC_VERIFIER_ENGINE` を使う。Step 4.5 の Codex テンプレートのモデル・effort を変更する場合は builder の固定値も併せて更新する（`tasks/test_issue124_docs.py` が一致を検証する）。表示する effort は CLI 語彙の最大 tier を `max` に正規化する（現行 hunter の実行値・記録値は `max`。旧 artifact の `xhigh` も builder の `EFFORT_DISPLAY_LABELS` で `max` と表示し、最大 tier 以外（semantic preflight の `high` 等）は実値のまま表示する）
+    3 行目（投稿前検証）は `counts.must_fix_total` が 1 件以上の場合のみ builder が追加する。Step 4.5 の semantic preflight は Must Fix があるときだけ実行され、失敗時は投稿自体が中止されるため、投稿された body の表示は常に実行事実と一致する。Must Fix 0 件の skip 時は表示しない。文言に Must Fix を含めず、行の有無は event（`REQUEST_CHANGES` ⇔ Must Fix 1 件以上）と等価な情報のみで、`withheld` の存在・件数・カテゴリを新たに公開しない（#120 と整合）。verifier は send 実行時の構成のため `metadata.json` には記録せず、builder 同梱の固定値 `SEMANTIC_VERIFIER_ENGINE` を使う。Step 4.5 の Codex テンプレートのモデルを変更する場合は builder の固定値も併せて更新する（`tasks/test_issue124_docs.py` が一致を検証する）。effort はどのフッター行にも表示しない。実行時の実効 effort は投稿時点で確定できないため、`review_engines[].effort` は記録の検証にだけ使い、表示は name と model に限定する（#128）
 - `comments`: `$must_fix` + `$inline_should_fix` + `$inline_nit`（それぞれ `findings.verified.json` の順序を保つ）。Should Fix / Nit も `path` / `line` / `side` / `body` を持つ inline comment として投稿する。各要素は以下のキーを含む:
   - `path` (必須)
   - `line` (必須)
