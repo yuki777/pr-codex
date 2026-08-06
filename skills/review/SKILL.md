@@ -377,11 +377,11 @@ test -f "$plugin_root/skills/lib/extract-diff-ranges.awk" && awk -f "$plugin_roo
 
 ### Step 3a: CI read-only gate artifact の生成
 
-対象 PR の GitHub Actions / status checks を read-only で取得し、`ci-status.json` と `ci-summary.md` を生成する。ここでは GitHub への write、workflow rerun、cancel は行わない。`$target_mode == "auto"` では Step 2b の CI success gate で既に生成済みでも、review hunter を起動する直前に再取得して current head の状態を確認する。再取得した `ci-status.json.state` が `success` ではなくなっていた場合、この PR のレビューは開始せず、`status.json` を `running` に更新しないまま Step 2 の次候補へ戻る。`$target_mode == "direct"` では CI success gate としては扱わず、`failure` / `pending` も reviewer へ渡す context として記録してレビューを継続できる。`statusCheckRollup` が使えない古い `gh` 環境では、同じ `ci_status.py` に REST の `pulls/{number}` と checks/status endpoint の JSON を渡す fallback を使う。
+対象 PR の GitHub Actions / status checks を read-only で取得し、`ci-status.json` と `ci-summary.md` を生成する。ここでは GitHub への write、workflow rerun、cancel は行わない。`$target_mode == "auto"` では Step 2b の CI success gate で既に生成済みでも、review hunter を起動する直前に再取得して current head の状態を確認する。再取得した `ci-status.json.state` が `success` ではなくなっていた場合、この PR のレビューは中止する: `status.json` は Step 3 で既に `running` になっているため、そのまま放置すると次候補側の周回で 30 分の stale 回収を待つことになる。`date -u +%Y-%m-%dT%H:%M:%S+00:00` で `$finished_at` を取得してから Step 5 の failed 更新（`$failed_stage=ranker`）を実行して `running` を必ず閉じ、Step 2 の次候補へ戻る（`state=failed` は次回の /loop で CI が `success` に戻り次第、自動的に再試行される。#127）。`$target_mode == "direct"` では CI success gate としては扱わず、`failure` / `pending` も reviewer へ渡す context として記録してレビューを継続できる。`statusCheckRollup` が使えない古い `gh` 環境では、同じ `ci_status.py` に REST の `pulls/{number}` と checks/status endpoint の JSON を渡す fallback を使う。
 
 - いつ使うか: Step 3 の `pr.diff` / `pr.diff.ranges.txt` 生成成功後、review hunter を起動する前に必ず実行する
 - 判定条件: `ci-status.json` と `ci-summary.md` が生成され、`ci-status.json.policy.github_writes == false` / `rerun == false` / `cancel == false` である
-- 次アクション: `ci-status.json.state` を review/send/developer bridge の判断材料として保持する。`$target_mode == "auto"` で `success` 以外なら候補スキップとして Step 2 へ戻り、`$target_mode == "direct"` なら `failure` / `pending` を reviewer へコンテキストとして渡す。この step 自体で投稿や rerun はしない
+- 次アクション: `ci-status.json.state` を review/send/developer bridge の判断材料として保持する。`$target_mode == "auto"` で `success` 以外なら、`date -u` で `$finished_at` を取得してから Step 5 の failed 更新（`$failed_stage=ranker`）で `running` を閉じ、Step 2 の次候補へ戻る（#127）。`$target_mode == "direct"` なら `failure` / `pending` を reviewer へコンテキストとして渡す。この step 自体で投稿や rerun はしない
 
 ```bash
 gh api repos/$org/$repository/pulls/$pr_number > ~/claude-loop-pr-codex/$org-$repository-$pr_number/ci-pull.json && \
@@ -1230,7 +1230,7 @@ jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" --arg head
 ```
 
 - いつ使うか: Step 4a または 4b が timeout / 非ゼロ終了した場合、権限不足などで処理継続不可の場合、**または Step 4c の `merge_hunter_results.py` が `HUNTER_DIFF_UNAVAILABLE`（終了コード 3）を返した場合、もしくは hunter result の schema 不適合が 1 回の再実行でも解消しなかった場合**に実行する
-- 事前条件: `$failed_stage` を `ranker` / `hunter` / `verifier` / `explainer` のいずれか 1 つに設定する。metadata/files/diff/run-plan 生成失敗は `ranker`、4a/4b timeout/非ゼロ/`HUNTER_DIFF_UNAVAILABLE`/hunter result schema 不適合/candidate validation 失敗は `hunter`、3軸/range/fingerprint/Must Fix 件数/`findings.verified.json` validator 失敗は `verifier`、temp write または temp→final `mv` 失敗は `explainer` とする。また、必ず直前に `date -u +%Y-%m-%dT%H:%M:%S+00:00` で `$finished_at` を取得してから実行する（`$finished_at` の取得は正常系 Step 5 冒頭だけでなく、Step 2b の metadata / files 取得失敗・Step 3 の diff 取得失敗・clone 失敗・Step 3a の CI artifact 再取得失敗を含む、すべての failed 分岐で必須。#127）
+- 事前条件: `$failed_stage` を `ranker` / `hunter` / `verifier` / `explainer` のいずれか 1 つに設定する。metadata/files/diff/run-plan 生成失敗は `ranker`、4a/4b timeout/非ゼロ/`HUNTER_DIFF_UNAVAILABLE`/hunter result schema 不適合/candidate validation 失敗は `hunter`、3軸/range/fingerprint/Must Fix 件数/`findings.verified.json` validator 失敗は `verifier`、temp write または temp→final `mv` 失敗は `explainer` とする。また、必ず直前に `date -u +%Y-%m-%dT%H:%M:%S+00:00` で `$finished_at` を取得してから実行する（`$finished_at` の取得は正常系 Step 5 冒頭だけでなく、Step 2b の metadata / files 取得失敗・Step 3 の diff 取得失敗・clone 失敗・Step 3a の CI artifact 再取得失敗・Step 3a の再取得後に非 success となった中止を含む、すべての failed 分岐で必須。#127）
 - 判定条件: `status.json` の `state` が `failed` かつ `failed_stage` が `$failed_stage` と一致し、`tasks/validate_status.py` を通過する
 - 次アクション: Step 6 の結果報告へ進む
 
@@ -1358,6 +1358,7 @@ F4 stage reporting として、failed 分岐では必ず `$failed_stage` を 1 �
 - PRがclosed/merged → `skipped` としてログに記録し、次の候補へ進む
 - Step 2b の metadata `gh api --jq` / files `jq -sce` で `missing repository_full_name / head_sha / base_sha / branch / base_branch / files` が出た → その場で `date -u` により `$finished_at` を取得し、`state=failed` で記録して、その回は終了（PR メタデータまたは変更ファイル一覧が必須フィールドを欠いているため信頼できるレビュー不可）。metadata 失敗で `$head_sha` が未取得の場合は `head_sha` キーを省略した failed 更新テンプレートを使う（#127）
 - Step 3 の `gh pr diff` が失敗または空出力（`pr.diff` 未生成） → `date -u` により `$finished_at` を取得し、`state=failed` で記録して、その回は終了（PR 差分スコープが確定できないため Step 4 に進まない。Step 3a の CI artifact 再取得・clone は行わない fail-fast。報告は Step 3 の「diff 取得失敗時の報告契約」に従う。#127）
+- Step 3a の再取得で `ci-status.json.state` が `success` 以外になった（`$target_mode == "auto"`） → `date -u` により `$finished_at` を取得し、`state=failed`（`failed_stage=ranker`）で記録して Step 3 で書いた `running` を必ず閉じ、Step 2 の次候補へ戻る（`running` を放置して 30 分の stale 回収を待たせない。#127）
 - Step 3b 後の `run-plan.json` 生成が失敗 → `state=failed` で記録し、その回は終了（preflight 指標が欠落したまま Step 4 に進まない）
 - Step 5 の `run-plan.json` 追記更新が失敗 → `state=completed` を先に確定せず `state=failed` で記録し、その回は終了（壊れた `run-plan.json` を completed 扱いで残さない）
 - `claude -p` がタイムアウト（20分） → `state=failed` で記録

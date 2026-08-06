@@ -60,10 +60,11 @@ class ReviewCiSuccessPickupDocsTest(unittest.TestCase):
         for snippet in (
             "review hunter を起動する直前に再取得",
             "再取得した `ci-status.json.state` が `success` ではなくなっていた場合",
-            "`status.json` を `running` に更新しない",
+            # #127: running は Step 3 で書き込み済みのため、放置せず failed で閉じる。
+            "Step 5 の failed 更新（`$failed_stage=ranker`）を実行して `running` を必ず閉じ、Step 2 の次候補へ戻る",
             "`$target_mode == \"direct\"` では CI success gate としては扱わず",
             "`failure` / `pending` も reviewer へ渡す context",
-            "`$target_mode == \"auto\"` で `success` 以外なら候補スキップ",
+            "`$target_mode == \"auto\"` で `success` 以外なら、`date -u` で `$finished_at` を取得してから Step 5 の failed 更新（`$failed_stage=ranker`）で `running` を閉じ、Step 2 の次候補へ戻る",
         ):
             self.assertIn(snippet, step3a)
 

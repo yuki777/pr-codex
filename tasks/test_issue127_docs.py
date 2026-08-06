@@ -122,10 +122,21 @@ class Issue127DocsTest(unittest.TestCase):
 
     def test_finished_at_is_defined_on_every_failed_path(self) -> None:
         for snippet in (
-            "また、必ず直前に `date -u +%Y-%m-%dT%H:%M:%S+00:00` で `$finished_at` を取得してから実行する（`$finished_at` の取得は正常系 Step 5 冒頭だけでなく、Step 2b の metadata / files 取得失敗・Step 3 の diff 取得失敗・clone 失敗・Step 3a の CI artifact 再取得失敗を含む、すべての failed 分岐で必須。#127）",
+            "また、必ず直前に `date -u +%Y-%m-%dT%H:%M:%S+00:00` で `$finished_at` を取得してから実行する（`$finished_at` の取得は正常系 Step 5 冒頭だけでなく、Step 2b の metadata / files 取得失敗・Step 3 の diff 取得失敗・clone 失敗・Step 3a の CI artifact 再取得失敗・Step 3a の再取得後に非 success となった中止を含む、すべての failed 分岐で必須。#127）",
             "`gh pr diff` が失敗または空出力の場合はここで非ゼロ終了し、Step 3a の CI artifact 再取得・clone は行わず、`date -u +%Y-%m-%dT%H:%M:%S+00:00` で `$finished_at` を取得してから Step 5 の failed 更新（`$failed_stage=ranker`）を実行して、その回は終了する",
         ):
             self.assertIn(snippet, self.skill)
+
+    def test_step3a_non_success_closes_running(self) -> None:
+        # Step 3 で書いた running を Step 3a の非 success 中止時に放置しない
+        # （放置すると次回 /loop まで 30 分の stale 回収待ちになる）。
+        for snippet in (
+            "`date -u +%Y-%m-%dT%H:%M:%S+00:00` で `$finished_at` を取得してから Step 5 の failed 更新（`$failed_stage=ranker`）を実行して `running` を必ず閉じ、Step 2 の次候補へ戻る",
+            "- Step 3a の再取得で `ci-status.json.state` が `success` 以外になった（`$target_mode == \"auto\"`） → `date -u` により `$finished_at` を取得し、`state=failed`（`failed_stage=ranker`）で記録して Step 3 で書いた `running` を必ず閉じ、Step 2 の次候補へ戻る",
+        ):
+            self.assertIn(snippet, self.skill)
+        # 旧契約（running 未書き込み前提のスキップ文言）が残っていないこと。
+        self.assertNotIn("`status.json` を `running` に更新しないまま", self.skill)
 
     def test_diff_failure_report_contract(self) -> None:
         for snippet in (
