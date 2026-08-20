@@ -20,13 +20,13 @@ def section(text: str, start: str, end: str) -> str:
 class Issue88DocsTest(unittest.TestCase):
     def test_send_skill_documents_severity_option_matrix(self) -> None:
         text = SEND_SKILL.read_text(encoding="utf-8")
-        self.assertIn('argument-hint: "[<PR URL|PR number>] [--auto-submit] [--include-should-fix] [--include-nit]"', text)
+        self.assertIn('argument-hint: "[<PR URL|PR number>] [--auto-send] [--include-should-fix] [--include-nit]"', text)
         usage = section(text, "## 使い方", "## フロー")
         for snippet in (
             "/pr-codex:send",
-            "/pr-codex:send --auto-submit",
+            "/pr-codex:send --auto-send",
             "/pr-codex:send --include-should-fix",
-            "/pr-codex:send --auto-submit --include-should-fix --include-nit",
+            "/pr-codex:send --auto-send --include-should-fix --include-nit",
             "Must Fixのみを inline comment",
             "Must FixとShould Fixを inline comment",
             "Must FixとShould FixとNitを inline comment",
@@ -37,14 +37,14 @@ class Issue88DocsTest(unittest.TestCase):
         text = SEND_SKILL.read_text(encoding="utf-8")
         args = section(text, "### Step 0: 引数解析", "### Step 1:")
         for snippet in (
-            "$send_mode = interactive | auto_submit",
+            "$send_mode = interactive | auto_send",
             "$include_should_fix = true | false",
             "$include_nit = true | false",
-            "--auto-submit",
+            "--auto-send",
             "--include-should-fix",
             "--include-nit",
             "順不同",
-            "重複オプション",
+            "同じオプションの重複",
             "--include-nit は --include-should-fix なしでは unsupported argument",
         ):
             self.assertIn(snippet, args)
@@ -107,7 +107,7 @@ class Issue88DocsTest(unittest.TestCase):
         text = README.read_text(encoding="utf-8")
         for snippet in (
             "/pr-codex:send --include-should-fix",
-            "/pr-codex:send --auto-submit --include-should-fix --include-nit",
+            "/pr-codex:send --auto-send --include-should-fix --include-nit",
             "`--include-should-fix` は Must Fix + Should Fix を inline comment として投稿する",
             "`--include-nit` は `--include-should-fix` と併用し、Must Fix + 投稿可能な Should Fix + 投稿可能な Nit を inline comment として投稿する",
             "`local_only` / `suppress` / `explanation_postable: false` の Nit は投稿せず",
