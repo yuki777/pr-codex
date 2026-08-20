@@ -121,6 +121,7 @@ class BuildReviewPayloadTest(unittest.TestCase):
         run_plan: dict[str, Any] | None = None,
         with_diff: bool = True,
         diff_text: str = "diff --git a/src/App.py b/src/App.py\n",
+        self_review: str | None = "false",
         with_sarif: bool = False,
     ) -> tuple[subprocess.CompletedProcess[str], Path, Path, dict[str, Path]]:
         findings_path = directory / "findings.verified.json"
@@ -172,6 +173,8 @@ class BuildReviewPayloadTest(unittest.TestCase):
         if with_sarif:
             write_json(sarif_path, {"version": "2.1.0"})
             command.extend(["--sarif", str(sarif_path)])
+        if self_review is not None:
+            command.extend(["--self-review", self_review])
         command.extend(flags)
         completed = subprocess.run(command, check=False, capture_output=True, text=True)
         paths = {
@@ -1000,6 +1003,108 @@ class BuildReviewPayloadTest(unittest.TestCase):
             payload = json.loads(payload_path.read_text(encoding="utf-8"))
         self.assertEqual(payload["event"], "APPROVE")
         self.assertIn("- CI 状態: 未取得", payload["body"])
+
+    def test_self_review_suppresses_approve_to_comment(self) -> None:
+        # 受け入れ条件 1: --self-review true × Must Fix 0 件 → COMMENT + self-PR 抑止の説明
+        with tempfile.TemporaryDirectory() as tmp:
+            completed, payload_path, manifest_path, _ = self.run_build(
+                Path(tmp), artifact([]), ci_status={"state": "success"}, self_review="true"
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(payload_path.read_text(encoding="utf-8"))
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            # 受け入れ条件 5: manifest の self_review から同一 event が再導出され --verify が 0 になる
+            verified = self.run_verify(manifest_path)
+            self.assertEqual(verified.returncode, 0, verified.stderr)
+        self.assertEqual(payload["event"], "COMMENT")
+        self.assertIn("Must Fix はありません。", payload["body"])
+        self.assertIn(
+            "このレビューは PR 作成者自身のアカウントから投稿されているため、承認（APPROVE）ではなくコメントとして投稿します。",
+            payload["body"],
+        )
+        self.assertNotIn("## 確認した範囲", payload["body"])
+        self.assertNotIn("## CI 状態", payload["body"])
+        self.assertIs(manifest["self_review"], True)
+
+    def test_self_review_suppresses_request_changes_but_keeps_inline_comments(self) -> None:
+        # 受け入れ条件 2: --self-review true × Must Fix >= 1 → COMMENT のまま inline を維持
+        item = finding("must-1", start_line=10)
+        with tempfile.TemporaryDirectory() as tmp:
+            completed, payload_path, manifest_path, _ = self.run_build(
+                Path(tmp), artifact([item]), self_review="true"
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(payload_path.read_text(encoding="utf-8"))
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            # 受け入れ条件 5: manifest の self_review から同一 event が再導出され --verify が 0 になる
+            verified = self.run_verify(manifest_path)
+            self.assertEqual(verified.returncode, 0, verified.stderr)
+        self.assertEqual(payload["event"], "COMMENT")
+        self.assertEqual(len(payload["comments"]), 1)
+        self.assertIn("Must Fix を検出しました。マージ前に修正が必要です。", payload["body"])
+        self.assertIn(
+            "このレビューは PR 作成者自身のアカウントから投稿されているため、変更リクエスト（REQUEST_CHANGES）ではなくコメントとして投稿します。",
+            payload["body"],
+        )
+        self.assertNotIn("## CI 状態", payload["body"])
+        self.assertEqual(manifest["counts"]["must_fix_total"], 1)
+        self.assertIs(manifest["self_review"], True)
+
+    def test_self_review_false_keeps_current_event_rules(self) -> None:
+        # 受け入れ条件 3: --self-review false は現行の 3 分岐と完全一致（回帰なし）
+        cases = (
+            (artifact([finding("must-1", start_line=10)]), {"state": "success"}, "REQUEST_CHANGES"),
+            (artifact([]), {"state": "failure"}, "COMMENT"),
+            (artifact([]), {"state": "success"}, "APPROVE"),
+        )
+        for findings_data, ci_status, expected_event in cases:
+            with self.subTest(event=expected_event), tempfile.TemporaryDirectory() as tmp:
+                completed, payload_path, manifest_path, _ = self.run_build(
+                    Path(tmp), findings_data, ci_status=ci_status, self_review="false"
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                payload = json.loads(payload_path.read_text(encoding="utf-8"))
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                self.assertEqual(payload["event"], expected_event)
+                self.assertNotIn("PR 作成者自身のアカウント", payload["body"])
+                self.assertIs(manifest["self_review"], False)
+                # 受け入れ条件 5: self_review=false でも各 event の manifest が --verify で再導出される
+                verified = self.run_verify(manifest_path)
+                self.assertEqual(verified.returncode, 0, verified.stderr)
+
+    def test_missing_or_invalid_self_review_flag_fails(self) -> None:
+        # 受け入れ条件 4: --self-review 未指定 / 不正値は非ゼロ終了（fail-closed）
+        with tempfile.TemporaryDirectory() as tmp:
+            completed, _, _, _ = self.run_build(Path(tmp), artifact([]), self_review=None)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("--self-review", completed.stderr)
+        with tempfile.TemporaryDirectory() as tmp:
+            completed, _, _, _ = self.run_build(Path(tmp), artifact([]), self_review="unknown")
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("invalid choice", completed.stderr)
+
+    def test_verify_rederives_event_from_manifest_self_review(self) -> None:
+        # 受け入れ条件 5: --verify は manifest の self_review から同じ event を再導出し、
+        # 書き換えは event 不一致として検出する。旧形式（self_review 不在）は明示エラー。
+        item = finding("must-1", start_line=10)
+        with tempfile.TemporaryDirectory() as tmp:
+            completed, _, manifest_path, _ = self.run_build(Path(tmp), artifact([item]), self_review="true")
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(self.run_verify(manifest_path).returncode, 0)
+
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["self_review"] = False
+            write_json(manifest_path, manifest)
+            tampered = self.run_verify(manifest_path)
+            self.assertEqual(tampered.returncode, 1)
+            self.assertIn("event must be REQUEST_CHANGES when must_fix_total is at least 1", tampered.stderr)
+
+            del manifest["self_review"]
+            write_json(manifest_path, manifest)
+            legacy = self.run_verify(manifest_path)
+            self.assertEqual(legacy.returncode, 1)
+            self.assertIn("self_review: required key is missing", legacy.stderr)
+            self.assertIn("old-format manifest", legacy.stderr)
 
 
 if __name__ == "__main__":

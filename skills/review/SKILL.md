@@ -1272,6 +1272,8 @@ completed 報告では、`metadata.json.pr_url` を `$pr_url` として使い、
 
 completed 報告の末尾に、件数に応じて以下を追記する。`$auto_send=true` の場合、`$count_must_inline == $count_must` のときだけ Step 6.5 へ進む。`$count_must_inline != $count_must` の場合は `/pr-codex:send $pr_url --auto-submit` が投稿前 guard で中断する状態なので、auto-send phase へ進まず以下の非inline Must Fix 報告だけを行う。
 
+いずれの案内にも共通の注意として、PR 作成者自身のアカウントで send を実行した場合（self-PR）、GitHub の制約により `APPROVE` / `REQUEST_CHANGES` は send 側で `COMMENT` に抑止される旨を 1 行添える。
+
 `$count_must_inline != $count_must`:
 
 ```markdown

@@ -18,6 +18,15 @@ SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 MUST_FIX_HEADING = "## 重大な問題 (Must Fix)"
 DEFAULT_REVIEW_SCOPE = "2者レビュー (Claude/Codex hunter) + verifier 3軸 gate"
 PR_CODEX_REPO_URL = "https://github.com/yuki777/pr-codex"
+# Posted-summary suppression lines for self-authored PRs: GitHub rejects
+# APPROVE / REQUEST_CHANGES reviews on the poster's own PR with 422, so the
+# builder downgrades the event to COMMENT and discloses the reason.
+SELF_REVIEW_APPROVE_SUPPRESSED = (
+    "このレビューは PR 作成者自身のアカウントから投稿されているため、承認（APPROVE）ではなくコメントとして投稿します。"
+)
+SELF_REVIEW_REQUEST_CHANGES_SUPPRESSED = (
+    "このレビューは PR 作成者自身のアカウントから投稿されているため、変更リクエスト（REQUEST_CHANGES）ではなくコメントとして投稿します。"
+)
 # send Step 4.5 semantic preflight engine. Must match the `-m` literal in
 # skills/send/SKILL.md; the pairing is enforced by tasks/test_issue124_docs.py.
 # The effort is recorded nowhere here: footers never render efforts because
@@ -511,6 +520,8 @@ def compose_posted_summary(
     event: str,
     ci_state: str | None,
     *,
+    suppression: str | None,
+    must_fix_total: int,
     must_fix_inline: int,
     must_fix_body: int,
     should_fix_inline: int,
@@ -524,11 +535,15 @@ def compose_posted_summary(
     the payload must not be mentioned, withheld findings leak nothing, and no
     counts are shown — cluster representatives aggregate members, so posted
     comment counts diverge from canonical finding counts.
+
+    `suppression` names why a COMMENT event replaced APPROVE/REQUEST_CHANGES:
+    "ci" (CI failure/pending) or "self_review" (self-authored PR; GitHub
+    rejects both APPROVE and REQUEST_CHANGES with 422).
     """
 
     visible_must_fix = must_fix_inline + must_fix_body
     lines: list[str] = []
-    if event == "REQUEST_CHANGES":
+    if event == "REQUEST_CHANGES" or (suppression == "self_review" and must_fix_total):
         if visible_must_fix:
             sentence = "Must Fix を検出しました。マージ前に修正が必要です。"
             if must_fix_inline and must_fix_body:
@@ -538,6 +553,11 @@ def compose_posted_summary(
             lines.append(sentence)
         else:
             lines.append("このレビューは変更をリクエストします。")
+        if suppression == "self_review":
+            lines.append(SELF_REVIEW_REQUEST_CHANGES_SUPPRESSED)
+    elif suppression == "self_review":
+        lines.append("Must Fix はありません。")
+        lines.append(SELF_REVIEW_APPROVE_SUPPRESSED)
     elif event == "COMMENT":
         lines.append(f"Must Fix はありませんが、CI が {ci_state or '未取得'} のため承認を保留します。")
     else:
@@ -592,6 +612,7 @@ def build_body(
     summary: str,
     good_points: str,
     event: str,
+    suppression: str | None,
     metadata: dict[str, Any],
     ci_state: str | None,
     ci_summary: str | None,
@@ -611,7 +632,9 @@ def build_body(
             f"- 検証観点: {scope}\n"
             f"- CI 状態: {ci_state or '未取得'}"
         )
-    elif event == "COMMENT":
+    elif event == "COMMENT" and suppression == "ci":
+        # A self-review suppression is already disclosed inside the posted
+        # summary, so only the CI suppression adds a dedicated section.
         ci_lines = ["## CI 状態", "", f"- 状態: {ci_state or '未取得'}"]
         short_summary = first_summary_line(ci_summary)
         if short_summary:
@@ -644,6 +667,7 @@ def compose_payload(
     run_plan: Any,
     ci_summary: str | None,
     diff_available: bool,
+    self_review: bool,
     include_should_fix: bool,
     include_nit: bool,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, int], int]:
@@ -725,17 +749,27 @@ def compose_payload(
     must_fix_withheld = sum(entry["kind"] == "Must Fix" for entry in withheld)
     should_fix_body = sum(entry["kind"] == "Should Fix" for entry in out_of_range)
     nit_body = sum(entry["kind"] == "Nit" for entry in out_of_range)
-    if must_fix_total:
+    if self_review:
+        # GitHub rejects APPROVE / REQUEST_CHANGES on the poster's own PR
+        # with 422, so the event is always suppressed to COMMENT here.
+        event = "COMMENT"
+        suppression = "self_review"
+    elif must_fix_total:
         event = "REQUEST_CHANGES"
+        suppression = None
     elif ci_state in {"failure", "pending"}:
         event = "COMMENT"
+        suppression = "ci"
     else:
         event = "APPROVE"
+        suppression = None
 
     body = build_body(
         compose_posted_summary(
             event,
             ci_state,
+            suppression=suppression,
+            must_fix_total=must_fix_total,
             must_fix_inline=len(inline_by_severity["must_fix"]),
             must_fix_body=must_fix_body,
             should_fix_inline=len(inline_by_severity["should_fix"]),
@@ -745,6 +779,7 @@ def compose_payload(
         ),
         good_points,
         event,
+        suppression,
         metadata_data,
         ci_state,
         ci_summary,
@@ -781,6 +816,7 @@ def compose_payload(
     manifest_core = {
         "schema_version": "payload-manifest.v1",
         "event": event,
+        "self_review": self_review,
         "comment_map": comment_map,
         "out_of_range": manifest_out_of_range,
         "withheld": manifest_withheld,
@@ -821,6 +857,7 @@ def build(args: argparse.Namespace) -> tuple[str, int, dict[str, int], int]:
         parse_optional_json(run_plan_bytes),
         decode_optional(ci_summary_bytes),
         diff_available,
+        args.self_review == "true",
         args.include_should_fix,
         args.include_nit,
     )
@@ -858,6 +895,7 @@ def build(args: argparse.Namespace) -> tuple[str, int, dict[str, int], int]:
         "schema_version": manifest_core["schema_version"],
         "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
         "event": manifest_core["event"],
+        "self_review": manifest_core["self_review"],
         "comment_map": manifest_core["comment_map"],
         "out_of_range": manifest_core["out_of_range"],
         "withheld": manifest_core["withheld"],
@@ -915,6 +953,17 @@ def verify_manifest(path: Path) -> list[str]:
     event = manifest.get("event")
     if isinstance(event, str) and event not in MANIFEST_EVENTS:
         errors.append(f"{manifest_path}: event must be REQUEST_CHANGES, COMMENT, or APPROVE")
+
+    self_review = manifest.get("self_review")
+    if "self_review" not in manifest:
+        errors.append(
+            f"{manifest_path}: self_review: required key is missing "
+            "(old-format manifest generated before self-review recording; rebuild with the current builder)"
+        )
+        self_review = None
+    elif not isinstance(self_review, bool):
+        errors.append(f"{manifest_path}: self_review: must be a boolean")
+        self_review = None
 
     comment_map = manifest.get("comment_map")
     if isinstance(comment_map, list):
@@ -1146,13 +1195,16 @@ def verify_manifest(path: Path) -> list[str]:
         if valid_counts["must_fix_withheld"] != expected_withheld:
             errors.append(f"{manifest_path}: counts.must_fix_withheld does not match withheld")
 
-    if valid_counts.get("must_fix_total", 0) >= 1 and event != "REQUEST_CHANGES":
+    if self_review is True and event in {"APPROVE", "REQUEST_CHANGES"}:
+        errors.append(f"{manifest_path}: event must be COMMENT when self_review is true")
+    elif self_review is not True and valid_counts.get("must_fix_total", 0) >= 1 and event != "REQUEST_CHANGES":
         errors.append(f"{manifest_path}: event must be REQUEST_CHANGES when must_fix_total is at least 1")
     replay_ready = (
         isinstance(files, dict)
         and set(files) == verified_roles
         and set(MANIFEST_REQUIRED_ROLES).issubset(verified_roles)
         and len(valid_flags) == 2
+        and isinstance(self_review, bool)
         and isinstance(payload_data, dict)
     )
     if replay_ready:
@@ -1187,6 +1239,7 @@ def verify_manifest(path: Path) -> list[str]:
                 parse_optional_json(verified_file_bytes.get("run_plan")),
                 decode_optional(verified_file_bytes.get("ci_summary")),
                 verified_nonempty.get("diff", False),
+                self_review,
                 valid_flags["include_should_fix"],
                 valid_flags["include_nit"],
             )
@@ -1271,6 +1324,11 @@ def parser() -> argparse.ArgumentParser:
     cli.add_argument("--diff", type=Path)
     cli.add_argument("--include-should-fix", action="store_true")
     cli.add_argument("--include-nit", action="store_true")
+    # Required in build mode (fail-closed): the event choice depends on the
+    # posting identity, so an unresolved identity must never silently fall
+    # back to the non-self-review behaviour. "unknown" is rejected by design;
+    # send aborts before the builder when the identity cannot be resolved.
+    cli.add_argument("--self-review", choices=("true", "false"))
     cli.add_argument("--output", type=Path)
     cli.add_argument("--manifest", type=Path)
     return cli
@@ -1292,6 +1350,7 @@ def main() -> int:
             args.diff,
             args.output,
             args.include_should_fix,
+            args.self_review,
             args.include_nit,
         )
         if args.manifest is None:
@@ -1307,7 +1366,7 @@ def main() -> int:
         print("payload manifest verified")
         return 0
 
-    required = ("findings", "review", "metadata", "ranges", "output", "manifest")
+    required = ("findings", "review", "metadata", "ranges", "self_review", "output", "manifest")
     missing = [f"--{name.replace('_', '-')}" for name in required if getattr(args, name) is None]
     if missing:
         cli.error(f"build mode requires {', '.join(missing)}")
