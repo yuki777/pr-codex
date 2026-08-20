@@ -17,7 +17,7 @@ The user invoked this with: `$ARGUMENTS`
 起動直後に Claude 側で `$ARGUMENTS` を解析し、レビュー対象の直接指定を `$review_target`、投稿連携フラグを `$auto_send = true | false` として保持する。レビュー深度 (`standard` / `deep`) は引数では受け付けず、Step 3 の `run-plan.json` で常に自動判定する。
 
 - 引数なし: `$review_target = ""` / `$auto_send=false`。従来どおり Search API でレビュー依頼 PR を自動検索・選定する
-- `--auto-send`: `$review_target = ""` / `$auto_send=true`。Search API で選定した 1 件をレビューし、completed 後に `/pr-codex:send <PR URL> --auto-submit` 相当の auto-send phase へ進む
+- `--auto-send`: `$review_target = ""` / `$auto_send=true`。Search API で選定した 1 件をレビューし、completed 後に `/pr-codex:send <PR URL> --auto-send` 相当の auto-send phase へ進む
 - `https://github.com/<org>/<repo>/pull/<number>`: 指定された PR を直接レビューする
 - `https://github.com/<org>/<repo>/pull/<number> --auto-send`: 指定された PR を直接レビューし、completed 後に同じ PR URL を対象に auto-send phase へ進む
 - `<number>`: 現在の git repository の `origin` を対象 repo として、指定された PR 番号を直接レビューする
@@ -1267,10 +1267,10 @@ jq -n --arg started_at "$started_at" --arg finished_at "$finished_at" --arg fail
 completed 報告では、`metadata.json.pr_url` を `$pr_url` として使い、`findings.verified.json` と `pr.diff.ranges.txt` から以下の件数を算出する。
 
 - `$count_must` = `findings[] | select(.severity == "must_fix")` の件数
-- `$count_must_inline` = `findings[] | select(.severity == "must_fix" and .posting.post_policy == "inline" and .posting.explanation_postable == true and .location.side == "RIGHT")` のうち、`pr.diff.ranges.txt` の同一 path / 同一 hunk 範囲内に `location.start_line` から `location.end_line`（なければ `start_line`）が収まる件数。`$count_must_inline != $count_must` の場合は、send 側の primary guard が中断する非inline Must Fix が含まれるため、auto-submit コマンド例を成功可能な次アクションとして案内してはならない
+- `$count_must_inline` = `findings[] | select(.severity == "must_fix" and .posting.post_policy == "inline" and .posting.explanation_postable == true and .location.side == "RIGHT")` のうち、`pr.diff.ranges.txt` の同一 path / 同一 hunk 範囲内に `location.start_line` から `location.end_line`（なければ `start_line`）が収まる件数。`$count_must_inline != $count_must` の場合は、send 側の primary guard が中断する非inline Must Fix が含まれるため、auto-send コマンド例を成功可能な次アクションとして案内してはならない
 - `$count_should` = `findings[] | select(.severity == "should_fix" and .posting.post_policy == "body_summary" and .posting.explanation_postable == true and .location.side == "RIGHT")` のうち、`pr.diff.ranges.txt` の同一 path / 同一 hunk 範囲内に `location.start_line` から `location.end_line`（なければ `start_line`）が収まる件数。単純な Should Fix 総数ではなく、`/pr-codex:send --include-should-fix` で実際に inline 投稿可能な件数を使う。LEFT-side / diff 範囲外 / range 不明の Should Fix は send 側で body 退避または除外されるため、この件数には含めない
 
-completed 報告の末尾に、件数に応じて以下を追記する。`$auto_send=true` の場合、`$count_must_inline == $count_must` のときだけ Step 6.5 へ進む。`$count_must_inline != $count_must` の場合は `/pr-codex:send $pr_url --auto-submit` が投稿前 guard で中断する状態なので、auto-send phase へ進まず以下の非inline Must Fix 報告だけを行う。
+completed 報告の末尾に、件数に応じて以下を追記する。`$auto_send=true` の場合、`$count_must_inline == $count_must` のときだけ Step 6.5 へ進む。`$count_must_inline != $count_must` の場合は `/pr-codex:send $pr_url --auto-send` が投稿前 guard で中断する状態なので、auto-send phase へ進まず以下の非inline Must Fix 報告だけを行う。
 
 いずれの案内にも共通の注意として、PR 作成者自身のアカウントで send を実行した場合（self-PR）、GitHub の制約により `APPROVE` / `REQUEST_CHANGES` は send 側で `COMMENT` に抑止される旨を 1 行添える。
 
@@ -1279,7 +1279,7 @@ completed 報告の末尾に、件数に応じて以下を追記する。`$auto_
 ```markdown
 次のアクション（GitHub への投稿）:
 
-Must Fix $count_must 件のうち inline 投稿可能なのは $count_must_inline 件です。非inline Must Fix があるため `/pr-codex:send $pr_url --auto-submit` は投稿前 guard で中断します。
+Must Fix $count_must 件のうち inline 投稿可能なのは $count_must_inline 件です。非inline Must Fix があるため `/pr-codex:send $pr_url --auto-send` は投稿前 guard で中断します。
 `~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.verified.json` を確認し、security / public-safe 方針または posting policy を整理して `/pr-codex:review $pr_url` を再実行してください。
 ```
 
@@ -1289,10 +1289,10 @@ Must Fix $count_must 件のうち inline 投稿可能なのは $count_must_inlin
 次のアクション（GitHub への投稿）:
 
 # Must Fix 全件（$count_must 件）を承認なしで投稿する
-/pr-codex:send $pr_url --auto-submit
+/pr-codex:send $pr_url --auto-send
 
 # Must Fix 全件（$count_must 件）と Should Fix 全件（$count_should 件）を承認なしで投稿する
-/pr-codex:send $pr_url --auto-submit --include-should-fix
+/pr-codex:send $pr_url --auto-send --include-should-fix
 ```
 
 `$count_must_inline == $count_must` かつ `$count_must > 0` かつ `$count_should == 0`:
@@ -1301,7 +1301,7 @@ Must Fix $count_must 件のうち inline 投稿可能なのは $count_must_inlin
 次のアクション（GitHub への投稿）:
 
 # Must Fix 全件（$count_must 件）を承認なしで投稿する
-/pr-codex:send $pr_url --auto-submit
+/pr-codex:send $pr_url --auto-send
 ```
 
 `$count_must_inline == $count_must` かつ `$count_must == 0` かつ `$count_should > 0`:
@@ -1310,12 +1310,12 @@ Must Fix $count_must 件のうち inline 投稿可能なのは $count_must_inlin
 次のアクション（GitHub への投稿）:
 
 # Must Fix 全件（0 件）を承認なしで投稿する
-/pr-codex:send $pr_url --auto-submit
+/pr-codex:send $pr_url --auto-send
 
 Must Fix 0 件のため inline は投稿されず、総評＋良い点＋確認した範囲の APPROVE レビューになります。CI が failure / pending の場合は send 側で COMMENT に抑止されます。
 
 # Must Fix 全件（0 件）と Should Fix 全件（$count_should 件）を承認なしで投稿する
-/pr-codex:send $pr_url --auto-submit --include-should-fix
+/pr-codex:send $pr_url --auto-send --include-should-fix
 ```
 
 `$count_must_inline == $count_must` かつ `$count_must == 0` かつ `$count_should == 0`:
@@ -1323,7 +1323,7 @@ Must Fix 0 件のため inline は投稿されず、総評＋良い点＋確認�
 ```markdown
 次のアクション（GitHub への投稿）:
 
-投稿対象の指摘なし。承認レビューを投稿する場合のみ `/pr-codex:send $pr_url --auto-submit`（CI が failure / pending の場合は send 側で COMMENT に抑止）
+投稿対象の指摘なし。承認レビューを投稿する場合のみ `/pr-codex:send $pr_url --auto-send`（CI が failure / pending の場合は send 側で COMMENT に抑止）
 ```
 
 ### Step 6.5: `--auto-send` phase
@@ -1332,17 +1332,17 @@ Must Fix 0 件のため inline は投稿されず、総評＋良い点＋確認�
 
 auto-send phase は slash command `/pr-codex:send ...` を再帰的に呼び出すのではなく、`skills/send/SKILL.md` の契約を Read ツールで読み、同じターンの後続手順として実行する。Step 6.5 開始時に `$plugin_root/skills/send/SKILL.md` を Read し、以下の正規化済み引数として `send` の Step 0 以降を適用する:
 
-- `$ARGUMENTS = "$pr_url --auto-submit"`
-- `$send_mode=auto_submit`
+- `$ARGUMENTS = "$pr_url --auto-send"`
+- `$send_mode=auto_send`
 - `$target_mode=direct`
 - `$include_should_fix=false`
 - `$include_nit=false`
 
-auto-send phase の投稿対象は Must Fix のみであり、`$count_should > 0` でも `--include-should-fix` は付けない。Nit も投稿しない。Should Fix / Nit を含めたい場合は、auto-send ではなく手動で `/pr-codex:send $pr_url --auto-submit --include-should-fix` または `/pr-codex:send $pr_url --auto-submit --include-should-fix --include-nit` を実行する。
+auto-send phase の投稿対象は Must Fix のみであり、`$count_should > 0` でも `--include-should-fix` は付けない。Nit も投稿しない。Should Fix / Nit を含めたい場合は、auto-send ではなく手動で `/pr-codex:send $pr_url --auto-send --include-should-fix` または `/pr-codex:send $pr_url --auto-send --include-should-fix --include-nit` を実行する。
 
 auto-send phase では、`metadata.json.pr_url` から得た canonical な `$pr_url` を direct target として使う。ユーザーが PR 番号だけで `/pr-codex:review 123 --auto-send` を実行した場合も、send 側には PR 番号ではなく `$pr_url` を渡す。これにより `~/claude-loop-pr-codex` 配下に同じ PR 番号の directory が複数ある場合でも、send 側の名前昇順 auto 選定や番号曖昧性に依存しない。
 
-auto-send phase は `/pr-codex:send $pr_url --auto-submit` と同じ safety gate をすべて維持する。特に以下はスキップしない:
+auto-send phase は `/pr-codex:send $pr_url --auto-send` と同じ safety gate をすべて維持する。特に以下はスキップしない:
 
 - `findings.verified.json` の同梱 validator
 - `review-payload.json` 生成

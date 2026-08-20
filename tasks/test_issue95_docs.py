@@ -22,7 +22,7 @@ class Issue95DocsTest(unittest.TestCase):
     def test_send_accepts_direct_target_argument(self) -> None:
         text = SEND_SKILL.read_text(encoding="utf-8")
         self.assertIn(
-            'argument-hint: "[<PR URL|PR number>] [--auto-submit] [--include-should-fix] [--include-nit]"',
+            'argument-hint: "[<PR URL|PR number>] [--auto-send] [--include-should-fix] [--include-nit]"',
             text,
         )
 
@@ -81,8 +81,8 @@ class Issue95DocsTest(unittest.TestCase):
             "pr.diff.ranges.txt",
             "LEFT-side / diff 範囲外 / range 不明",
             "次のアクション（GitHub への投稿）",
-            "/pr-codex:send $pr_url --auto-submit",
-            "/pr-codex:send $pr_url --auto-submit --include-should-fix",
+            "/pr-codex:send $pr_url --auto-send",
+            "/pr-codex:send $pr_url --auto-send --include-should-fix",
             "Must Fix 0 件のため inline は投稿されず",
             "投稿対象の指摘なし",
         ):
@@ -91,8 +91,8 @@ class Issue95DocsTest(unittest.TestCase):
     def test_readme_documents_direct_send_usage(self) -> None:
         text = README.read_text(encoding="utf-8")
         for snippet in (
-            "/pr-codex:send https://github.com/org/repo/pull/123 --auto-submit",
-            "/pr-codex:send 123 --auto-submit",
+            "/pr-codex:send https://github.com/org/repo/pull/123 --auto-send",
+            "/pr-codex:send 123 --auto-send",
             "URL に対応する completed レビューだけを対象",
             "PR 番号のみ指定が複数 directory に一致した場合は中断",
             "対象 PR URL と Must Fix / inline 投稿可能な Should Fix 件数入り",

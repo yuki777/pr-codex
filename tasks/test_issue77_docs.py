@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Executable documentation checks for Issue #77 send --auto-submit."""
+"""Executable documentation checks for Issue #77 send auto mode."""
 
 from __future__ import annotations
 
@@ -18,23 +18,35 @@ def section(text: str, start: str, end: str) -> str:
 
 
 class Issue77DocsTest(unittest.TestCase):
-    def test_send_skill_declares_auto_submit_and_severity_flags(self) -> None:
+    def test_send_skill_declares_auto_send_and_severity_flags(self) -> None:
         text = SEND_SKILL.read_text(encoding="utf-8")
-        self.assertIn('argument-hint: "[<PR URL|PR number>] [--auto-submit] [--include-should-fix] [--include-nit]"', text)
+        self.assertIn('argument-hint: "[<PR URL|PR number>] [--auto-send] [--include-should-fix] [--include-nit]"', text)
         args = section(text, "### Step 0: 引数解析", "### Step 1:")
         for snippet in (
             "$ARGUMENTS",
-            "$send_mode = interactive | auto_submit",
-            "`--auto-submit`",
+            "$send_mode = interactive | auto_send",
+            "`--auto-send`",
+            "`--auto-send` と `--auto-submit` のどちらも含まれない: `$send_mode=interactive`",
             "unsupported argument",
             "未知オプション",
-            "重複オプション",
+            "同じオプションの重複",
             "--include-should-fix",
             "--include-nit",
         ):
             self.assertIn(snippet, args)
 
-    def test_auto_submit_controls_only_final_prompt_not_severity_flags(self) -> None:
+    def test_legacy_auto_submit_is_only_a_compatibility_alias(self) -> None:
+        text = SEND_SKILL.read_text(encoding="utf-8")
+        args = section(text, "### Step 0: 引数解析", "### Step 1:")
+        for snippet in (
+            "旧 `--auto-submit`",
+            "互換エイリアスとして `$send_mode=auto_send`",
+            "`--auto-send` と `--auto-submit` の併用",
+        ):
+            self.assertIn(snippet, args)
+        self.assertNotIn("[--auto-submit]", text.split("---", 2)[1])
+
+    def test_auto_send_controls_only_final_prompt_not_severity_flags(self) -> None:
         text = SEND_SKILL.read_text(encoding="utf-8")
         step375 = section(text, "### Step 3.75:", "### Step 4:")
         for snippet in (
@@ -42,14 +54,14 @@ class Issue77DocsTest(unittest.TestCase):
             "$include_nit == true",
             "$inline_should_fix=[]",
             "$inline_nit=[]",
-            "`--auto-submit` は承認 stop だけを制御",
+            "`--auto-send` は承認 stop だけを制御",
         ):
             self.assertIn(snippet, step375)
 
-    def test_auto_submit_still_requires_preflight_and_skips_only_final_prompt(self) -> None:
+    def test_auto_send_still_requires_preflight_and_skips_only_final_prompt(self) -> None:
         text = SEND_SKILL.read_text(encoding="utf-8")
         step45 = section(text, "### Step 4.5:", "### Step 5:")
-        self.assertIn("`--auto-submit` でもスキップしない", step45)
+        self.assertIn("`--auto-send` でもスキップしない", step45)
         self.assertIn("`preflight-result.json.verdict == \"PASS\"`", step45)
         self.assertIn("--output-schema $semantic_schema_path", step45)
         self.assertIn("同一 prompt の 3 回リトライはしない", step45)
@@ -57,7 +69,7 @@ class Issue77DocsTest(unittest.TestCase):
 
         step5 = section(text, "### Step 5:", "### Step 5.5:")
         self.assertIn("interactive", step5)
-        self.assertIn("auto_submit", step5)
+        self.assertIn("auto_send", step5)
         self.assertIn("最終投稿承認だけをスキップ", step5)
         self.assertIn("承認入力なしで Step 5.5", step5)
 
@@ -75,10 +87,11 @@ class Issue77DocsTest(unittest.TestCase):
         ):
             self.assertIn(snippet, gates)
 
-    def test_readme_documents_auto_submit_usage_and_safety(self) -> None:
+    def test_readme_documents_auto_send_usage_and_safety(self) -> None:
         text = README.read_text(encoding="utf-8")
         for snippet in (
-            "/pr-codex:send --auto-submit",
+            "/pr-codex:send --auto-send",
+            "旧 `/pr-codex:send ... --auto-submit` は互換エイリアス",
             "最終承認 prompt なし",
             "`--include-should-fix` は Must Fix + Should Fix を inline comment として投稿する",
             "Step 4.5 の verifier pipeline はスキップしない",

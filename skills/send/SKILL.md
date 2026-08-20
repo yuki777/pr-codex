@@ -2,7 +2,7 @@
 user-invocable: true
 name: pr-codex-send
 description: "/pr-codex:review で生成された統合レビュー(review.md)を GitHub PR にレビューコメントとして投稿し、処理済みディレクトリを sent/ に移動する"
-argument-hint: "[<PR URL|PR number>] [--auto-submit] [--include-should-fix] [--include-nit]"
+argument-hint: "[<PR URL|PR number>] [--auto-send] [--include-should-fix] [--include-nit]"
 allowed-tools: ["Bash", "Read", "Write", "Glob", "Grep"]
 ---
 
@@ -26,25 +26,25 @@ allowed-tools: ["Bash", "Read", "Write", "Glob", "Grep"]
 /pr-codex:send
 
 # 承認ストップ無しで、Must Fixのみを inline comment する
-/pr-codex:send --auto-submit
+/pr-codex:send --auto-send
 
 # 承認ストップありで、Must FixとShould Fixを inline comment する
 /pr-codex:send --include-should-fix
 
 # 承認ストップ無しで、Must FixとShould FixとNitを inline comment する
-/pr-codex:send --auto-submit --include-should-fix --include-nit
+/pr-codex:send --auto-send --include-should-fix --include-nit
 
 # 直前にレビューした特定 PR を、Must Fix のみ承認なしで投稿する
-/pr-codex:send https://github.com/org/repo/pull/123 --auto-submit
+/pr-codex:send https://github.com/org/repo/pull/123 --auto-send
 
 # 特定 PR の Must Fix + Should Fix を承認なしで投稿する
-/pr-codex:send https://github.com/org/repo/pull/123 --auto-submit --include-should-fix
+/pr-codex:send https://github.com/org/repo/pull/123 --auto-send --include-should-fix
 
 # PR 番号のみ指定（~/claude-loop-pr-codex に同番号の dir が1件だけのとき有効）
-/pr-codex:send 123 --auto-submit
+/pr-codex:send 123 --auto-send
 ```
 
-引数なしは従来どおり `~/claude-loop-pr-codex` 直下から名前昇順の先頭 completed レビューを自動抽出し、対話実行を前提として Step 5 で投稿 payload のサマリを提示してユーザーの明示的な承認を得てから Step 6 で投稿する。PR URL または PR 番号を位置引数で 1 つ指定した場合は、その completed レビューだけを対象にする。`--auto-submit` は Step 5 の最終投稿承認だけをスキップし、すべての validator / Step 4.5 preflight / Step 5.5 投稿直前 safety gate が成功した場合のみ Step 6 へ進む。`--include-should-fix` は投稿可能な Should Fix を inline comment に含め、`--include-nit` は投稿可能な Nit も inline comment に含める（`--include-nit` は `--include-should-fix` との併用必須）。diff 範囲外のものは body の `## 行コメント不可 (diff 範囲外)` へ退避する。unknown option、解釈できない位置引数、位置引数が2つ以上、重複オプション、または無効な組み合わせは unsupported argument として中断する。
+引数なしは従来どおり `~/claude-loop-pr-codex` 直下から名前昇順の先頭 completed レビューを自動抽出し、対話実行を前提として Step 5 で投稿 payload のサマリを提示してユーザーの明示的な承認を得てから Step 6 で投稿する。PR URL または PR 番号を位置引数で 1 つ指定した場合は、その completed レビューだけを対象にする。`--auto-send` は Step 5 の最終投稿承認だけをスキップし、すべての validator / Step 4.5 preflight / Step 5.5 投稿直前 safety gate が成功した場合のみ Step 6 へ進む。旧 `--auto-submit` は互換エイリアスとして同じ mode に正規化するが、表示と案内では `--auto-send` を使う。`--include-should-fix` は投稿可能な Should Fix を inline comment に含め、`--include-nit` は投稿可能な Nit も inline comment に含める（`--include-nit` は `--include-should-fix` との併用必須）。diff 範囲外のものは body の `## 行コメント不可 (diff 範囲外)` へ退避する。unknown option、解釈できない位置引数、位置引数が2つ以上、重複オプション、または無効な組み合わせは unsupported argument として中断する。
 
 1 回の実行で対象は 1 件のみ処理する。位置引数なしの場合、未投稿の completed レビューが複数あっても `ls` の出力順（名前昇順）で最初の 1 件のみを処理し、残りは次回以降の `/pr-codex:send` 実行に委ねる。位置引数ありの場合、auto 選定は行わず、指定 PR に対応する review directory だけを検証する。
 
@@ -54,18 +54,20 @@ allowed-tools: ["Bash", "Read", "Write", "Glob", "Grep"]
 
 ### Step 0: 引数解析
 
-Skill 起動直後に `$ARGUMENTS` を shell 風に空白分割して解釈し、`$send_mode = interactive | auto_submit`、`$include_should_fix = true | false`、`$include_nit = true | false`、`$target_mode = auto | direct` に正規化する。フラグと位置引数は順不同で指定できる。
+Skill 起動直後に `$ARGUMENTS` を shell 風に空白分割して解釈し、`$send_mode = interactive | auto_send`、`$include_should_fix = true | false`、`$include_nit = true | false`、`$target_mode = auto | direct` に正規化する。フラグと位置引数は順不同で指定できる。
 
 - `$ARGUMENTS` が空文字列または空白のみ: `$send_mode=interactive` / `$include_should_fix=false` / `$include_nit=false` / `$target_mode=auto`
-- `--auto-submit` が含まれる: `$send_mode=auto_submit`。含まれない場合は `$send_mode=interactive`
+- `--auto-send` が含まれる: `$send_mode=auto_send`
+- 旧 `--auto-submit` が含まれる: 互換エイリアスとして `$send_mode=auto_send` に正規化する
+- `--auto-send` と `--auto-submit` のどちらも含まれない: `$send_mode=interactive`
 - `--include-should-fix` が含まれる: `$include_should_fix=true` とし、投稿可能な Should Fix 候補を inline comment 対象にする
 - `--include-nit` が含まれる: `$include_nit=true` とし、投稿可能な Nit 候補を inline comment 対象にする。ただし `--include-nit` は `--include-should-fix` なしでは unsupported argument として中断する（--include-nit は --include-should-fix なしでは unsupported argument）
 - 位置引数なし: `$target_mode=auto`。従来どおり Step 1 で `ls` 名前昇順の先頭 completed レビューを選定する
 - `https://github.com/<org>/<repo>/pull/<number>` 形式の位置引数 1 つ: `$target_mode=direct` とし、URL から `$org` / `$repository` / `$pr_number` を取り出す。`$target_dir_name = "<org>-<repository>-<pr_number>"` として Step 1 の direct 分岐へ進む
 - `<number>`（数字のみ）の位置引数 1 つ: `$target_mode=direct` とし、`$target_pr_number=<number>` を保持する。Step 1 で `~/claude-loop-pr-codex` 直下（`sent` 除く）の末尾セグメントが `-<number>` に一致する directory を解決する
-- 未知オプション、解釈できない位置引数、位置引数が2つ以上、重複オプション、または `--include-nit` 単独のような無効な組み合わせ: `unsupported argument` として中断し、Step 1 以降の payload 生成や GitHub write は行わない
+- 未知オプション、解釈できない位置引数、位置引数が2つ以上、同じオプションの重複、`--auto-send` と `--auto-submit` の併用、または `--include-nit` 単独のような無効な組み合わせ: `unsupported argument` として中断し、Step 1 以降の payload 生成や GitHub write は行わない
 
-`--auto-submit` は Step 5 の最終投稿承認だけを省略するモードであり、severity inclusion (`--include-should-fix` / `--include-nit`)、canonical artifact validation、SARIF validation、Step 4.5 verifier pipeline、head SHA 再確認、二重投稿防止 gate は省略しない。
+`--auto-send`（および互換エイリアス `--auto-submit`）は Step 5 の最終投稿承認だけを省略するモードであり、severity inclusion (`--include-should-fix` / `--include-nit`)、canonical artifact validation、SARIF validation、Step 4.5 verifier pipeline、head SHA 再確認、二重投稿防止 gate は省略しない。
 
 ### Step 1: 対象ディレクトリの選定
 
@@ -442,7 +444,7 @@ Step 0 で正規化した `$include_should_fix` / `$include_nit` は、Step 4 �
 - `$include_nit == false`: `$inline_nit=[]`
 - 候補 0 件の場合も prompt は表示せず、該当する included 配列を空にする
 
-`--auto-submit` は承認 stop だけを制御し、severity inclusion には影響しない。`--include-should-fix` / `--include-nit` を指定した場合、interactive mode でも auto_submit mode でも同じ範囲を inline comment に含める。
+`--auto-send` は承認 stop だけを制御し、severity inclusion には影響しない。`--include-should-fix` / `--include-nit` を指定した場合、interactive mode でも auto_send mode でも同じ範囲を inline comment に含める。
 
 ### Step 4: payload の構築
 
@@ -531,7 +533,7 @@ builder は `--include-should-fix` / `--include-nit` の active severity flags �
 
 ### Step 4.5: 投稿前 verifier pipeline (static Python + Codex semantic)
 
-投稿直前の検証を **4 stage verifier pipeline** として実行する。`--auto-submit` でもスキップしない。Step 5 第2ステップ（interactive の最終承認プロンプト、または auto_submit の自動続行判断）の直前で必ず実行する。`findings.verified.json` は必須入力であり、Markdown fallback は使わない。担当は二層に分かれる: `schema_validation` / `range_validation` / `payload_consistency` の 3 つの static stage は決定論的な Python validator / builder が担い、意味判断が必要な `semantic_preflight` だけを Codex CLI (GPT-5.6) が担う。**static stage が 1 つでも FAIL の場合は Codex を呼ばず fail-closed で中断する。** semantic 判定は Codex の structured output（`--output-schema` / `--output-last-message`、`schemas/preflight-semantic.v1.json`）で per-finding decisions として直接受け、`validate_preflight_result.py --from-semantic` が static 結果と合成して `preflight-result.json` を生成する（top-level verdict / stage status / counts は host 算出）。人間可読の `preflight-codex.md` は validated JSON から `--emit-markdown` で派生生成する。Markdown からの `RESULT_JSON` 抽出や final `VERDICT:` line との整合検証は行わない。
+投稿直前の検証を **4 stage verifier pipeline** として実行する。`--auto-send` でもスキップしない。Step 5 第2ステップ（interactive の最終承認プロンプト、または auto_send の自動続行判断）の直前で必ず実行する。`findings.verified.json` は必須入力であり、Markdown fallback は使わない。担当は二層に分かれる: `schema_validation` / `range_validation` / `payload_consistency` の 3 つの static stage は決定論的な Python validator / builder が担い、意味判断が必要な `semantic_preflight` だけを Codex CLI (GPT-5.6) が担う。**static stage が 1 つでも FAIL の場合は Codex を呼ばず fail-closed で中断する。** semantic 判定は Codex の structured output（`--output-schema` / `--output-last-message`、`schemas/preflight-semantic.v1.json`）で per-finding decisions として直接受け、`validate_preflight_result.py --from-semantic` が static 結果と合成して `preflight-result.json` を生成する（top-level verdict / stage status / counts は host 算出）。人間可読の `preflight-codex.md` は validated JSON から `--emit-markdown` で派生生成する。Markdown からの `RESULT_JSON` 抽出や final `VERDICT:` line との整合検証は行わない。
 
 #### 4 stage と担当
 
@@ -699,7 +701,7 @@ retry policy は以下の 3 分類だけとする。auto-fix ループや同一 
 
 ### Step 5: 承認プロンプト
 
-Step 3.75 の severity inclusion option 適用と Step 4.5 の Codex セルフレビューを終えた後、投稿前の最終確認として以下のサマリをテキストで提示する。`$send_mode=interactive` では明示的な承認を求める。`$send_mode=auto_submit` では最終投稿承認だけをスキップし、このサマリを表示したうえで承認入力なしで Step 5.5 へ進む:
+Step 3.75 の severity inclusion option 適用と Step 4.5 の Codex セルフレビューを終えた後、投稿前の最終確認として以下のサマリをテキストで提示する。`$send_mode=interactive` では明示的な承認を求める。`$send_mode=auto_send` では最終投稿承認だけをスキップし、このサマリを表示したうえで承認入力なしで Step 5.5 へ進む:
 
 ```
 対象 PR: <$pr_url> (<$title>)
@@ -722,13 +724,13 @@ payload: ~/claude-loop-pr-codex/<$dir_name>/review-payload.json
 preflight result: ~/claude-loop-pr-codex/<$dir_name>/preflight-result.json
 移動先 (投稿後): ~/claude-loop-pr-codex/sent/<$dir_name>-<$head_sha_short>
 
-この内容で投稿してよろしいですか？ (yes/no; interactive のみ。auto_submit は承認入力なしで続行)
+この内容で投稿してよろしいですか？ (yes/no; interactive のみ。auto_send は承認入力なしで続行)
 ```
 
 `$out_of_range_comments` が空の場合も、サマリ行は `行範囲外で除外したインラインコメント: 0 件` として表示する。除外したエントリの箇条書きは 1 件以上ある場合のみ表示する。
 fallback path では `Should Fix inline comments: included no (0/0 件、--include-should-fix で投稿可能候補を含める)`、`Nit inline comments: included no (0/0 件、--include-nit で投稿可能候補を含める)`、`Nit artifact: nit: 0 件` と表示する。primary path で `$nit_findings` が 1 件以上ある場合は `nits.md` のパスを表示し、0 件なら `nit: 0 件` と表示する。
 
-interactive mode では、ユーザーの応答が `yes` / `y` / `はい` 等の明示的な承認である場合のみ Step 5.5 に進む。それ以外（`no` / `n` / `いいえ` / 曖昧・無回答）の場合は処理を中断し、以下を報告して終了する。auto_submit mode ではこの承認入力を行わず、Step 4.5 PASS 後に Step 5.5 の safety gate へ進む:
+interactive mode では、ユーザーの応答が `yes` / `y` / `はい` 等の明示的な承認である場合のみ Step 5.5 に進む。それ以外（`no` / `n` / `いいえ` / 曖昧・無回答）の場合は処理を中断し、以下を報告して終了する。auto_send mode ではこの承認入力を行わず、Step 4.5 PASS 後に Step 5.5 の safety gate へ進む:
 
 - 投稿はスキップした旨
 - payload ファイルは保持されている旨 (`~/claude-loop-pr-codex/$dir_name/review-payload.json`)
@@ -739,9 +741,9 @@ interactive mode では、ユーザーの応答が `yes` / `y` / `はい` 等の
 
 ### Step 5.5: 投稿直前 safety gate
 
-Step 6 の GitHub write の直前に、interactive / auto_submit のどちらでも以下を必ず実行する。これにより `--auto-submit` でも古い review を自動投稿せず、preflight 後にローカル artifact が書き換わった場合（HEAD SHA gate では検出できないローカル TOCTOU）も投稿しない。
+Step 6 の GitHub write の直前に、interactive / auto_send のどちらでも以下を必ず実行する。これにより `--auto-send` でも古い review を自動投稿せず、preflight 後にローカル artifact が書き換わった場合（HEAD SHA gate では検出できないローカル TOCTOU）も投稿しない。
 
-- いつ使うか: Step 5 で interactive の承認を得た直後、または auto_submit で最終投稿承認だけをスキップした直後
+- いつ使うか: Step 5 で interactive の承認を得た直後、または auto_send で最終投稿承認だけをスキップした直後
 - 判定条件: `build_review_payload.py --verify` が終了コード 0（`payload-manifest.json` の構造と required role の存在を検証し、記録された payload / findings / review.md / metadata / ranges / SARIF / diff の sha256 digest がすべて現物と一致し、digest 検証済みの入力から payload / manifest をドライラン再生成して `comment_map` / `event` / `counts` / `semantic_targets` / `withheld` / comments 内容が現物と完全一致する）
 - 次アクション: 成功なら二重投稿防止 gate へ。不一致なら preflight 後にローカル artifact が変更されたため中断し、Step 6 は実行しない
 
@@ -894,7 +896,7 @@ test ! -d ~/claude-loop-pr-codex/$dir_name && test -d ~/claude-loop-pr-codex/sen
 
 ## 実装上の制約
 
-本スキルは通常の permission mode で使うことを想定する。引数なしは対話実行、`--auto-submit` は scheduler / `/loop` など非対話運用向けに最終投稿承認だけをスキップする。どちらのモードでも既存 `/pr-codex:review` と統一感を持たせるため、以下の原則を踏襲する:
+本スキルは通常の permission mode で使うことを想定する。引数なしは対話実行、`--auto-send` は scheduler / `/loop` など非対話運用向けに最終投稿承認だけをスキップする。どちらのモードでも既存 `/pr-codex:review` と統一感を持たせるため、以下の原則を踏襲する:
 
 1. 各テンプレートは 1 テンプレート = 1 シェル実行単位として扱う
 2. テンプレートの改変は変数置換のみ許可する。フラグ、引数順、引用符、リダイレクトはテンプレート記載どおりに使う
@@ -905,7 +907,7 @@ test ! -d ~/claude-loop-pr-codex/$dir_name && test -d ~/claude-loop-pr-codex/sen
 7. `mv` は `sent/` への移動以外では使わない
 8. `gh` の write 系操作は `gh api --method POST .../reviews` のみとし、`gh pr review` / `gh pr comment` / `gh pr merge` などは使わない
 9. 1 回の実行で処理する対象ディレクトリは 1 件のみとする。位置引数なしでは名前昇順の auto 選定を使い、PR URL / PR 番号指定時は direct mode として指定 PR の directory だけを検証する
-10. 投稿前の Step 5 承認プロンプトは interactive mode では必須。`--auto-submit` では最終投稿承認だけをスキップできるが、Step 5.5 の二重投稿防止と head SHA 再確認は必須。Should Fix / Nit は default では含めず、`--include-should-fix` / `--include-nit` 指定時だけ全件を inline comment に含める。`--include-nit` は `--include-should-fix` との併用必須とする
+10. 投稿前の Step 5 承認プロンプトは interactive mode では必須。`--auto-send` では最終投稿承認だけをスキップできるが、Step 5.5 の二重投稿防止と head SHA 再確認は必須。Should Fix / Nit は default では含めず、`--include-should-fix` / `--include-nit` 指定時だけ全件を inline comment に含める。`--include-nit` は `--include-should-fix` との併用必須とする
 11. Step 3 の `python3 "$plugin_root/tasks/validate_findings.py" ...` と Step 4 の `python3 "$plugin_root/tasks/build_review_payload.py" ...` を **必ず**実行する。`findings.verified.json` 欠落、validator 失敗、または builder 失敗時に payload 生成や Markdown fallback へ進んではならない。payload を Claude がメモリ上で組み立てて Write ツールで書き出すことも禁止する
 12. Step 4.5 の verifier pipeline は **必須**。スキップしてはならない。static stage（SARIF validator / `--verify`）の終了コード 0 と、`preflight-result.json` の cross-field validation 通過と `verdict == "PASS"` を確認するまで Step 5 に進まない。static stage が FAIL の場合に Codex semantic を実行してはならない。schema 検証観点では `$plugin_root/schemas/findings.v1.json`、`$plugin_root/schemas/sarif-2.1.0.json`、`$plugin_root/schemas/preflight-result.v1.json`、`$plugin_root/schemas/preflight-semantic.v1.json` の絶対パスを prompt / verifier コマンドに埋め込み、`--cd` 配下の相対 `schemas/` には依存しない
 
