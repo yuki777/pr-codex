@@ -14,6 +14,7 @@ allowed-tools: ["Bash", "Read", "Write", "Glob", "Grep"]
 
 - `/pr-codex:review` が先に実行されており、`~/claude-loop-pr-codex/<org>-<repository>-<pr_number>/` 配下に `status.json` (`state:completed`) / `metadata.json` / `findings.verified.json` / `review.md` が揃っている
 - `ci-status.json` / `ci-summary.md` が存在する場合は、投稿前判断の read-only CI context として参照する。`failure` / `pending` を理由に GitHub workflow の rerun / cancel / write は行わず、Must Fix 0 件の自動 `APPROVE` は `COMMENT` に抑止してユーザーへ CI 状態を説明する
+- 投稿アカウントが PR 作者と同一（self-PR）の場合、GitHub Reviews API は `APPROVE` / `REQUEST_CHANGES` を 422 で拒否するため、Step 2b で self-PR を検知し event を `COMMENT` に抑止する。投稿者 identity を判定できない場合は投稿前に中断する（fail-closed）
 - `findings.verified.json` を **必須の一次入力** とする。M1 の F13 以降、`review.md` parser への Markdown fallback は使わない
 - GitHub CLI (`gh`) がログイン済みで、対象 PR にレビュー投稿権限がある (`gh auth status` で確認可能)
 - `jq` が利用可能
@@ -221,10 +222,26 @@ jq -r '"org=\(.org)\nrepository=\(.repository)\nrepository_full_name=\(.reposito
 
 - いつ使うか: `review.md` を読み込んだ直後に実行する
 - 判定条件: `findings.verified.json` が存在するなら終了コード 0
-- 次アクション: 存在するなら `findings.verified.json` を Read ツールで取得して Step 3 へ。存在しなければ F13 必須入力欠落としてユーザーへ通知し中断する（Markdown fallback へは切り替えない）
+- 次アクション: 存在するなら `findings.verified.json` を Read ツールで取得して Step 2b へ。存在しなければ F13 必須入力欠落としてユーザーへ通知し中断する（Markdown fallback へは切り替えない）
 
 ```bash
 test -f ~/claude-loop-pr-codex/$dir_name/findings.verified.json
+```
+
+### Step 2b: self-PR 検知（read-only）
+
+投稿 event の決定は投稿者 identity に依存するため、Step 2 の値取得後・Step 2.5 の前に、投稿アカウントと PR 作者を read-only で照合する。GitHub Reviews API はレビュー投稿者自身が作成した PR への `APPROVE` / `REQUEST_CHANGES` を 422 で拒否するため、self-PR では Step 4 の builder が event を常に `COMMENT` に抑止する（inline の Must Fix コメントは `COMMENT` イベントでも投稿できるため維持する）。判定不能のまま続行してはならない（fail-closed）。
+
+- いつ使うか: Step 2 で `$org` / `$repository` / `$pr_number` を保持し `findings.verified.json` を読み込んだ直後、Step 2.5 の前に必ず実行する。Step 2b をスキップして Step 2.5 / Step 3 へ進んではならない
+- 判定条件: 2 つのテンプレートがともに終了コード 0 で、それぞれ非空のログイン名 1 行を返す
+- 次アクション: 両者が一致すれば `$self_review=true`、不一致なら `$self_review=false` として保持し、Step 2.5 へ進む。どちらか一方でも失敗（非ゼロ終了または空出力）した場合は **投稿前に中断** する。builder / Step 4.5 preflight は実行せず、`sent/` 移動も行わない。失敗した API と、`gh auth status` の確認・再実行というリトライ手順をユーザーに報告する
+
+```bash
+gh api user --jq '.login'
+```
+
+```bash
+gh api "repos/$org/$repository/pulls/$pr_number" --jq '.user.login'
 ```
 
 ### Step 2.5: plugin root / schema / validator path の解決
@@ -434,23 +451,25 @@ Step 2.5 で保持した `payload_builder_path` を使い、以下のテンプ�
 - いつ使うか: Step 3.5 の `pr.diff.ranges.txt` 生成後、Step 4.5 の verifier pipeline 前に必ず実行する
 - 判定条件: 終了コード 0、`review-payload.json` と `payload-manifest.json` が生成され、`payload-manifest.json` の `counts.must_fix_total`（cluster member 込みの canonical Must Fix 件数）が Step 3 で保持した `$count_must` と一致する
 - 次アクション: 成功なら Step 4.5 へ。非ゼロ終了（deterministic payload failure）の場合は同じテンプレートを **1 回だけ** 再実行し、それでも失敗するなら builder の stderr を提示して中断する
-- `--include-should-fix` / `--include-nit` は Step 0 の `$include_should_fix` / `$include_nit` が true の場合だけコマンドに含める。この 2 フラグの有無だけがこのテンプレートで許可された可変部分であり、他の引数は変数置換以外で改変しない
+- `--include-should-fix` / `--include-nit` は Step 0 の `$include_should_fix` / `$include_nit` が true の場合だけコマンドに含める。この 2 フラグの有無と `--self-review` の値だけがこのテンプレートで許可された可変部分であり、他の引数は変数置換以外で改変しない
+- `--self-review` には Step 2b で保持した `$self_review` の実値（`true` / `false`）を必ず渡す。未指定・不正値は builder が非ゼロ終了する（fail-closed）。`unknown` は受け付けない。identity 判定不能の場合は Step 2b で builder 到達前に中断済みのため、この値が必要になることはない
 - `--ci-status` / `--run-plan` / `--ci-summary` / `--sarif` / `--diff` は対象ファイルが存在しない場合も指定してよく、builder が未取得として扱う
 
 ```bash
-python3 $payload_builder_path --findings ~/claude-loop-pr-codex/$dir_name/findings.verified.json --review ~/claude-loop-pr-codex/$dir_name/review.md --metadata ~/claude-loop-pr-codex/$dir_name/metadata.json --ranges ~/claude-loop-pr-codex/$dir_name/pr.diff.ranges.txt --ci-status ~/claude-loop-pr-codex/$dir_name/ci-status.json --run-plan ~/claude-loop-pr-codex/$dir_name/run-plan.json --ci-summary ~/claude-loop-pr-codex/$dir_name/ci-summary.md --sarif ~/claude-loop-pr-codex/$dir_name/findings.sarif --diff ~/claude-loop-pr-codex/$dir_name/pr.diff --output ~/claude-loop-pr-codex/$dir_name/review-payload.json --manifest ~/claude-loop-pr-codex/$dir_name/payload-manifest.json
+python3 $payload_builder_path --findings ~/claude-loop-pr-codex/$dir_name/findings.verified.json --review ~/claude-loop-pr-codex/$dir_name/review.md --metadata ~/claude-loop-pr-codex/$dir_name/metadata.json --ranges ~/claude-loop-pr-codex/$dir_name/pr.diff.ranges.txt --ci-status ~/claude-loop-pr-codex/$dir_name/ci-status.json --run-plan ~/claude-loop-pr-codex/$dir_name/run-plan.json --ci-summary ~/claude-loop-pr-codex/$dir_name/ci-summary.md --sarif ~/claude-loop-pr-codex/$dir_name/findings.sarif --diff ~/claude-loop-pr-codex/$dir_name/pr.diff --self-review $self_review --output ~/claude-loop-pr-codex/$dir_name/review-payload.json --manifest ~/claude-loop-pr-codex/$dir_name/payload-manifest.json
 ```
 
 builder は以下のルールを実装している:
 
 - `commit_id`: `$head_sha`（レビュー時点の head に明示的に紐付ける）
 - `event`:
+  - `$self_review == true` なら、Must Fix 件数と CI 状態にかかわらず `"COMMENT"` に抑止する（自分の PR には `APPROVE` / `REQUEST_CHANGES` を投稿できないため。inline の Must Fix コメントは `COMMENT` イベントでも投稿できるので `comments[]` は維持する）。以下の 3 分岐は `$self_review == false` の場合に適用する:
   - canonical（`findings.verified.json`）の Must Fix が 1 件以上あれば `"REQUEST_CHANGES"`（`counts.must_fix_total`。範囲検証後の `$must_fix` と `$out_of_range_comments` の `Must Fix` に加え、cluster 非代表 member / `withheld` を含む）
   - Must Fix が 0 件、かつ `ci-status.json.state` が `failure` / `pending` ではない場合は `"APPROVE"`。`ci-status.json` が存在しない、または `success` / `skipped` の場合もこの分岐に含める
   - Must Fix が 0 件、かつ `ci-status.json.state` が `failure` / `pending` の場合は `"COMMENT"` に抑止する
 - `body`:
   - `$posted_summary`（投稿用総評）: builder が投稿対象の finding と event だけから決定論的に生成する。`review.md` の `## 総評` は転記しない。件数は表示せず、投稿しない severity と `withheld` には一切言及しない（#120）。生成ルール:
-    - event 行: `REQUEST_CHANGES` は「Must Fix を検出しました。マージ前に修正が必要です。」とし、件数は表示しない（cluster 代表への集約により canonical 件数と投稿コメント数が一致しないため）。本文退避がある場合は「（一部は）行コメント不可のため本文末尾に記載しています。」を続ける。公開可能な Must Fix が 0 件の場合（withheld のみ等）は event の言い換えだけの汎用文「このレビューは変更をリクエストします。」とし、withheld の存在・件数・カテゴリを新たに公開しない。`APPROVE` は「Must Fix はありません。承認します。」、CI 抑止の `COMMENT` は「Must Fix はありませんが、CI が {state} のため承認を保留します。」
+    - event 行: `REQUEST_CHANGES` は「Must Fix を検出しました。マージ前に修正が必要です。」とし、件数は表示しない（cluster 代表への集約により canonical 件数と投稿コメント数が一致しないため）。本文退避がある場合は「（一部は）行コメント不可のため本文末尾に記載しています。」を続ける。公開可能な Must Fix が 0 件の場合（withheld のみ等）は event の言い換えだけの汎用文「このレビューは変更をリクエストします。」とし、withheld の存在・件数・カテゴリを新たに公開しない。`APPROVE` は「Must Fix はありません。承認します。」、CI 抑止の `COMMENT` は「Must Fix はありませんが、CI が {state} のため承認を保留します。」。self-PR 抑止の `COMMENT` は、Must Fix 0 件なら「Must Fix はありません。」に「このレビューは PR 作成者自身のアカウントから投稿されているため、承認（APPROVE）ではなくコメントとして投稿します。」を続け、Must Fix 1 件以上なら上記 `REQUEST_CHANGES` と同じ Must Fix 文言を維持したうえで「このレビューは PR 作成者自身のアカウントから投稿されているため、変更リクエスト（REQUEST_CHANGES）ではなくコメントとして投稿します。」を続ける
     - severity 行: `--include-should-fix` / `--include-nit` で実際に投稿した Should Fix / Nit がある場合のみ、severity ごとに投稿先（inline / 行コメント不可による本文末尾）を 1 行で付加する。件数は表示せず、投稿 0 件の severity には言及しない
   - `$good_points` が非空の場合:
     ```
@@ -472,7 +491,7 @@ builder は以下のルールを実装している:
     - 検証観点: <$reviewed_scope>
     - CI 状態: <$ci_status_state または "未取得">
     ```
-  - `event == "COMMENT"` が CI 抑止によるものの場合は、body 末尾に `## CI 状態` を追加し、`ci-status.json.state` と `ci-summary.md` の要約を短く記載する
+  - `event == "COMMENT"` が CI 抑止によるものの場合は、body 末尾に `## CI 状態` を追加し、`ci-status.json.state` と `ci-summary.md` の要約を短く記載する。self-PR 抑止による `COMMENT` の場合は `## CI 状態` を追加せず、抑止理由の 1 行は総評（`$posted_summary`）内に含める
   - Should Fix / Nit は通常 body section には追加しない。diff 範囲外の Must Fix / Should Fix / Nit がある場合だけ、`$out_of_range_comments` に退避して body 末尾の `## 行コメント不可 (diff 範囲外)` に含める
   - `$out_of_range_comments` が非空の場合は body 末尾に以下を追加する:
     ```
@@ -492,7 +511,7 @@ builder は以下のルールを実装している:
     投稿前検証 (semantic preflight) は Codex gpt-5.6-sol により行われました。
     ```
     builder は `producer.version` と `review_engines[]` を必須入力として検証する。`review_engines[]` は実行順の `Claude Code`、`Codex` の2件ちょうどで、各要素の `name` / `model` / `effort` がすべて非空文字列でなければならない。欠落・不正なら deterministic failure として非ゼロ終了する（フッターを省略した投稿は行わない fail-closed。#124）。`review_engines` 記録前の旧バージョン review artifact を send する場合は、`/pr-codex:review` を再実行して metadata を再生成する。
-    3 行目（投稿前検証）は `counts.must_fix_total` が 1 件以上の場合のみ builder が追加する。Step 4.5 の semantic preflight は Must Fix があるときだけ実行され、失敗時は投稿自体が中止されるため、投稿された body の表示は常に実行事実と一致する。Must Fix 0 件の skip 時は表示しない。文言に Must Fix を含めず、行の有無は event（`REQUEST_CHANGES` ⇔ Must Fix 1 件以上）と等価な情報のみで、`withheld` の存在・件数・カテゴリを新たに公開しない（#120 と整合）。verifier は send 実行時の構成のため `metadata.json` には記録せず、builder 同梱の固定値 `SEMANTIC_VERIFIER_ENGINE` を使う。Step 4.5 の Codex テンプレートのモデルを変更する場合は builder の固定値も併せて更新する（`tasks/test_issue124_docs.py` が一致を検証する）。effort はどのフッター行にも表示しない。実行時の実効 effort は投稿時点で確定できないため、`review_engines[].effort` は記録の検証にだけ使い、表示は name と model に限定する（#128）
+    3 行目（投稿前検証）は `counts.must_fix_total` が 1 件以上の場合のみ builder が追加する。Step 4.5 の semantic preflight は Must Fix があるときだけ実行され、失敗時は投稿自体が中止されるため、投稿された body の表示は常に実行事実と一致する。Must Fix 0 件の skip 時は表示しない。文言に Must Fix を含めず、行の有無は Must Fix 1 件以上の情報のみで（非 self-PR では公開 event `REQUEST_CHANGES` と等価。self-PR 抑止の `COMMENT` でも総評と inline コメントが同じ情報を先に公開している）、`withheld` の存在・件数・カテゴリを新たに公開しない（#120 と整合）。verifier は send 実行時の構成のため `metadata.json` には記録せず、builder 同梱の固定値 `SEMANTIC_VERIFIER_ENGINE` を使う。Step 4.5 の Codex テンプレートのモデルを変更する場合は builder の固定値も併せて更新する（`tasks/test_issue124_docs.py` が一致を検証する）。effort はどのフッター行にも表示しない。実行時の実効 effort は投稿時点で確定できないため、`review_engines[].effort` は記録の検証にだけ使い、表示は name と model に限定する（#128）
 - `comments`: `$must_fix` + `$inline_should_fix` + `$inline_nit`（それぞれ `findings.verified.json` の順序を保つ）。Should Fix / Nit も `path` / `line` / `side` / `body` を持つ inline comment として投稿する。各要素は以下のキーを含む:
   - `path` (必須)
   - `line` (必須)
@@ -500,11 +519,11 @@ builder は以下のルールを実装している:
   - `body` (Step 3 の body フォーマット)
   - `start_line` / `start_side` は範囲指定の場合のみ含める
 
-範囲検証後の `$must_fix` / `$inline_should_fix` / `$inline_nit` が空でも、`event` は canonical（`findings.verified.json`）の Must Fix 件数（cluster 非代表 member / `withheld` を含む）で決める。canonical の Must Fix が 0 件なら、Must Fix 0 件の結論として `event: "APPROVE"` + body (総評 + 良い点 + 確認した範囲) で投稿する。ただし canonical に Must Fix が 1 件以上ある場合（`$out_of_range_comments` の `Must Fix` や `withheld` のみの場合を含む）の `event` は上記ルールどおり `"REQUEST_CHANGES"` とし、Must Fix 0 件で `ci-status.json.state` が `failure` / `pending` の場合は `event: "COMMENT"` に抑止して CI 状態を body と Step 5 に表示する。
+範囲検証後の `$must_fix` / `$inline_should_fix` / `$inline_nit` が空でも、`event` は canonical（`findings.verified.json`）の Must Fix 件数（cluster 非代表 member / `withheld` を含む）で決める。canonical の Must Fix が 0 件なら、Must Fix 0 件の結論として `event: "APPROVE"` + body (総評 + 良い点 + 確認した範囲) で投稿する。ただし canonical に Must Fix が 1 件以上ある場合（`$out_of_range_comments` の `Must Fix` や `withheld` のみの場合を含む）の `event` は上記ルールどおり `"REQUEST_CHANGES"` とし、Must Fix 0 件で `ci-status.json.state` が `failure` / `pending` の場合は `event: "COMMENT"` に抑止して CI 状態を body と Step 5 に表示する。これらの event ルールはすべて `$self_review == false` の場合であり、`$self_review == true` なら Must Fix 件数と CI 状態にかかわらず `event: "COMMENT"` に抑止して、抑止理由を総評と Step 5 に表示する。
 
 body のセクション順は必ず `総評`（`$posted_summary`） → `## 良い点`（存在する場合）→ `## 確認した範囲`（`APPROVE` の場合）→ `## CI 状態`（CI 抑止 `COMMENT` の場合）→ `## 行コメント不可 (diff 範囲外)`（存在する場合）→ 自動レビューフッター（常に最終セクション。#124）とする。diff 範囲内の Should Fix / Nit は body section ではなく `comments[]` の inline comment とする。diff 範囲外の Must Fix / Should Fix / Nit は body の `## 行コメント不可 (diff 範囲外)` へ退避する。
 
-payload は builder が `--output` で `~/claude-loop-pr-codex/$dir_name/review-payload.json` に整形 JSON（インデント 2）として書き出す。同時に `--manifest` で `payload-manifest.json`（`payload-manifest.v1`）を書き出し、`comment_index → finding_id` の対応表（`comment_map`）、body 退避一覧（`out_of_range`）、非公開一覧（`withheld`。local_only / suppress の Must Fix で、body にも載せない）、semantic 対象の全 Must Fix finding id（`semantic_targets`。cluster 非代表 member を含む）、active severity flags（`flags`）、件数（`counts`）、event、および role 付きの sha256 digest（`files`。required: findings / review / metadata / ranges / payload、optional: sarif / diff / ci_status / run_plan / ci_summary）を記録する。以降の工程は location 文字列による曖昧照合ではなく `comment_map` を使って finding と comment を対応付ける。`--verify` は manifest 構造・required role の存在・全 role の digest 照合に加えて、digest 検証済みの入力と `flags` から payload / manifest をドライラン再生成して現物と完全一致比較し（`generated_at` を除く）、payload と manifest の協調改竄も検出する。
+payload は builder が `--output` で `~/claude-loop-pr-codex/$dir_name/review-payload.json` に整形 JSON（インデント 2）として書き出す。同時に `--manifest` で `payload-manifest.json`（`payload-manifest.v1`）を書き出し、`comment_index → finding_id` の対応表（`comment_map`）、body 退避一覧（`out_of_range`）、非公開一覧（`withheld`。local_only / suppress の Must Fix で、body にも載せない）、semantic 対象の全 Must Fix finding id（`semantic_targets`。cluster 非代表 member を含む）、active severity flags（`flags`）、self-PR 判定（`self_review`。`true|false` の必須 boolean。event 決定に使った入力として必ず記録する）、件数（`counts`）、event、および role 付きの sha256 digest（`files`。required: findings / review / metadata / ranges / payload、optional: sarif / diff / ci_status / run_plan / ci_summary）を記録する。以降の工程は location 文字列による曖昧照合ではなく `comment_map` を使って finding と comment を対応付ける。`--verify` は manifest 構造・required role の存在・全 role の digest 照合に加えて、digest 検証済みの入力と `flags` / `self_review` から payload / manifest をドライラン再生成して現物と完全一致比較し（`generated_at` を除く）、payload と manifest の協調改竄も検出する。`self_review` を記録しない旧形式 manifest は `--verify` が旧形式として明示的に非ゼロ終了する（黙って `false` 扱いにしない）。
 
 #### 許可 severity (active severity flags)
 
@@ -521,7 +540,7 @@ builder は `--include-should-fix` / `--include-nit` の active severity flags �
 | 1. `schema_validation` | Python (`validate_findings.py` / `validate_findings_sarif.py`) | `findings.verified.json` の schema / fingerprint 再計算 / `metadata.json` との PR context 一致（Step 3 で実行済み）、`findings.sarif` の schema validation、canonical ↔ `review.md` ↔ `review-payload.json` ↔ SARIF の Must Fix count 整合 |
 | 2. `range_validation` | Python (`build_review_payload.py`) | `payload.comments[]` の `path` / `line` が `metadata.json.files[]` と `pr.diff.ranges.txt` の hunk 範囲内にあること。builder が構築時に enforcement し、`--verify` の manifest digest 再確認で構築後の改竄・手編集を検出する |
 | 3. `semantic_preflight` | Codex (GPT-5.6) | payload 投稿対象の各 Must Fix finding の実在性判定（confirmed / refuted / insufficient_evidence の 3 値） |
-| 4. `payload_consistency` | Python (`build_review_payload.py`) | event 判定（'canonical Must Fix が1件以上（cluster 非代表 member / withheld / body 末尾へ退避した範囲外 Must Fix を含む）→ REQUEST_CHANGES / Must Fix 0件かつ ci-status.json.state が failure または pending → COMMENT / Must Fix 0件かつ ci-status.json.state が success・skipped・未取得 → APPROVE'）、body セクション順（payload.event が APPROVE の場合は payload.body に '## 確認した範囲' を含む）、counts。builder が生成時に決定論的に保証し、`--verify` で再確認する |
+| 4. `payload_consistency` | Python (`build_review_payload.py`) | event 判定（'self_review が true → COMMENT（Must Fix 件数・CI 状態にかかわらず抑止）/ self_review が false の場合: canonical Must Fix が1件以上（cluster 非代表 member / withheld / body 末尾へ退避した範囲外 Must Fix を含む）→ REQUEST_CHANGES / Must Fix 0件かつ ci-status.json.state が failure または pending → COMMENT / Must Fix 0件かつ ci-status.json.state が success・skipped・未取得 → APPROVE'。不一致は rule `event_mismatch`）、body セクション順（payload.event が APPROVE の場合は payload.body に '## 確認した範囲' を含む）、counts。builder が生成時に決定論的に保証し、`--verify` で再確認する |
 
 semantic preflight は canonical の `severity == "must_fix"` 全 finding（cluster 非代表 member と `withheld` を含む。`payload-manifest.json` の `semantic_targets`）に適用する。cluster member の要約も代表 comment の body に掲載されるため、代表だけに縮めない。Codex は各 Must Fix finding について「この指摘が誤りである可能性」を 1 つだけ探索し、3 値で判定する。「反証あり」と「調査不足」を区別する:
 
@@ -686,6 +705,7 @@ Step 3.75 の severity inclusion option 適用と Step 4.5 の Codex セルフ�
 対象 PR: <$pr_url> (<$title>)
 event: <REQUEST_CHANGES | APPROVE | COMMENT>
 CI gate: <success|failure|pending|skipped|未取得>（failure/pending の場合は APPROVE 抑止）
+self-PR gate: <true|false>（true の場合は APPROVE / REQUEST_CHANGES を COMMENT に抑止）
 findings source: ~/claude-loop-pr-codex/<$dir_name>/findings.verified.json
 review file: ~/claude-loop-pr-codex/<$dir_name>/review.md
 SARIF artifact: ~/claude-loop-pr-codex/<$dir_name>/findings.sarif (local-only, Code Scanning upload なし)
@@ -817,6 +837,7 @@ test ! -d ~/claude-loop-pr-codex/$dir_name && test -d ~/claude-loop-pr-codex/sen
 - 対象 PR: `$pr_url` (`$title`)
 - 投稿した review の URL: `$review_url`
 - 選択した `event`
+- self-PR 抑止の有無（`$self_review=true` により `COMMENT` にした場合は、その旨を 1 行で表示する）
 - インラインコメント件数 (Must Fix のみ)
 - Should Fix inline comment 同梱結果 (`included yes/no` と件数)
 - Nit inline comment 同梱結果 (`included yes/no` と件数)
@@ -832,6 +853,7 @@ test ! -d ~/claude-loop-pr-codex/$dir_name && test -d ~/claude-loop-pr-codex/sen
 - Nit 件数。`nits.md` を生成した場合は未移動の path `~/claude-loop-pr-codex/$dir_name/nits.md`、0 件なら `nit: 0 件`
 - 推定原因:
   - 422 → Step 3.5 で PR diff 範囲外のインラインコメントは除外済みのため、残ったコメントの `path` / `line` / `start_line` が GitHub 側で解決不能になっている可能性がある。`review-payload.json` の `comments` と `pr.diff.ranges.txt` / `pr.diff` を照合し、必要なら payload から該当コメントを除外するようユーザーに案内
+  - 422 のエラーメッセージに self-approval 拒否（`Can not approve your own pull request` / `Can not request changes on your own pull request` 等）が含まれる場合 → PR 作成者と投稿アカウントが同一のため `APPROVE` / `REQUEST_CHANGES` を投稿できない。Step 2b の検知後に投稿アカウントを切り替えた、organization / App 経由の投稿で作者と同一 identity に解決された等の競合が原因のため、`gh auth status` で投稿アカウントを確認するよう案内する（既存の 422 ハンドリング同様、リトライや event の自動差し替えはしない）
   - 403 → 権限不足。`gh auth status` の確認と、PR リポジトリへのコメント権限を案内
   - 404 → PR が見つからない。`$org` / `$repository` / `$pr_number` の値確認を案内
   - Step 7 の移動先衝突 → `~/claude-loop-pr-codex/sent/$dir_name-$head_sha_short/` がすでに存在する。同一 `head_sha` (`$head_sha_short`) への重複投稿の可能性があるため、既存の投稿履歴 (`metadata.json` / `review-response.json`) を確認するようユーザーに案内。本当に再投稿が必要なら、既存の `sent/` ディレクトリを手動でリネームまたは退避してから再実行する
@@ -865,6 +887,7 @@ test ! -d ~/claude-loop-pr-codex/$dir_name && test -d ~/claude-loop-pr-codex/sen
 - Step 5.5 で `review-response.json.html_url` が既に存在 → 二重投稿防止のため中断し、`gh api` は実行しない
 - Step 5.5 で現在の PR head SHA が `metadata.json.head_sha` と一致しない → レビュー生成後に追加 commit が入ったため中断し、古い review を自動投稿しない
 - `gh api` 422/403/404 → Step 8 の失敗報告で分岐し、`sent/` 移動は行わない
+- Step 2b の identity 取得（`gh api user` または PR 作者の取得）が非ゼロ終了または空出力 → 投稿前に中断する（fail-closed）。builder / Step 4.5 preflight は実行せず、`sent/` 移動も行わない。失敗した API と、`gh auth status` の確認・再実行というリトライ手順を報告する
 - Step 7 で `sent/$dir_name-$head_sha_short/` がすでに存在 → ユーザーに通知して処理中断（投稿はすでに完了している点に注意）。`sent/` 移動は行わず、`review-response.json` を残した状態で終了する
 - Step 7 の移動完了検証が失敗 → `mv` が silent に失敗した可能性があるため Step 8 の失敗報告で手動確認を促し、`review-response.json` を残した状態で終了する
 - ユーザーが Step 5 で承認を拒否 → 何もせず終了。payload ファイルは残す
