@@ -41,6 +41,7 @@ class Issue88DocsTest(unittest.TestCase):
             "$include_should_fix = true | false",
             "$include_nit = true | false",
             "--auto-send",
+            "`--auto-send` と `--auto-submit` のどちらも含まれない: `$send_mode=interactive`",
             "--include-should-fix",
             "--include-nit",
             "順不同",

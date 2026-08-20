@@ -26,6 +26,7 @@ class Issue77DocsTest(unittest.TestCase):
             "$ARGUMENTS",
             "$send_mode = interactive | auto_send",
             "`--auto-send`",
+            "`--auto-send` と `--auto-submit` のどちらも含まれない: `$send_mode=interactive`",
             "unsupported argument",
             "未知オプション",
             "同じオプションの重複",

@@ -59,6 +59,7 @@ Skill 起動直後に `$ARGUMENTS` を shell 風に空白分割して解釈し�
 - `$ARGUMENTS` が空文字列または空白のみ: `$send_mode=interactive` / `$include_should_fix=false` / `$include_nit=false` / `$target_mode=auto`
 - `--auto-send` が含まれる: `$send_mode=auto_send`
 - 旧 `--auto-submit` が含まれる: 互換エイリアスとして `$send_mode=auto_send` に正規化する
+- `--auto-send` と `--auto-submit` のどちらも含まれない: `$send_mode=interactive`
 - `--include-should-fix` が含まれる: `$include_should_fix=true` とし、投稿可能な Should Fix 候補を inline comment 対象にする
 - `--include-nit` が含まれる: `$include_nit=true` とし、投稿可能な Nit 候補を inline comment 対象にする。ただし `--include-nit` は `--include-should-fix` なしでは unsupported argument として中断する（--include-nit は --include-should-fix なしでは unsupported argument）
 - 位置引数なし: `$target_mode=auto`。従来どおり Step 1 で `ls` 名前昇順の先頭 completed レビューを選定する
