@@ -59,7 +59,7 @@ class SelfPrDocsTest(unittest.TestCase):
             SEND_SKILL,
         )
         self.assertIn(
-            "- Step 2b の identity 取得（`gh api user` または PR 作者の取得）が非ゼロ終了または空出力 → 投稿前に中断する（fail-closed）",
+            "- Step 2b の identity 取得（`gh api user` または PR 作者の取得）が非ゼロ終了、空出力、または複数行出力 → 投稿前に中断する（fail-closed）",
             SEND_SKILL,
         )
 
@@ -145,6 +145,7 @@ printf '%s\\n' "$login"
             failures = (
                 ({"user_result": "fail"}, "gh api user", "user\n"),
                 ({"user_result": "empty"}, "gh api user", "user\n"),
+                ({"user_login": "reviewer\nunexpected"}, "gh api user", "user\n"),
                 (
                     {"pr_result": "fail"},
                     "gh api repos/example/repo/pulls/137",
@@ -152,6 +153,11 @@ printf '%s\\n' "$login"
                 ),
                 (
                     {"pr_result": "empty"},
+                    "gh api repos/example/repo/pulls/137",
+                    "user\nrepos/example/repo/pulls/137\n",
+                ),
+                (
+                    {"pr_login": "author\nunexpected"},
                     "gh api repos/example/repo/pulls/137",
                     "user\nrepos/example/repo/pulls/137\n",
                 ),

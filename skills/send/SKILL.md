@@ -236,14 +236,14 @@ test -f ~/claude-loop-pr-codex/$dir_name/findings.verified.json
 
 - いつ使うか: Step 2 で `$org` / `$repository` / `$pr_number` を保持し `findings.verified.json` を読み込んだ直後、Step 2.5 の前に必ず実行する。Step 2b をスキップして Step 2.5 / Step 3 へ進んではならない
 - 判定条件: 1 つのテンプレート内にある 2 つの read-only API 呼び出しがともに終了コード 0 で非空のログイン名 1 行を返し、テンプレート全体が `true` または `false` の 1 行を返す
-- 次アクション: 終了コード 0 の標準出力を `$self_review=true|false` として保持し、Step 2.5 へ進む。どちらか一方でも失敗（非ゼロ終了または空出力）した場合はテンプレート自身が失敗した API と `gh auth status` の確認・再実行手順を報告して非ゼロ終了するため、**投稿前に中断** する。builder / Step 4.5 preflight は実行せず、`sent/` 移動も行わない
+- 次アクション: 終了コード 0 の標準出力を `$self_review=true|false` として保持し、Step 2.5 へ進む。どちらか一方でも失敗（非ゼロ終了、空出力、または複数行出力）した場合はテンプレート自身が失敗した API と `gh auth status` の確認・再実行手順を報告して非ゼロ終了するため、**投稿前に中断** する。builder / Step 4.5 preflight は実行せず、`sent/` 移動も行わない
 
 ```bash
 poster_login="$(gh api user --jq '.login')" || {
   printf '%s\n' 'self-PR identity 取得失敗: gh api user。gh auth status を確認し、/pr-codex:send を再実行してください。' >&2
   exit 1
 }
-if [ -z "$poster_login" ]
+if [ -z "$poster_login" ] || [ "$(printf '%s\n' "$poster_login" | wc -l | tr -d '[:space:]')" != "1" ]
 then
   printf '%s\n' 'self-PR identity 取得失敗: gh api user。gh auth status を確認し、/pr-codex:send を再実行してください。' >&2
   exit 1
@@ -252,7 +252,7 @@ pr_author_login="$(gh api "repos/$org/$repository/pulls/$pr_number" --jq '.user.
   printf 'self-PR identity 取得失敗: gh api repos/%s/%s/pulls/%s。gh auth status を確認し、/pr-codex:send を再実行してください。\n' "$org" "$repository" "$pr_number" >&2
   exit 1
 }
-if [ -z "$pr_author_login" ]
+if [ -z "$pr_author_login" ] || [ "$(printf '%s\n' "$pr_author_login" | wc -l | tr -d '[:space:]')" != "1" ]
 then
   printf 'self-PR identity 取得失敗: gh api repos/%s/%s/pulls/%s。gh auth status を確認し、/pr-codex:send を再実行してください。\n' "$org" "$repository" "$pr_number" >&2
   exit 1
@@ -909,7 +909,7 @@ test ! -d ~/claude-loop-pr-codex/$dir_name && test -d ~/claude-loop-pr-codex/sen
 - Step 5.5 で `review-response.json.html_url` が既に存在 → 二重投稿防止のため中断し、`gh api` は実行しない
 - Step 5.5 で現在の PR head SHA が `metadata.json.head_sha` と一致しない → レビュー生成後に追加 commit が入ったため中断し、古い review を自動投稿しない
 - `gh api` 422/403/404 → Step 8 の失敗報告で分岐し、`sent/` 移動は行わない
-- Step 2b の identity 取得（`gh api user` または PR 作者の取得）が非ゼロ終了または空出力 → 投稿前に中断する（fail-closed）。builder / Step 4.5 preflight は実行せず、`sent/` 移動も行わない。失敗した API と、`gh auth status` の確認・再実行というリトライ手順を報告する
+- Step 2b の identity 取得（`gh api user` または PR 作者の取得）が非ゼロ終了、空出力、または複数行出力 → 投稿前に中断する（fail-closed）。builder / Step 4.5 preflight は実行せず、`sent/` 移動も行わない。失敗した API と、`gh auth status` の確認・再実行というリトライ手順を報告する
 - Step 7 で `sent/$dir_name-$head_sha_short/` がすでに存在 → ユーザーに通知して処理中断（投稿はすでに完了している点に注意）。`sent/` 移動は行わず、`review-response.json` を残した状態で終了する
 - Step 7 の移動完了検証が失敗 → `mv` が silent に失敗した可能性があるため Step 8 の失敗報告で手動確認を促し、`review-response.json` を残した状態で終了する
 - ユーザーが Step 5 で承認を拒否 → 何もせず終了。payload ファイルは残す
