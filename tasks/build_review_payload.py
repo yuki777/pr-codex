@@ -586,8 +586,10 @@ def compose_review_footer(findings_data: dict[str, Any], metadata_data: dict[str
     >= 1: send Step 4.5 always runs the Codex semantic preflight for such
     payloads (posting is aborted when it fails) and always skips it when no
     must_fix exists, so a posted body always matches the executed engines.
-    The line's wording never mentions Must Fix and its presence is equivalent
-    to the public REQUEST_CHANGES event, so withheld findings leak nothing
+    The line's wording never mentions Must Fix. For non-self reviews its
+    presence corresponds to the public REQUEST_CHANGES event. For self-review
+    COMMENT payloads, the posted summary already discloses the same blocking
+    review state, so withheld findings leak no additional information
     (issue #120 disclosure rules).
     """
 
