@@ -235,15 +235,35 @@ test -f ~/claude-loop-pr-codex/$dir_name/findings.verified.json
 投稿 event の決定は投稿者 identity に依存するため、Step 2 の値取得後・Step 2.5 の前に、投稿アカウントと PR 作者を read-only で照合する。GitHub Reviews API はレビュー投稿者自身が作成した PR への `APPROVE` / `REQUEST_CHANGES` を 422 で拒否するため、self-PR では Step 4 の builder が event を常に `COMMENT` に抑止する（inline の Must Fix コメントは `COMMENT` イベントでも投稿できるため維持する）。判定不能のまま続行してはならない（fail-closed）。
 
 - いつ使うか: Step 2 で `$org` / `$repository` / `$pr_number` を保持し `findings.verified.json` を読み込んだ直後、Step 2.5 の前に必ず実行する。Step 2b をスキップして Step 2.5 / Step 3 へ進んではならない
-- 判定条件: 2 つのテンプレートがともに終了コード 0 で、それぞれ非空のログイン名 1 行を返す
-- 次アクション: 両者が一致すれば `$self_review=true`、不一致なら `$self_review=false` として保持し、Step 2.5 へ進む。どちらか一方でも失敗（非ゼロ終了または空出力）した場合は **投稿前に中断** する。builder / Step 4.5 preflight は実行せず、`sent/` 移動も行わない。失敗した API と、`gh auth status` の確認・再実行というリトライ手順をユーザーに報告する
+- 判定条件: 1 つのテンプレート内にある 2 つの read-only API 呼び出しがともに終了コード 0 で非空のログイン名 1 行を返し、テンプレート全体が `true` または `false` の 1 行を返す
+- 次アクション: 終了コード 0 の標準出力を `$self_review=true|false` として保持し、Step 2.5 へ進む。どちらか一方でも失敗（非ゼロ終了、空出力、または複数行出力）した場合はテンプレート自身が失敗した API と `gh auth status` の確認・再実行手順を報告して非ゼロ終了するため、**投稿前に中断** する。builder / Step 4.5 preflight は実行せず、`sent/` 移動も行わない
 
 ```bash
-gh api user --jq '.login'
-```
-
-```bash
-gh api "repos/$org/$repository/pulls/$pr_number" --jq '.user.login'
+poster_login="$(gh api user --jq '.login')" || {
+  printf '%s\n' 'self-PR identity 取得失敗: gh api user。gh auth status を確認し、/pr-codex:send を再実行してください。' >&2
+  exit 1
+}
+if [ -z "$poster_login" ] || [ "$(printf '%s\n' "$poster_login" | wc -l | tr -d '[:space:]')" != "1" ]
+then
+  printf '%s\n' 'self-PR identity 取得失敗: gh api user。gh auth status を確認し、/pr-codex:send を再実行してください。' >&2
+  exit 1
+fi
+pr_author_login="$(gh api "repos/$org/$repository/pulls/$pr_number" --jq '.user.login')" || {
+  printf 'self-PR identity 取得失敗: gh api repos/%s/%s/pulls/%s。gh auth status を確認し、/pr-codex:send を再実行してください。\n' "$org" "$repository" "$pr_number" >&2
+  exit 1
+}
+if [ -z "$pr_author_login" ] || [ "$(printf '%s\n' "$pr_author_login" | wc -l | tr -d '[:space:]')" != "1" ]
+then
+  printf 'self-PR identity 取得失敗: gh api repos/%s/%s/pulls/%s。gh auth status を確認し、/pr-codex:send を再実行してください。\n' "$org" "$repository" "$pr_number" >&2
+  exit 1
+fi
+if [ "$poster_login" = "$pr_author_login" ]
+then
+  self_review=true
+else
+  self_review=false
+fi
+printf '%s\n' "$self_review"
 ```
 
 ### Step 2.5: plugin root / schema / validator path の解決
@@ -874,7 +894,7 @@ test ! -d ~/claude-loop-pr-codex/$dir_name && test -d ~/claude-loop-pr-codex/sen
 - `findings.sarif` が存在しない、または `tasks/validate_findings_sarif.py --schema $sarif_schema_path --data findings.sarif --findings findings.verified.json --ranges pr.diff.ranges.txt --markdown review.md --payload review-payload.json` に失敗 → schema_validation FAIL として投稿を中断する。`findings.sarif` は local-only artifact であり、M2 では upload しない
 - `findings.verified.json` の Must Fix に `location.side != RIGHT` が含まれる → ユーザーに通知して処理中断（M1 では old-side 投稿を扱わない）
 - `findings.verified.json` の Must Fix に `posting.post_policy != inline` または `explanation_postable != true` が含まれる → ユーザーに通知して処理中断（M1 では安全に自動投稿しない）
-- `review.md` に Must Fix が一件も無い → Should Fix / Nit の明示指定があれば inline comment として投稿し、Must Fix 0 件の結論として `event: APPROVE` + body (総評 + 良い点 + 確認した範囲) で投稿する。ただし `ci-status.json.state` が `failure` / `pending` の場合は `event: COMMENT` に抑止し、CI 状態を body と Step 5 に表示する
+- `review.md` に Must Fix が一件も無い → Should Fix / Nit の明示指定があれば inline comment として投稿する。`$self_review == true` なら CI 状態にかかわらず `event: COMMENT` に抑止し、self-PR 理由を総評と Step 5 に表示する。`$self_review == false` かつ `ci-status.json.state` が `failure` / `pending` の場合は `event: COMMENT` に抑止して CI 状態を body と Step 5 に表示し、`$self_review == false` かつ CI 抑止が無い場合のみ Must Fix 0 件の結論として `event: APPROVE` + body (総評 + 良い点 + 確認した範囲) で投稿する
 - `review.md` の `## 総評` セクションが空 or 見つからない → ユーザーに通知して処理中断。`sent/` 移動は行わない
 - Step 3.5 で `pr.diff.ranges.txt` が空 → インラインコメント候補はすべて body 末尾の `## 行コメント不可 (diff 範囲外)` に移動し、`comments` 配列には含めない
 - Step 4 の `build_review_payload.py` または Step 4.5 の static stage（SARIF validator / `--verify`）が非ゼロ終了（deterministic failure）→ Codex を呼ばず、builder テンプレートを 1 回だけ再実行して解消しなければ投稿を中止（fail-closed）
@@ -889,7 +909,7 @@ test ! -d ~/claude-loop-pr-codex/$dir_name && test -d ~/claude-loop-pr-codex/sen
 - Step 5.5 で `review-response.json.html_url` が既に存在 → 二重投稿防止のため中断し、`gh api` は実行しない
 - Step 5.5 で現在の PR head SHA が `metadata.json.head_sha` と一致しない → レビュー生成後に追加 commit が入ったため中断し、古い review を自動投稿しない
 - `gh api` 422/403/404 → Step 8 の失敗報告で分岐し、`sent/` 移動は行わない
-- Step 2b の identity 取得（`gh api user` または PR 作者の取得）が非ゼロ終了または空出力 → 投稿前に中断する（fail-closed）。builder / Step 4.5 preflight は実行せず、`sent/` 移動も行わない。失敗した API と、`gh auth status` の確認・再実行というリトライ手順を報告する
+- Step 2b の identity 取得（`gh api user` または PR 作者の取得）が非ゼロ終了、空出力、または複数行出力 → 投稿前に中断する（fail-closed）。builder / Step 4.5 preflight は実行せず、`sent/` 移動も行わない。失敗した API と、`gh auth status` の確認・再実行というリトライ手順を報告する
 - Step 7 で `sent/$dir_name-$head_sha_short/` がすでに存在 → ユーザーに通知して処理中断（投稿はすでに完了している点に注意）。`sent/` 移動は行わず、`review-response.json` を残した状態で終了する
 - Step 7 の移動完了検証が失敗 → `mv` が silent に失敗した可能性があるため Step 8 の失敗報告で手動確認を促し、`review-response.json` を残した状態で終了する
 - ユーザーが Step 5 で承認を拒否 → 何もせず終了。payload ファイルは残す
@@ -900,10 +920,10 @@ test ! -d ~/claude-loop-pr-codex/$dir_name && test -d ~/claude-loop-pr-codex/sen
 
 1. 各テンプレートは 1 テンプレート = 1 シェル実行単位として扱う
 2. テンプレートの改変は変数置換のみ許可する。フラグ、引数順、引用符、リダイレクトはテンプレート記載どおりに使う
-3. シェル演算子はテンプレート中に明示された `|` `<` `>` `2>` `&&` のみ許可する
+3. シェル演算子はテンプレート中に明示された `|` `<` `>` `2>` `&&` `||` `>&2` のみ許可する
 4. `findings.verified.json` は必須の一次入力とし、`review.md` parser fallback は使わない。parse failure / shape failure / validator failure / `location.side != RIGHT` / 件数不一致 / posting policy 不整合時に Markdown fallback へ自動切替してはならない
 5. payload JSON、`preflight-prompt.md`、`nits.md` の生成は Write ツールで行う（`jq -n` によるインラインでの複雑な配列組み立てや shell 文字列内 prompt 埋め込みは使わない）
-6. `$()` / `for` / `while` / `xargs` / ヒアドキュメントは使わない
+6. `$()` / `for` / ヒアドキュメントは Step 1 common と Step 2b の固定テンプレートに明示された箇所以外では使わない。`while` / `xargs` は使わない
 7. `mv` は `sent/` への移動以外では使わない
 8. `gh` の write 系操作は `gh api --method POST .../reviews` のみとし、`gh pr review` / `gh pr comment` / `gh pr merge` などは使わない
 9. 1 回の実行で処理する対象ディレクトリは 1 件のみとする。位置引数なしでは名前昇順の auto 選定を使い、PR URL / PR 番号指定時は direct mode として指定 PR の directory だけを検証する

@@ -9,7 +9,10 @@ the documented contract to the builder implementation.
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -20,6 +23,14 @@ BUILDER = (ROOT / "tasks" / "build_review_payload.py").read_text(encoding="utf-8
 
 
 class SelfPrDocsTest(unittest.TestCase):
+    def step2b_bash_block(self) -> str:
+        section = SEND_SKILL.split("### Step 2b: self-PR 検知（read-only）", 1)[1].split(
+            "### Step 2.5: plugin root / schema / validator path の解決", 1
+        )[0]
+        blocks = re.findall(r"```bash\n(.*?)\n```", section, re.DOTALL)
+        self.assertEqual(len(blocks), 1, "Step 2b must be one fail-closed execution unit")
+        return blocks[0]
+
     def test_send_documents_step_2b_identity_detection(self) -> None:
         self.assertIn("### Step 2b: self-PR 検知（read-only）", SEND_SKILL)
         self.assertIn("gh api user --jq '.login'", SEND_SKILL)
@@ -34,7 +45,7 @@ class SelfPrDocsTest(unittest.TestCase):
         self.assertNotIn("Read ツールで取得して Step 3 へ", SEND_SKILL)
         self.assertIn("Step 2b をスキップして Step 2.5 / Step 3 へ進んではならない", SEND_SKILL)
         self.assertIn(
-            "- 次アクション: 両者が一致すれば `$self_review=true`、不一致なら `$self_review=false` として保持し、Step 2.5 へ進む。",
+            "- 次アクション: 終了コード 0 の標準出力を `$self_review=true|false` として保持し、Step 2.5 へ進む。",
             SEND_SKILL,
         )
         step2b = SEND_SKILL.index("### Step 2b: self-PR 検知（read-only）")
@@ -44,14 +55,122 @@ class SelfPrDocsTest(unittest.TestCase):
     def test_send_documents_fail_closed_abort_before_builder(self) -> None:
         # 受け入れ条件 6: identity 取得失敗時は builder / preflight を実行せず投稿前に中断する
         self.assertIn(
-            "どちらか一方でも失敗（非ゼロ終了または空出力）した場合は **投稿前に中断** する。"
-            "builder / Step 4.5 preflight は実行せず、`sent/` 移動も行わない",
+            "**投稿前に中断** する。builder / Step 4.5 preflight は実行せず、`sent/` 移動も行わない",
             SEND_SKILL,
         )
         self.assertIn(
-            "- Step 2b の identity 取得（`gh api user` または PR 作者の取得）が非ゼロ終了または空出力 → 投稿前に中断する（fail-closed）",
+            "- Step 2b の identity 取得（`gh api user` または PR 作者の取得）が非ゼロ終了、空出力、または複数行出力 → 投稿前に中断する（fail-closed）",
             SEND_SKILL,
         )
+
+    def test_send_step2b_identity_gate_executes_fail_closed_with_stub(self) -> None:
+        # 受け入れ条件 6: SKILL の実テンプレートを fake gh で実行し、identity
+        # 取得失敗時に後続の builder / preflight へ到達しないことを固定する。
+        identity_gate = self.step2b_bash_block()
+        self.assertNotIn("; then", identity_gate)
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            gh_stub = directory / "gh"
+            gh_stub.write_text(
+                """#!/bin/sh
+printf '%s\\n' "$2" >> "$GH_CALLS"
+if [ "$2" = "user" ]; then
+  result="${GH_USER_RESULT:-ok}"
+  login="${GH_USER_LOGIN:-reviewer}"
+else
+  result="${GH_PR_RESULT:-ok}"
+  login="${GH_PR_LOGIN:-author}"
+fi
+if [ "$result" = "fail" ]; then
+  exit 42
+fi
+if [ "$result" = "empty" ]; then
+  exit 0
+fi
+printf '%s\\n' "$login"
+""",
+                encoding="utf-8",
+            )
+            gh_stub.chmod(0o755)
+            calls_path = directory / "gh-calls.txt"
+            stages_path = directory / "stages.txt"
+            workflow = (
+                f"{identity_gate}\n"
+                "printf 'builder\\n' >> \"$STAGES\"\n"
+                "printf 'preflight\\n' >> \"$STAGES\"\n"
+            )
+
+            def run_gate(
+                *,
+                user_result: str = "ok",
+                pr_result: str = "ok",
+                user_login: str = "reviewer",
+                pr_login: str = "author",
+            ) -> subprocess.CompletedProcess[str]:
+                calls_path.unlink(missing_ok=True)
+                stages_path.unlink(missing_ok=True)
+                env = {
+                    **os.environ,
+                    "PATH": f"{directory}{os.pathsep}{os.environ.get('PATH', '')}",
+                    "GH_CALLS": str(calls_path),
+                    "STAGES": str(stages_path),
+                    "GH_USER_RESULT": user_result,
+                    "GH_PR_RESULT": pr_result,
+                    "GH_USER_LOGIN": user_login,
+                    "GH_PR_LOGIN": pr_login,
+                    "org": "example",
+                    "repository": "repo",
+                    "pr_number": "137",
+                }
+                return subprocess.run(
+                    ["/bin/bash", "-c", workflow],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env=env,
+                )
+
+            same_identity = run_gate(pr_login="reviewer")
+            self.assertEqual(same_identity.returncode, 0, same_identity.stderr)
+            self.assertEqual(same_identity.stdout, "true\n")
+            self.assertEqual(calls_path.read_text(encoding="utf-8"), "user\nrepos/example/repo/pulls/137\n")
+            self.assertEqual(stages_path.read_text(encoding="utf-8"), "builder\npreflight\n")
+
+            different_identity = run_gate()
+            self.assertEqual(different_identity.returncode, 0, different_identity.stderr)
+            self.assertEqual(different_identity.stdout, "false\n")
+            self.assertEqual(calls_path.read_text(encoding="utf-8"), "user\nrepos/example/repo/pulls/137\n")
+            self.assertEqual(stages_path.read_text(encoding="utf-8"), "builder\npreflight\n")
+
+            failures = (
+                ({"user_result": "fail"}, "gh api user", "user\n"),
+                ({"user_result": "empty"}, "gh api user", "user\n"),
+                ({"user_login": "reviewer\nunexpected"}, "gh api user", "user\n"),
+                (
+                    {"pr_result": "fail"},
+                    "gh api repos/example/repo/pulls/137",
+                    "user\nrepos/example/repo/pulls/137\n",
+                ),
+                (
+                    {"pr_result": "empty"},
+                    "gh api repos/example/repo/pulls/137",
+                    "user\nrepos/example/repo/pulls/137\n",
+                ),
+                (
+                    {"pr_login": "author\nunexpected"},
+                    "gh api repos/example/repo/pulls/137",
+                    "user\nrepos/example/repo/pulls/137\n",
+                ),
+            )
+            for kwargs, failed_api, expected_calls in failures:
+                with self.subTest(**kwargs):
+                    failed = run_gate(**kwargs)
+                    self.assertNotEqual(failed.returncode, 0)
+                    self.assertIn(failed_api, failed.stderr)
+                    self.assertIn("gh auth status", failed.stderr)
+                    self.assertIn("再実行", failed.stderr)
+                    self.assertEqual(calls_path.read_text(encoding="utf-8"), expected_calls)
+                    self.assertFalse(stages_path.exists(), "builder / preflight must not run")
 
     def test_send_builder_template_passes_self_review(self) -> None:
         self.assertIn("--self-review $self_review", SEND_SKILL)
@@ -82,6 +201,20 @@ class SelfPrDocsTest(unittest.TestCase):
         self.assertIn("self-PR 判定（`self_review`", SEND_SKILL)
         self.assertIn('"self_review": manifest_core["self_review"]', BUILDER)
         self.assertIn("old-format manifest generated before self-review recording", BUILDER)
+
+    def test_send_error_handling_preserves_self_review_event_precedence(self) -> None:
+        self.assertIn(
+            "`$self_review == true` なら CI 状態にかかわらず `event: COMMENT`",
+            SEND_SKILL,
+        )
+        self.assertIn(
+            "`$self_review == false` かつ CI 抑止が無い場合のみ Must Fix 0 件の結論として `event: APPROVE`",
+            SEND_SKILL,
+        )
+
+    def test_footer_docstring_describes_self_review_comment(self) -> None:
+        self.assertNotIn("presence is equivalent\n    to the public REQUEST_CHANGES event", BUILDER)
+        self.assertRegex(BUILDER, r"For self-review\s+COMMENT payloads, the posted summary")
 
     def test_review_skill_mentions_self_pr_suppression(self) -> None:
         self.assertIn(
