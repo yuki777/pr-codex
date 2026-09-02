@@ -16,7 +16,6 @@ SECTION_RE = re.compile(r"^##\s+", re.MULTILINE)
 RANGE_RE = re.compile(r"^L(?P<start>\d+)-L(?P<end>\d+)$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 MUST_FIX_HEADING = "## 重大な問題 (Must Fix)"
-DEFAULT_REVIEW_SCOPE = "2者レビュー (Claude/Codex hunter) + verifier 3軸 gate"
 PR_CODEX_REPO_URL = "https://github.com/yuki777/pr-codex"
 # Posted-summary suppression lines for self-authored PRs: GitHub rejects
 # APPROVE / REQUEST_CHANGES reviews on the poster's own PR with 422, so the
@@ -480,21 +479,6 @@ def out_of_range_markdown(entry: dict[str, Any]) -> str:
     )
 
 
-def review_scope(run_plan: Any | None, must_fix_count: int) -> str:
-    if not isinstance(run_plan, dict):
-        return DEFAULT_REVIEW_SCOPE
-    depth = run_plan.get("depth_actual")
-    mode = run_plan.get("recommended_mode")
-    risk_tags = run_plan.get("risk_tags")
-    if not isinstance(depth, str) or not isinstance(mode, str) or not isinstance(risk_tags, list) or not all(isinstance(tag, str) for tag in risk_tags):
-        return DEFAULT_REVIEW_SCOPE
-    risk_text = ", ".join(risk_tags) if risk_tags else "なし"
-    return (
-        f"{DEFAULT_REVIEW_SCOPE}; depth_actual={depth}; recommended_mode={mode}; "
-        f"risk_tags={risk_text}; review.md Must Fix 件数={must_fix_count}"
-    )
-
-
 def first_summary_line(text: str | None) -> str:
     if text is None:
         return ""
@@ -618,7 +602,6 @@ def build_body(
     metadata: dict[str, Any],
     ci_state: str | None,
     ci_summary: str | None,
-    scope: str,
     out_of_range: list[dict[str, Any]],
     footer: str,
 ) -> str:
@@ -631,7 +614,6 @@ def build_body(
         sections.append(
             "## 確認した範囲\n\n"
             f"- 変更ファイル: {', '.join(files)}\n"
-            f"- 検証観点: {scope}\n"
             f"- CI 状態: {ci_state or '未取得'}"
         )
     elif event == "COMMENT" and suppression == "ci":
@@ -666,7 +648,6 @@ def compose_payload(
     review_text: str,
     ranges: dict[str, list[tuple[int, int]]],
     ci_data: Any,
-    run_plan: Any,
     ci_summary: str | None,
     diff_available: bool,
     self_review: bool,
@@ -785,7 +766,6 @@ def compose_payload(
         metadata_data,
         ci_state,
         ci_summary,
-        review_scope(run_plan, must_fix_total),
         out_of_range,
         compose_review_footer(findings_data, metadata_data, must_fix_total),
     )
@@ -846,8 +826,8 @@ def build(args: argparse.Namespace) -> tuple[str, int, dict[str, int], int]:
     ranges = parse_ranges(ranges_text, args.ranges)
 
     ci_bytes = read_optional(args.ci_status, snapshots)
-    run_plan_bytes = read_optional(args.run_plan, snapshots)
     ci_summary_bytes = read_optional(args.ci_summary, snapshots)
+    hash_optional(args.run_plan, snapshots)
     hash_optional(args.sarif, snapshots)
     diff_available = hash_optional(args.diff, snapshots)
     payload, manifest_core, counts, out_of_range_count = compose_payload(
@@ -856,7 +836,6 @@ def build(args: argparse.Namespace) -> tuple[str, int, dict[str, int], int]:
         review_text,
         ranges,
         parse_optional_json(ci_bytes),
-        parse_optional_json(run_plan_bytes),
         decode_optional(ci_summary_bytes),
         diff_available,
         args.self_review == "true",
@@ -1238,7 +1217,6 @@ def verify_manifest(path: Path) -> list[str]:
                 replay_review,
                 replay_ranges,
                 parse_optional_json(verified_file_bytes.get("ci_status")),
-                parse_optional_json(verified_file_bytes.get("run_plan")),
                 decode_optional(verified_file_bytes.get("ci_summary")),
                 verified_nonempty.get("diff", False),
                 self_review,

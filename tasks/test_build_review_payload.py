@@ -245,7 +245,9 @@ class BuildReviewPayloadTest(unittest.TestCase):
         self.assertEqual(manifest["flags"], {"include_should_fix": False, "include_nit": False})
         self.assertIn("built payload: event=REQUEST_CHANGES comments=1 (must_fix=1 should_fix=0 nit=0) out_of_range=0", completed.stdout)
 
-    def test_builds_approve_body_with_deterministic_review_scope(self) -> None:
+    def test_builds_approve_body_without_review_scope_line(self) -> None:
+        # issue #143: the APPROVE confirmation section lists only the reviewed
+        # files and the CI state; the former 検証観点 line is never rendered.
         plan = {"depth_actual": "deep", "recommended_mode": "focused", "risk_tags": ["security", "python"]}
         with tempfile.TemporaryDirectory() as tmp:
             completed, payload_path, _, _ = self.run_build(Path(tmp), artifact([]), run_plan=plan)
@@ -256,12 +258,8 @@ class BuildReviewPayloadTest(unittest.TestCase):
         self.assertEqual(payload["comments"], [])
         body = payload["body"]
         self.assertIn("Must Fix はありません。承認します。", body)
-        self.assertIn("- 変更ファイル: src/App.py, src/Other.py", body)
-        self.assertIn("depth_actual=deep", body)
-        self.assertIn("recommended_mode=focused", body)
-        self.assertIn("risk_tags=security, python", body)
-        self.assertIn("review.md Must Fix 件数=0", body)
-        self.assertIn("- CI 状態: 未取得", body)
+        self.assertIn("## 確認した範囲\n\n- 変更ファイル: src/App.py, src/Other.py\n- CI 状態: 未取得", body)
+        self.assertNotIn("検証観点", body)
 
     def test_ci_failure_suppresses_approve_to_comment(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -992,7 +990,7 @@ class BuildReviewPayloadTest(unittest.TestCase):
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
         self.assertEqual(payload["event"], "APPROVE")
-        self.assertIn("- 検証観点: 2者レビュー (Claude/Codex hunter) + verifier 3軸 gate", payload["body"])
+        self.assertNotIn("検証観点", payload["body"])
         self.assertIn("- CI 状態: 未取得", payload["body"])
         self.assertTrue(all(role not in manifest["files"] for role in ("ci_status", "run_plan", "ci_summary", "sarif", "diff")))
 
