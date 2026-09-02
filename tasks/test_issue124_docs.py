@@ -38,9 +38,9 @@ class Issue124DocsTest(unittest.TestCase):
     def test_review_records_engines_for_footer(self) -> None:
         skill = REVIEW_SKILL.read_text(encoding="utf-8")
         for snippet in (
-            'claude_model="claude-fable-5"',
+            'claude_model="claude-fable-5-1"',
             '--arg claude_model "$claude_model"',
-            "`$claude_model` は、Claude CLI が full model name として受け付ける `claude-fable-5` に固定する",
+            "`$claude_model` は、Claude CLI が full model name として受け付ける `claude-fable-5-1` に固定する",
             "実行証跡（`claude-review.result.json` の `modelUsage`、`codex.log` の `model:` 行）から取得した実際に使用されたモデル名へ上書きされ、send の投稿フッターには上書き後の値が表示される（#143）",
             "effort は両 hunter とも最大値に固定する",
             "4a / 4b のコマンドテンプレートのモデル・effort を変更する場合は、この `review_engines` の値も併せて更新する",
@@ -79,7 +79,7 @@ class Issue124DocsTest(unittest.TestCase):
         self.assertEqual(pinned_models[0], "$claude_model")
 
         claude_model_assignments = re.findall(r'^claude_model="([^"]+)"$', skill, re.MULTILINE)
-        self.assertEqual(claude_model_assignments, ["claude-fable-5"])
+        self.assertEqual(claude_model_assignments, ["claude-fable-5-1"])
 
     def test_builder_requires_complete_review_engine_set(self) -> None:
         builder = BUILDER.read_text(encoding="utf-8")
