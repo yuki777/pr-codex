@@ -41,7 +41,7 @@ class Issue124DocsTest(unittest.TestCase):
             'claude_model="claude-fable-5"',
             '--arg claude_model "$claude_model"',
             "`$claude_model` は、Claude CLI が full model name として受け付ける `claude-fable-5` に固定する",
-            "`review_engines` の記録値と hunter の実行モデルは常に一致する（#124）",
+            "実行証跡（`claude-review.result.json` の `modelUsage`、`codex.log` の `model:` 行）から取得した実際に使用されたモデル名へ上書きされ、send の投稿フッターには上書き後の値が表示される（#143）",
             "effort は両 hunter とも最大値に固定する",
             "4a / 4b のコマンドテンプレートのモデル・effort を変更する場合は、この `review_engines` の値も併せて更新する",
             "send の builder はフッターに effort を表示せず、記録の検証にだけ使う（フッターに表示するのは name と model のみ。#128）",

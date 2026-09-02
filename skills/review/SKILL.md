@@ -531,9 +531,9 @@ BEAR.Sunday 判定は `bear/sunday` dependency だけを見る。`bear/resource`
 - 判定条件: `metadata.json` が作成される
 - 次アクション: `run-plan.json` 作成へ進む
 
-`$claude_model` は、Claude CLI が full model name として受け付ける `claude-fable-5` に固定する。Step 4a の Claude hunter はこの同じ値を `--model "$claude_model"` で明示指定して実行するため、`review_engines` の記録値と hunter の実行モデルは常に一致する（#124）。CLI の既定値やメインコンテキストのモデルを推測してはならない。モデルを変更する場合は直後の代入を明示的に更新し、値が無効な場合は Step 4a の CLI エラーから Step 5 の failed 更新へ遷移する（誤った記録のまま投稿へ進まない）。
+`$claude_model` は、Claude CLI が full model name として受け付ける `claude-fable-5` に固定する。Step 4a の Claude hunter はこの同じ値を `--model "$claude_model"` で明示指定して実行する（#124）。CLI の既定値やメインコンテキストのモデルを推測してはならない。モデルを変更する場合は直後の代入を明示的に更新し、値が無効な場合は Step 4a の CLI エラーから Step 5 の failed 更新へ遷移する（誤った記録のまま投稿へ進まない）。
 
-`review_engines` は Step 4a / 4b の実行構成（Claude Code: `--model "$claude_model"` + `--effort max`、Codex: `-m gpt-5.6-sol` + `model_reasoning_effort="max"`）を send の投稿フッター用に記録する配列である（#124）。effort は両 hunter とも最大値に固定する（現在はいずれも `max`）。4a / 4b のコマンドテンプレートのモデル・effort を変更する場合は、この `review_engines` の値も併せて更新する。記録する effort は実行リテラルのままとする。ただし実行時の実効 effort は投稿時点で確定できないため、send の builder はフッターに effort を表示せず、記録の検証にだけ使う（フッターに表示するのは name と model のみ。#128）。
+`review_engines` は Step 4a / 4b の実行構成（Claude Code: `--model "$claude_model"` + `--effort max`、Codex: `-m gpt-5.6-sol` + `model_reasoning_effort="max"`）を初期値として記録する配列である（#124）。各要素の `model` は Step 4c の実使用モデル転記で、実行証跡（`claude-review.result.json` の `modelUsage`、`codex.log` の `model:` 行）から取得した実際に使用されたモデル名へ上書きされ、send の投稿フッターには上書き後の値が表示される（#143）。effort は両 hunter とも最大値に固定する（現在はいずれも `max`）。4a / 4b のコマンドテンプレートのモデル・effort を変更する場合は、この `review_engines` の値も併せて更新する。記録する effort は実行リテラルのままとする。ただし実行時の実効 effort は投稿時点で確定できないため、send の builder はフッターに effort を表示せず、記録の検証にだけ使う（フッターに表示するのは name と model のみ。#128）。
 
 ```bash
 claude_model="claude-fable-5"
@@ -793,7 +793,7 @@ Claude Code Bash tool の foreground timeout 上限は `600000` ms。`estimated_
 **logical stage: hunter**。子プロセスの claude code でレビュー候補を広めに収集する。prompt は Write ツールで prompt file へ書き出し、Bash テンプレートには stdin redirection で渡す（コマンド文字列へ prompt 本文を埋め込まない）。
 
 - いつ使うか: Step 3 完了後に 4b と同時に実行する（`run_in_background: true`）
-- 判定条件: `claude-review.json` が生成され、終了コードが 0
+- 判定条件: `claude-review.result.json` と `claude-review.json` が生成され、終了コードが 0
 - 次アクション: 4b と合わせて両方完了したら 4c へ、失敗または timeout なら Step 5 の failed 更新へ進む。`claude-review.json` の schema 不適合は Step 4c の `merge_hunter_results.py` が検出し、当該 hunter だけを 1 回再実行する
 - Bash tool timeout: foreground timeout 引数は指定しない。timeout 上限 600000 ms を超える 20 分予算は `run_in_background: true` と完了通知待ちで扱う
 
@@ -856,10 +856,12 @@ env -u CLAUDECODE claude -p \
   --allowedTools "Read Glob Grep Bash(git diff *) Bash(git show *) Bash(git log *) Bash(git rev-parse *)" \
   --strict-mcp-config \
   --add-dir ~/claude-loop-pr-codex/$org-$repository-$pr_number \
+  --output-format json \
   --json-schema "$(jq -c 'del(."$schema")' "$plugin_root/schemas/hunter-result.v1.json")" \
   <  ~/claude-loop-pr-codex/$org-$repository-$pr_number/hunter-claude-prompt.md \
-  >  ~/claude-loop-pr-codex/$org-$repository-$pr_number/claude-review.json \
-  2> ~/claude-loop-pr-codex/$org-$repository-$pr_number/claude.log
+  >  ~/claude-loop-pr-codex/$org-$repository-$pr_number/claude-review.result.json \
+  2> ~/claude-loop-pr-codex/$org-$repository-$pr_number/claude.log \
+&& jq '.structured_output | if type == "object" then . else error("structured_output missing") end' ~/claude-loop-pr-codex/$org-$repository-$pr_number/claude-review.result.json > ~/claude-loop-pr-codex/$org-$repository-$pr_number/claude-review.json
 ```
 
 注意:
@@ -875,6 +877,8 @@ env -u CLAUDECODE claude -p \
 - `--strict-mcp-config` — `--mcp-config` で渡した MCP サーバーだけを使う指定。テンプレートは `--mcp-config` を渡さないため、user config 由来の MCP サーバー（GitHub / Backlog / DocBase 等）を一切読み込まない。`--allowedTools` を絞るだけでは user config 側で事前許可済みの MCP ツールが `dontAsk` でも通り得るため、MCP は config ごと遮断する（4b の `--ignore-user-config` と対称）。PR の説明文・既存レビューコメントは親が取得した `pr-context.md` を使う
 - `--add-dir` — Step 3 で生成した `pr.diff` / `pr-context.md` を含むワーキングディレクトリへのアクセスを明示的に許可（`clone-claude/` も同ディレクトリ配下）
 - `--json-schema` — `schemas/hunter-result.v1.json` を structured output として強制し、標準出力に schema 準拠の JSON だけを出力させる。Claude CLI の schema validator は draft 2020-12 の meta-schema 参照（`$schema` キー）を解決できないため、`jq -c 'del(."$schema")'` で `$schema` キーだけを除いた schema 本文を渡す
+- `--output-format json` — 標準出力を CLI の result wrapper JSON にする。wrapper の `structured_output` が hunter-result.v1 準拠の構造化出力、`modelUsage` が実際に使用されたモデルの実行証跡であり、後者は Step 4c の実使用モデル転記（#143）が投稿フッター用に参照する
+- 末尾の `jq '.structured_output ...'` — result wrapper (`claude-review.result.json`) から構造化出力だけを抜き出して `claude-review.json` を作る。`structured_output` が object でない場合は jq が非ゼロ終了し、既存の hunter 失敗経路（Step 5 failed 更新）に乗る
 - prompt 中の scope 制約は、hunter に GitHub への直接アクセスを許可しないため、`pr.diff` ファイルを確定情報源として最優先参照させる意図
 
 #### 4b: Codex CLI レビュー
@@ -987,6 +991,14 @@ MCP と外部文脈について:
 
 ```bash
 python3 "$plugin_root/tasks/merge_hunter_results.py" --schema "$plugin_root/schemas/hunter-result.v1.json" --claude ~/claude-loop-pr-codex/$org-$repository-$pr_number/claude-review.json --codex ~/claude-loop-pr-codex/$org-$repository-$pr_number/codex-review.json --metadata ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json --producer-version "$plugin_version" --output ~/claude-loop-pr-codex/$org-$repository-$pr_number/findings.candidates.json.tmp
+```
+
+merge テンプレートが終了コード 0 で完了した直後（schema 不適合で当該 hunter を 1 回再実行した場合は、再実行後に成功した merge の直後）に、**実使用モデルの転記 (必須)** を行う（#143）。以下のテンプレートで、実際に使用されたモデル名を実行証跡（`claude-review.result.json` の `modelUsage`、`codex.log` の実行ヘッダの `model:` 行）から `metadata.json.review_engines[].model` へ転記する。send の投稿フッターはこの転記後の値を表示する。`modelUsage` に複数モデルがある場合は `outputTokens` が最大のモデルを採用し、`codex.log` の `model:` 行は先頭の 1 件だけを使う。テンプレートが非ゼロ終了した場合（実行証跡からモデル名を取得できない場合）は、フッターが実行事実と一致しなくなるため Step 5 の **failed 更新** へ遷移する（fail-closed）:
+
+```bash
+jq --slurpfile claude_result ~/claude-loop-pr-codex/$org-$repository-$pr_number/claude-review.result.json --rawfile codex_log ~/claude-loop-pr-codex/$org-$repository-$pr_number/codex.log '.review_engines[0].model = ($claude_result[0].modelUsage | to_entries | max_by(.value.outputTokens) | .key) | .review_engines[1].model = ($codex_log | split("\n") | map(select(startswith("model: ")))[0] | ltrimstr("model: "))' ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json > ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json.tmp \
+&& jq -e '.review_engines | length == 2 and all(.[]; (.model | type == "string" and length > 0))' ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json.tmp \
+&& mv ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json.tmp ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json
 ```
 
 3. **スコープ検証 (必須)**: 上のテンプレートが終了コード 3 (`HUNTER_DIFF_UNAVAILABLE`) を返した場合、どちらかの hunter が `status="diff_unavailable"`（pr.diff 不在／空）を報告している。統合成果物は作成せず Step 5 の **failed 更新** へ遷移する（`findings.candidates.json` / `findings.verified.json` / `review-rounds.json` / `findings.sarif` / `review.md` は生成しない）。
@@ -1373,6 +1385,7 @@ F4 stage reporting として、failed 分岐では必ず `$failed_stage` を 1 �
 - `codex exec` が非ゼロ終了 → `state=failed` で記録
 - **`merge_hunter_results.py` が `HUNTER_DIFF_UNAVAILABLE`（終了コード 3、いずれかの hunter が `status="diff_unavailable"`）→ `state=failed` で記録し、`review.md` は生成しない**
 - **`claude-review.json` / `codex-review.json` の schema 不適合（`merge_hunter_results.py` 終了コード 1）が当該 hunter の 1 回の再実行でも解消しない → `failed_stage=hunter` / `state=failed` で記録する**
+- **Step 4c の実使用モデル転記テンプレートが非ゼロ終了（`claude-review.result.json` の `modelUsage` または `codex.log` の `model:` 行から実使用モデル名を取得できない。#143）→ `failed_stage=hunter` / `state=failed` で記録し、send へ進めない**
 - **`merge_hunter_results.py` が終了コード 2（`schemas/hunter-result.v1.json` の欠落・wiring 異常）→ hunter を再実行せず `failed_stage=hunter` / `state=failed` で記録し、plugin 配布物の破損として stderr を報告する**
 - **`findings.candidates.json.tmp` が同梱 validator による `schemas/findings.candidates.v1.json` validation に失敗 → `failed_stage=hunter` / `state=failed` で記録し、final artifact は反映しない**
 - **`findings.verified.json.tmp` が同梱 validator による `schemas/findings.v1.json` validation / fingerprint 再計算 / format / range validation に失敗 → `failed_stage=verifier` / `state=failed` で記録し、final artifact は反映しない**
@@ -1426,6 +1439,7 @@ $CLAUDE_PLUGIN_ROOT/schemas/
         ├── hunter-claude-prompt.md ← Step 4a の prompt file（Write ツールで生成）
         ├── hunter-codex-prompt.md  ← Step 4b の prompt file（Write ツールで生成）
         ├── claude-review.json   ← Claude Code hunter の structured output (`schemas/hunter-result.v1.json`)
+        ├── claude-review.result.json ← Step 4a の Claude CLI result wrapper（`modelUsage` を含む実行証跡。#143）
         ├── codex-review.json    ← Codex CLI hunter の structured output (`schemas/hunter-result.v1.json`)
         ├── findings.candidates.json ← hunter → verifier 境界の候補 artifact (`schemas/findings.candidates.v1.json`)
         ├── findings.verified.json ← canonical findings (`schemas/findings.v1.json`)
@@ -1447,7 +1461,7 @@ $CLAUDE_PLUGIN_ROOT/schemas/
 
 本スキルは Claude Code を `--permission-mode auto` で起動することを前提とする（README の「使い方」参照）。auto mode でも、許可済みツールやコマンドの内容によっては分類器の判断で承認が必要になり得るため、本スキルではテンプレートに明示された操作だけを実行する。
 
-ローカルの書き込みは作業ディレクトリ `~/claude-loop-pr-codex/` 配下に限り、`clone-claude/` / `clone-codex/` の作成と更新、`status.json` / `metadata.json` / `run-plan.json` / `pr.diff` / `pr.diff.ranges.txt` / `pr-review-comments.json` / `pr-context.md` / `hunter-claude-prompt.md` / `hunter-codex-prompt.md` / `claude.log` / `codex.log` / `codex-review.json` / `claude-review.json` / `fingerprint-material.json` / `findings.candidates.json` / `findings.verified.json` / `findings.sarif` / `validation-report.json` / `review-rounds.json` / `review.md` と、それらの `*.tmp` 一時ファイル作成のみ許可する。`$auto_send=true` の Step 6.5 だけは、`skills/send/SKILL.md` の契約に従う範囲で `review-payload.json` / `payload-manifest.json` / `preflight-prompt.md` / `preflight-semantic.json` / `preflight-codex.md` / `preflight-result.json` / `preflight-codex.log` / `review-response.json` / `nits.md` の作成、および `sent/$dir_name-$head_sha_short/` への移動を許可する。schema / fingerprint / status / SARIF validation と candidates 合成のために `python3 "$plugin_root/tasks/merge_hunter_results.py" ...`、`python3 "$plugin_root/tasks/validate_candidates.py" ...`、`python3 "$plugin_root/tasks/validate_findings.py" ...`（`--emit-fingerprints` を含む）、`python3 "$plugin_root/tasks/generate_findings_sarif.py" ...`、`python3 "$plugin_root/tasks/validate_findings_sarif.py" ...`、`python3 "$plugin_root/tasks/validate_status.py" ...` を実行してよいが、`merge_hunter_results.py` の書き込み先は `findings.candidates.json.tmp` のみとし、validator は成果物を書き換えず検証だけに使う。
+ローカルの書き込みは作業ディレクトリ `~/claude-loop-pr-codex/` 配下に限り、`clone-claude/` / `clone-codex/` の作成と更新、`status.json` / `metadata.json` / `run-plan.json` / `pr.diff` / `pr.diff.ranges.txt` / `pr-review-comments.json` / `pr-context.md` / `hunter-claude-prompt.md` / `hunter-codex-prompt.md` / `claude.log` / `codex.log` / `codex-review.json` / `claude-review.json` / `claude-review.result.json` / `fingerprint-material.json` / `findings.candidates.json` / `findings.verified.json` / `findings.sarif` / `validation-report.json` / `review-rounds.json` / `review.md` と、それらの `*.tmp` 一時ファイル作成のみ許可する。`$auto_send=true` の Step 6.5 だけは、`skills/send/SKILL.md` の契約に従う範囲で `review-payload.json` / `payload-manifest.json` / `preflight-prompt.md` / `preflight-semantic.json` / `preflight-codex.md` / `preflight-result.json` / `preflight-codex.log` / `review-response.json` / `nits.md` の作成、および `sent/$dir_name-$head_sha_short/` への移動を許可する。schema / fingerprint / status / SARIF validation と candidates 合成のために `python3 "$plugin_root/tasks/merge_hunter_results.py" ...`、`python3 "$plugin_root/tasks/validate_candidates.py" ...`、`python3 "$plugin_root/tasks/validate_findings.py" ...`（`--emit-fingerprints` を含む）、`python3 "$plugin_root/tasks/generate_findings_sarif.py" ...`、`python3 "$plugin_root/tasks/validate_findings_sarif.py" ...`、`python3 "$plugin_root/tasks/validate_status.py" ...` を実行してよいが、`merge_hunter_results.py` の書き込み先は `findings.candidates.json.tmp` のみとし、validator は成果物を書き換えず検証だけに使う。
 
 F11 の regression eval (`score_fixture.py` / `m1_m2_gate.py`) は通常の `/pr-codex:review` 実行フローには組み込まない。手動 deep eval で `findings.verified.json` を採点する場合のみ、README / `fixtures/README.md` の手順に従って `artifacts/` 配下へ `score-report.v1` / `m1-m2-gate.v1` を出力する。CI では固定 stub の deterministic test だけを実行し、LLM や GitHub write/API 投稿は必須経路に入れない。
 
@@ -1461,7 +1475,7 @@ F11 の regression eval (`score_fixture.py` / `m1_m2_gate.py`) は通常の `/pr
 6. ファイル書き込みの使い分け:
    - `hunter-claude-prompt.md` / `hunter-codex-prompt.md` / `pr-context.md` / `findings.verified.json.tmp` / `validation-report.json.tmp` / `review-rounds.json.tmp` / `review.md.tmp` / `fingerprint-material.json` は `Write` ツールで書き出し、`findings.candidates.json.tmp` は `merge_hunter_results.py` の `--output` で、`findings.sarif.tmp` は `generate_findings_sarif.py` の `--output` で書き出し、gate 通過後に `mv` で final name へ反映する（`fingerprint-material.json` は mv 対象外の作業ファイル。`file_path` は `~` / `$...` を展開しないため、実値の絶対パスを渡す）
    - `pr.diff.ranges.txt` は Step 3 の `awk` の標準出力を、`pr-review-comments.json` は Step 3a の `gh api --paginate | jq -sc` の標準出力を `>` でリダイレクトして作成する
-   - `claude-review.json` / `claude.log` は Step 4a の標準出力・標準エラーを `>` / `2>` でリダイレクトして作成し、`codex-review.json` は Step 4b の `--output-last-message` で、`codex.log` は Step 4b の標準出力・標準エラーを `> ... 2>&1` でまとめて作成する
+   - `claude-review.result.json` / `claude.log` は Step 4a の標準出力・標準エラーを `>` / `2>` でリダイレクトして作成し、`claude-review.json` は同テンプレート末尾の `jq '.structured_output ...'` の標準出力を `>` でリダイレクトして作成する。`codex-review.json` は Step 4b の `--output-last-message` で、`codex.log` は Step 4b の標準出力・標準エラーを `> ... 2>&1` でまとめて作成する。`metadata.json.tmp` は Step 4c の実使用モデル転記テンプレート（#143）の `jq` 標準出力を `>` でリダイレクトして作成し、検証後に `mv` で `metadata.json` へ反映する
 7. Step 4a / 4b は `run_in_background: true` で起動し、foreground timeout 引数を `1200000` に固定してはならない。Claude Code Bash tool の foreground timeout 上限 600000 ms を超える実行予算は `run-plan.json.estimated_timeout_ms` / `review_loop.time_budget_ms` として扱い、完了通知待ちで管理する
 8. テンプレートに明示された `git fetch` / `git checkout FETCH_HEAD` / `jq -e '.require | has("bear/sunday")' ...` / `python3 "$plugin_root/tasks/merge_hunter_results.py" ...` / `python3 "$plugin_root/tasks/validate_candidates.py" ...` / `python3 "$plugin_root/tasks/validate_findings.py" ...` / `python3 "$plugin_root/tasks/generate_findings_sarif.py" ...` / `python3 "$plugin_root/tasks/validate_findings_sarif.py" ...` / `python3 "$plugin_root/tasks/validate_status.py" ...` / temp file から final artifact への `mv` / 成果物ファイル作成以外の状態変更操作は実行しない。`$auto_send=true` の Step 6.5 だけは、send 側 Step 6 の `gh api --method POST "/repos/$org/$repository/pulls/$pr_number/reviews"` と Step 7 の `sent/` 移動を許可する。禁止例: `git push` / `git merge` / `git reset --*` / `git clean -fd[x]` / `git stash` / `git commit` / `git tag` / `git branch -D`、`rm -rf` 系、`gh pr review` / `gh pr comment` / `gh pr merge` / `gh issue` の write 操作、および GitHub / Backlog / DocBase の write 系 MCP ツール
 9. 1回の実行で選定・処理する PR は 1 件のみとする

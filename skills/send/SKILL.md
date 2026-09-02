@@ -505,12 +505,11 @@ builder は以下のルールを実装している:
     ```
     <$posted_summary>
     ```
-  - `event == "APPROVE"` の場合は、承認根拠として body 末尾に以下を追加する。`$reviewed_files` は `metadata.json.files[]` から、`$reviewed_scope` は `review.md` / `run-plan.json` / `ci-summary.md` から確認済みの観点だけを抽出し、推測した観点を混ぜない:
+  - `event == "APPROVE"` の場合は、承認根拠として body 末尾に以下を追加する。`$reviewed_files` は `metadata.json.files[]` から抽出する。検証観点の行は出力しない（#143）:
     ```
     ## 確認した範囲
 
     - 変更ファイル: <$reviewed_files>
-    - 検証観点: <$reviewed_scope>
     - CI 状態: <$ci_status_state または "未取得">
     ```
   - `event == "COMMENT"` が CI 抑止によるものの場合は、body 末尾に `## CI 状態` を追加し、`ci-status.json.state` と `ci-summary.md` の要約を短く記載する。self-PR 抑止による `COMMENT` の場合は `## CI 状態` を追加せず、抑止理由の 1 行は総評（`$posted_summary`）内に含める
@@ -525,7 +524,7 @@ builder は以下のルールを実装している:
     - 理由: <理由文>
     - 提案: <提案文>
     ```
-  - body 末尾に必ず自動レビューのフッターを追加する（#124）。builder が `findings.verified.json` の `producer.version` と `metadata.json.review_engines[]`（`{name, model, effort}` の配列。review 側 Step 3 が記録。`effort` は記録のみでフッターには表示しない #128）から決定論的に生成する:
+  - body 末尾に必ず自動レビューのフッターを追加する（#124）。builder が `findings.verified.json` の `producer.version` と `metadata.json.review_engines[]`（`{name, model, effort}` の配列。review 側 Step 3 が初期記録し、Step 4c が実行証跡（`claude-review.result.json` の `modelUsage` / `codex.log` の `model:` 行）から実際に使用されたモデル名へ `model` を上書きする #143。`effort` は記録のみでフッターには表示しない #128）から決定論的に生成する:
     ```
     ---
     これは [pr-codex](https://github.com/yuki777/pr-codex):v<producer.version> による自動レビューです。

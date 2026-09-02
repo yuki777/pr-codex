@@ -34,8 +34,7 @@ class Issue96DocsTest(unittest.TestCase):
             'Must Fix が 0 件、かつ `ci-status.json.state` が `failure` / `pending` の場合は `"COMMENT"` に抑止',
             '## 確認した範囲',
             "`metadata.json.files[]`",
-            "`review.md` / `run-plan.json` / `ci-summary.md`",
-            "推測した観点を混ぜない",
+            "検証観点の行は出力しない（#143）",
             "## CI 状態",
             'event: "APPROVE"` + body (総評 + 良い点 + 確認した範囲)',
         ):
