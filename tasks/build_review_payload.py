@@ -486,14 +486,16 @@ def should_fix_summary_section(entries: list[dict[str, Any]]) -> str:
     """Render the collapsed `## 改善提案` body section (issue #140).
 
     Postable Should Fix findings that are not promoted to inline comments are
-    disclosed inside the posted body behind a <details> fold. Security
-    findings restricted to a body summary render only public_safe_summary;
-    local_only security findings never reach this section.
+    disclosed inside the posted body behind a <details> fold. Because this
+    section is posted by default (no operator opt-in), every security-category
+    finding renders only its validated public_safe_summary — regardless of
+    disclosure_policy — so raw exploit or remediation details never leak;
+    local_only security findings never reach this section at all.
     """
 
     lines = []
     for item in entries:
-        if security_requires_body(item):
+        if item.get("category") == "security":
             security = item.get("security")
             summary = security.get("public_safe_summary", "") if isinstance(security, dict) else ""
             lines.append(f"- `{location_label(item)}` {single_line(summary)}")

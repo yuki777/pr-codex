@@ -776,6 +776,28 @@ class BuildReviewPayloadTest(unittest.TestCase):
         self.assertEqual(manifest["counts"]["should_fix_summary"], 2)
         self.assertIn("should_fix_summary=2", completed.stdout)
 
+    def test_security_should_fix_in_body_summary_uses_only_public_safe_summary(self) -> None:
+        item = finding("sec-should", "should_fix", category="security", start_line=20)
+        item["problem"] = "exploit with curl https://internal"
+        item["suggestion"] = "rotate secret=raw-token"
+        item["security"] = {
+            "severity": "medium",
+            "confidence": "high",
+            "exploitability": "private exploit details",
+            "public_safe_summary": "セキュリティ上の改善点があります。詳細は非公開です。",
+            "disclosure_policy": "inline_safe",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            completed, payload_path, _, _ = self.run_build(Path(tmp), artifact([item]))
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            body = json.loads(payload_path.read_text(encoding="utf-8"))["body"]
+
+        self.assertIn("## 改善提案", body)
+        self.assertIn("- `src/App.py:L20` セキュリティ上の改善点があります。詳細は非公開です。", body)
+        self.assertNotIn("curl https://internal", body)
+        self.assertNotIn("raw-token", body)
+        self.assertNotIn("private exploit details", body)
+
     def test_include_should_fix_flag_suppresses_body_summary_section(self) -> None:
         items = [finding("should-1", "should_fix", start_line=20)]
         with tempfile.TemporaryDirectory() as tmp:
