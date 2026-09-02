@@ -82,7 +82,7 @@ def metadata() -> dict[str, Any]:
         "title": "Review payload",
         "files": ["src/App.py", "src/Other.py"],
         "review_engines": [
-            {"name": "Claude Code", "model": "claude-fable-5", "effort": "max"},
+            {"name": "Claude Code", "model": "claude-fable-5-1", "effort": "max"},
             {"name": "Codex", "model": "gpt-5.6-sol", "effort": "max"},
         ],
     }
@@ -693,7 +693,7 @@ class BuildReviewPayloadTest(unittest.TestCase):
 
         malformed_engine_fields = metadata()
         malformed_engine_fields["review_engines"] = [
-            {"name": "Claude Code", "model": "claude-fable-5", "effort": "max"},
+            {"name": "Claude Code", "model": "claude-fable-5-1", "effort": "max"},
             {"name": "Codex", "model": "", "effort": 3},
         ]
         cases.append(("engine-blank-model", copy.deepcopy(base), malformed_engine_fields, None, "metadata.review_engines[1].model: must be a non-empty string"))
@@ -881,7 +881,7 @@ class BuildReviewPayloadTest(unittest.TestCase):
         self.assertIn("problem should-out", body)
 
     def test_body_always_ends_with_automated_review_footer(self) -> None:
-        hunter_line = "レビューは Claude Code claude-fable-5 と Codex gpt-5.6-sol により行われました。"
+        hunter_line = "レビューは Claude Code claude-fable-5-1 と Codex gpt-5.6-sol により行われました。"
         verifier_line = "投稿前検証 (semantic preflight) は Codex gpt-5.6-sol により行われました。"
         cases = (
             ("approve-skips-verifier", [], hunter_line),
@@ -909,7 +909,7 @@ class BuildReviewPayloadTest(unittest.TestCase):
 
     def test_footer_never_renders_effort(self) -> None:
         # effort は確定できないため、記録値に関係なくフッターに表示しない (#128)。
-        effort_free_line = "レビューは Claude Code claude-fable-5 と Codex gpt-5.6-sol により行われました。"
+        effort_free_line = "レビューは Claude Code claude-fable-5-1 と Codex gpt-5.6-sol により行われました。"
         cases = (
             ("current-max", "max"),
             ("legacy-xhigh", "xhigh"),
