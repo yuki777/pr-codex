@@ -237,6 +237,7 @@ class BuildReviewPayloadTest(unittest.TestCase):
                 "must_fix_body": 0,
                 "must_fix_withheld": 0,
                 "should_fix_inline": 0,
+                "should_fix_summary": 0,
                 "nit_inline": 0,
             },
         )
@@ -733,6 +734,63 @@ class BuildReviewPayloadTest(unittest.TestCase):
         ]
         self.assertEqual(offsets, sorted(offsets))
 
+    def test_should_fix_without_flag_is_posted_as_collapsed_body_section(self) -> None:
+        items = [
+            finding("should-1", "should_fix", start_line=20),
+            finding("should-2", "should_fix", start_line=200),
+            finding("should-hidden", "should_fix", start_line=30, post_policy="local_only"),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            completed, payload_path, manifest_path, _ = self.run_build(
+                Path(tmp), artifact(items), ci_status={"state": "success"}
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(payload_path.read_text(encoding="utf-8"))
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            verified = self.run_verify(manifest_path)
+
+        self.assertEqual(verified.returncode, 0, verified.stderr)
+        self.assertEqual(payload["event"], "APPROVE")
+        self.assertEqual(payload["comments"], [])
+        body = payload["body"]
+        self.assertIn(
+            "## 改善提案\n\n<details><summary>詳細はこちら</summary><div>\n\n"
+            "- `src/App.py:L20` 改善: problem should-1 / 提案: suggestion should-1\n"
+            "- `src/App.py:L200` 改善: problem should-2 / 提案: suggestion should-2\n\n"
+            "</div></details>",
+            body,
+        )
+        self.assertNotIn("should-hidden", body)
+        offsets = [
+            body.index("Must Fix はありません。承認します。"),
+            body.index("## 良い点"),
+            body.index("## 確認した範囲"),
+            body.index("## 改善提案"),
+            body.index("これは [pr-codex]("),
+        ]
+        self.assertEqual(offsets, sorted(offsets))
+        self.assertEqual(
+            manifest["should_fix_summary"],
+            [{"finding_id": "should-1"}, {"finding_id": "should-2"}],
+        )
+        self.assertEqual(manifest["counts"]["should_fix_summary"], 2)
+        self.assertIn("should_fix_summary=2", completed.stdout)
+
+    def test_include_should_fix_flag_suppresses_body_summary_section(self) -> None:
+        items = [finding("should-1", "should_fix", start_line=20)]
+        with tempfile.TemporaryDirectory() as tmp:
+            completed, payload_path, manifest_path, _ = self.run_build(
+                Path(tmp), artifact(items), flags=("--include-should-fix",)
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(payload_path.read_text(encoding="utf-8"))
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+        self.assertNotIn("## 改善提案", payload["body"])
+        self.assertEqual(len(payload["comments"]), 1)
+        self.assertEqual(manifest["should_fix_summary"], [])
+        self.assertEqual(manifest["counts"]["should_fix_summary"], 0)
+
     def test_posted_summary_mentions_only_posted_severities(self) -> None:
         items = [
             finding("must-1", start_line=10),
@@ -797,6 +855,10 @@ class BuildReviewPayloadTest(unittest.TestCase):
             body = json.loads(payload_path.read_text(encoding="utf-8"))["body"]
         self.assertNotIn("Should Fix", body)
         self.assertNotIn("Nit", body)
+        self.assertNotIn("problem nit-out", body)
+        self.assertIn("## 改善提案", body)
+        self.assertIn("problem should-in", body)
+        self.assertIn("problem should-out", body)
 
     def test_body_always_ends_with_automated_review_footer(self) -> None:
         hunter_line = "レビューは Claude Code claude-fable-5 と Codex gpt-5.6-sol により行われました。"

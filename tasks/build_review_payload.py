@@ -43,6 +43,7 @@ MANIFEST_COUNT_KEYS = (
     "must_fix_body",
     "must_fix_withheld",
     "should_fix_inline",
+    "should_fix_summary",
     "nit_inline",
 )
 MANIFEST_EVENTS = {"REQUEST_CHANGES", "COMMENT", "APPROVE"}
@@ -480,6 +481,34 @@ def out_of_range_markdown(entry: dict[str, Any]) -> str:
     )
 
 
+
+def should_fix_summary_section(entries: list[dict[str, Any]]) -> str:
+    """Render the collapsed `## 改善提案` body section (issue #140).
+
+    Postable Should Fix findings that are not promoted to inline comments are
+    disclosed inside the posted body behind a <details> fold. Security
+    findings restricted to a body summary render only public_safe_summary;
+    local_only security findings never reach this section.
+    """
+
+    lines = []
+    for item in entries:
+        if security_requires_body(item):
+            security = item.get("security")
+            summary = security.get("public_safe_summary", "") if isinstance(security, dict) else ""
+            lines.append(f"- `{location_label(item)}` {single_line(summary)}")
+            continue
+        lines.append(
+            f"- `{location_label(item)}` 改善: {single_line(item.get('problem'))} / "
+            f"提案: {single_line(item.get('suggestion'))}"
+        )
+    return (
+        "## 改善提案\n\n"
+        "<details><summary>詳細はこちら</summary><div>\n\n"
+        + "\n".join(lines)
+        + "\n\n</div></details>"
+    )
+
 def review_scope(run_plan: Any | None, must_fix_count: int) -> str:
     if not isinstance(run_plan, dict):
         return DEFAULT_REVIEW_SCOPE
@@ -619,6 +648,7 @@ def build_body(
     ci_state: str | None,
     ci_summary: str | None,
     scope: str,
+    should_fix_summary: list[dict[str, Any]],
     out_of_range: list[dict[str, Any]],
     footer: str,
 ) -> str:
@@ -642,6 +672,8 @@ def build_body(
         if short_summary:
             ci_lines.append(f"- 要約: {short_summary}")
         sections.append("\n".join(ci_lines))
+    if should_fix_summary:
+        sections.append(should_fix_summary_section(should_fix_summary))
     if out_of_range:
         entries = "\n\n".join(out_of_range_markdown(entry) for entry in out_of_range)
         sections.append(f"## 行コメント不可 (diff 範囲外)\n\n{entries}")
@@ -697,6 +729,7 @@ def compose_payload(
     non_representatives, members_by_representative = cluster_maps(findings_data, canonical_findings)
     inline_by_severity: dict[str, list[dict[str, Any]]] = {"must_fix": [], "should_fix": [], "nit": []}
     out_of_range: list[dict[str, Any]] = []
+    should_fix_summary: list[dict[str, Any]] = []
     withheld: list[dict[str, Any]] = []
     for item in canonical_findings:
         identifier = item.get("id")
@@ -721,6 +754,16 @@ def compose_payload(
         elif severity not in {"must_fix", "should_fix", "nit"}:
             selected = False
         if not selected:
+            # Issue #140: postable Should Fix findings not promoted to inline
+            # comments are disclosed in the body's collapsed 改善提案 section.
+            if (
+                severity == "should_fix"
+                and not include_should_fix
+                and posting.get("post_policy") == "body_summary"
+                and posting.get("explanation_postable") is True
+                and security_disclosure_policy(item) != "local_only"
+            ):
+                should_fix_summary.append(item)
             continue
         private_reason = withheld_reason(item)
         if private_reason is not None:
@@ -786,6 +829,7 @@ def compose_payload(
         ci_state,
         ci_summary,
         review_scope(run_plan, must_fix_total),
+        should_fix_summary,
         out_of_range,
         compose_review_footer(findings_data, metadata_data, must_fix_total),
     )
@@ -813,6 +857,7 @@ def compose_payload(
         "must_fix_body": must_fix_body,
         "must_fix_withheld": must_fix_withheld,
         "should_fix_inline": len(inline_by_severity["should_fix"]),
+        "should_fix_summary": len(should_fix_summary),
         "nit_inline": len(inline_by_severity["nit"]),
     }
     manifest_core = {
@@ -822,6 +867,7 @@ def compose_payload(
         "comment_map": comment_map,
         "out_of_range": manifest_out_of_range,
         "withheld": manifest_withheld,
+        "should_fix_summary": [{"finding_id": item.get("id")} for item in should_fix_summary],
         "semantic_targets": semantic_targets,
         "counts": counts,
         "flags": {
@@ -901,6 +947,7 @@ def build(args: argparse.Namespace) -> tuple[str, int, dict[str, int], int]:
         "comment_map": manifest_core["comment_map"],
         "out_of_range": manifest_core["out_of_range"],
         "withheld": manifest_core["withheld"],
+        "should_fix_summary": manifest_core["should_fix_summary"],
         "semantic_targets": manifest_core["semantic_targets"],
         "counts": manifest_core["counts"],
         "flags": manifest_core["flags"],
@@ -927,6 +974,7 @@ def verify_manifest(path: Path) -> list[str]:
         "comment_map": list,
         "out_of_range": list,
         "withheld": list,
+        "should_fix_summary": list,
         "semantic_targets": list,
         "counts": dict,
         "flags": dict,
@@ -1011,6 +1059,16 @@ def verify_manifest(path: Path) -> list[str]:
                 errors.append(f"{entry_label}.kind: must equal Must Fix")
             if entry.get("reason") not in {"local_only", "suppress"}:
                 errors.append(f"{entry_label}.reason: must be local_only or suppress")
+
+    should_fix_summary = manifest.get("should_fix_summary")
+    if isinstance(should_fix_summary, list):
+        for index, entry in enumerate(should_fix_summary):
+            entry_label = f"{manifest_path}: should_fix_summary[{index}]"
+            if not isinstance(entry, dict):
+                errors.append(f"{entry_label}: must be an object")
+                continue
+            if not isinstance(entry.get("finding_id"), str):
+                errors.append(f"{entry_label}.finding_id: must be a string")
 
     semantic_targets = manifest.get("semantic_targets")
     if isinstance(semantic_targets, list):
@@ -1197,6 +1255,10 @@ def verify_manifest(path: Path) -> list[str]:
         if valid_counts["must_fix_withheld"] != expected_withheld:
             errors.append(f"{manifest_path}: counts.must_fix_withheld does not match withheld")
 
+    if isinstance(should_fix_summary, list) and "should_fix_summary" in valid_counts:
+        if valid_counts["should_fix_summary"] != len(should_fix_summary):
+            errors.append(f"{manifest_path}: counts.should_fix_summary does not match should_fix_summary")
+
     if self_review is True and event in {"APPROVE", "REQUEST_CHANGES"}:
         errors.append(f"{manifest_path}: event must be COMMENT when self_review is true")
     elif self_review is not True and valid_counts.get("must_fix_total", 0) >= 1 and event != "REQUEST_CHANGES":
@@ -1382,7 +1444,7 @@ def main() -> int:
     print(
         f"built payload: event={event} comments={comment_count} "
         f"(must_fix={counts['must_fix_inline']} should_fix={counts['should_fix_inline']} nit={counts['nit_inline']}) "
-        f"out_of_range={out_of_range_count}"
+        f"out_of_range={out_of_range_count} should_fix_summary={counts['should_fix_summary']}"
     )
     return 0
 
