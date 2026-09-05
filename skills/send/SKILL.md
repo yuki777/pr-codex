@@ -529,7 +529,7 @@ builder は以下のルールを実装している:
     ---
     これは [pr-codex](https://github.com/yuki777/pr-codex):v<producer.version> による自動レビューです。
     レビューは <name> <model> と <name> <model> により行われました。
-    投稿前検証 (semantic preflight) は Codex gpt-5.6-sol により行われました。
+    投稿前検証 (semantic preflight) は Codex gpt-6-astra により行われました。
     ```
     builder は `producer.version` と `review_engines[]` を必須入力として検証する。`review_engines[]` は実行順の `Claude Code`、`Codex` の2件ちょうどで、各要素の `name` / `model` / `effort` がすべて非空文字列でなければならない。欠落・不正なら deterministic failure として非ゼロ終了する（フッターを省略した投稿は行わない fail-closed。#124）。`review_engines` 記録前の旧バージョン review artifact を send する場合は、`/pr-codex:review` を再実行して metadata を再生成する。
     3 行目（投稿前検証）は `counts.must_fix_total` が 1 件以上の場合のみ builder が追加する。Step 4.5 の semantic preflight は Must Fix があるときだけ実行され、失敗時は投稿自体が中止されるため、投稿された body の表示は常に実行事実と一致する。Must Fix 0 件の skip 時は表示しない。文言に Must Fix を含めず、行の有無は Must Fix 1 件以上の情報のみで（非 self-PR では公開 event `REQUEST_CHANGES` と等価。self-PR 抑止の `COMMENT` でも総評と inline コメントが同じ情報を先に公開している）、`withheld` の存在・件数・カテゴリを新たに公開しない（#120 と整合）。verifier は send 実行時の構成のため `metadata.json` には記録せず、builder 同梱の固定値 `SEMANTIC_VERIFIER_ENGINE` を使う。Step 4.5 の Codex テンプレートのモデルを変更する場合は builder の固定値も併せて更新する（`tasks/test_issue124_docs.py` が一致を検証する）。effort はどのフッター行にも表示しない。実行時の実効 effort は投稿時点で確定できないため、`review_engines[].effort` は記録の検証にだけ使い、表示は name と model に限定する（#128）
@@ -552,7 +552,7 @@ builder は `--include-should-fix` / `--include-nit` の active severity flags �
 
 ### Step 4.5: 投稿前 verifier pipeline (static Python + Codex semantic)
 
-投稿直前の検証を **4 stage verifier pipeline** として実行する。`--auto-send` でもスキップしない。Step 5 第2ステップ（interactive の最終承認プロンプト、または auto_send の自動続行判断）の直前で必ず実行する。`findings.verified.json` は必須入力であり、Markdown fallback は使わない。担当は二層に分かれる: `schema_validation` / `range_validation` / `payload_consistency` の 3 つの static stage は決定論的な Python validator / builder が担い、意味判断が必要な `semantic_preflight` だけを Codex CLI (GPT-5.6) が担う。**static stage が 1 つでも FAIL の場合は Codex を呼ばず fail-closed で中断する。** semantic 判定は Codex の structured output（`--output-schema` / `--output-last-message`、`schemas/preflight-semantic.v1.json`）で per-finding decisions として直接受け、`validate_preflight_result.py --from-semantic` が static 結果と合成して `preflight-result.json` を生成する（top-level verdict / stage status / counts は host 算出）。人間可読の `preflight-codex.md` は validated JSON から `--emit-markdown` で派生生成する。Markdown からの `RESULT_JSON` 抽出や final `VERDICT:` line との整合検証は行わない。
+投稿直前の検証を **4 stage verifier pipeline** として実行する。`--auto-send` でもスキップしない。Step 5 第2ステップ（interactive の最終承認プロンプト、または auto_send の自動続行判断）の直前で必ず実行する。`findings.verified.json` は必須入力であり、Markdown fallback は使わない。担当は二層に分かれる: `schema_validation` / `range_validation` / `payload_consistency` の 3 つの static stage は決定論的な Python validator / builder が担い、意味判断が必要な `semantic_preflight` だけを Codex CLI (GPT-6 Astra) が担う。**static stage が 1 つでも FAIL の場合は Codex を呼ばず fail-closed で中断する。** semantic 判定は Codex の structured output（`--output-schema` / `--output-last-message`、`schemas/preflight-semantic.v1.json`）で per-finding decisions として直接受け、`validate_preflight_result.py --from-semantic` が static 結果と合成して `preflight-result.json` を生成する（top-level verdict / stage status / counts は host 算出）。人間可読の `preflight-codex.md` は validated JSON から `--emit-markdown` で派生生成する。Markdown からの `RESULT_JSON` 抽出や final `VERDICT:` line との整合検証は行わない。
 
 #### 4 stage と担当
 
@@ -560,7 +560,7 @@ builder は `--include-should-fix` / `--include-nit` の active severity flags �
 | --- | --- | --- |
 | 1. `schema_validation` | Python (`validate_findings.py` / `validate_findings_sarif.py`) | `findings.verified.json` の schema / fingerprint 再計算 / `metadata.json` との PR context 一致（Step 3 で実行済み）、`findings.sarif` の schema validation、canonical ↔ `review.md` ↔ `review-payload.json` ↔ SARIF の Must Fix count 整合 |
 | 2. `range_validation` | Python (`build_review_payload.py`) | `payload.comments[]` の `path` / `line` が `metadata.json.files[]` と `pr.diff.ranges.txt` の hunk 範囲内にあること。builder が構築時に enforcement し、`--verify` の manifest digest 再確認で構築後の改竄・手編集を検出する |
-| 3. `semantic_preflight` | Codex (GPT-5.6) | payload 投稿対象の各 Must Fix finding の実在性判定（confirmed / refuted / insufficient_evidence の 3 値） |
+| 3. `semantic_preflight` | Codex (GPT-6 Astra) | payload 投稿対象の各 Must Fix finding の実在性判定（confirmed / refuted / insufficient_evidence の 3 値） |
 | 4. `payload_consistency` | Python (`build_review_payload.py`) | event 判定（'self_review が true → COMMENT（Must Fix 件数・CI 状態にかかわらず抑止）/ self_review が false の場合: canonical Must Fix が1件以上（cluster 非代表 member / withheld / body 末尾へ退避した範囲外 Must Fix を含む）→ REQUEST_CHANGES / Must Fix 0件かつ ci-status.json.state が failure または pending → COMMENT / Must Fix 0件かつ ci-status.json.state が success・skipped・未取得 → APPROVE'。不一致は rule `event_mismatch`）、body セクション順（payload.event が APPROVE の場合は payload.body に '## 確認した範囲' を含む）、counts。builder が生成時に決定論的に保証し、`--verify` で再確認する |
 
 semantic preflight は canonical の `severity == "must_fix"` 全 finding（cluster 非代表 member と `withheld` を含む。`payload-manifest.json` の `semantic_targets`）に適用する。cluster member の要約も代表 comment の body に掲載されるため、代表だけに縮めない。Codex は各 Must Fix finding について「この指摘が誤りである可能性」を 1 つだけ探索し、3 値で判定する。「反証あり」と「調査不足」を区別する:
@@ -666,7 +666,7 @@ static stage の rule 語彙（`schema_validation`: `schema_version_mismatch` / 
 ```bash
 codex \
   --ask-for-approval never \
-  -m gpt-5.6-sol \
+  -m gpt-6-astra \
   -c 'model_reasoning_effort="high"' \
   -c sandbox_mode=read-only \
   exec \
@@ -683,8 +683,8 @@ codex \
 
 フラグの説明:
 
-- `--ask-for-approval never` / `-m gpt-5.6-sol` / `-c ...` は global flag のため、すべて `exec` の前に置く
-- `-m gpt-5.6-sol` — semantic preflight の実行モデルを GPT-5.6 Sol に固定する（#110 の担当替え）。hunter と同じモデルだが、投稿直前の反証確認という別用途のため effort は実測に基づく `high` を維持する。素の `gpt-5.6` slug は ChatGPT アカウントの Codex では 400 で拒否されるため、動作確認済みの `gpt-5.6-sol` を使う
+- `--ask-for-approval never` / `-m gpt-6-astra` / `-c ...` は global flag のため、すべて `exec` の前に置く
+- `-m gpt-6-astra` — semantic preflight の実行モデルを GPT-6 Astra に固定する（#110 の担当替え）。hunter と同じモデルだが、投稿直前の反証確認という別用途のため effort は GPT-5.6 Sol での実測に基づく `high` を維持する。公式ガイドが GPT-6 Astra への移行時は既存の effective reasoning effort を維持するよう案内しているため、Astra への切り替えでは effort を変えない。slug は Codex CLI (ChatGPT アカウント) で `reasoning effort: high` の実行を確認済みの `gpt-6-astra` を使う
 - `-c 'model_reasoning_effort="high"'` — 7,301-byte の prompt と upstream findings 入力を high / xhigh 間で byte-identical に揃えて再実測し、両方が同じ Must Fix 2件を confirmed、exact / acceptable / false-positive / recall も同値だった。保存 run では high が 14,890 ms / 23,003 tokens、xhigh が 34,217 ms / 23,326 tokens だったため、semantic preflight は high に固定する
 - `-c sandbox_mode=read-only` — シェル実行を read-only サンドボックスに固定する。`--sandbox read-only` と等価だが、config override として明示するため `-c` に統一する
 - `--ignore-user-config` — 投稿前検証中のみ `$CODEX_HOME/config.toml` / `~/.codex/config.toml` を読み込まない。auth は引き続き `CODEX_HOME` を使うため、古い MCP 設定や無効な `model_reasoning_effort` による config 検証エラーから Step 4.5 preflight を切り離せる

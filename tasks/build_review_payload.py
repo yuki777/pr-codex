@@ -30,7 +30,7 @@ SELF_REVIEW_REQUEST_CHANGES_SUPPRESSED = (
 # skills/send/SKILL.md; the pairing is enforced by tasks/test_issue124_docs.py.
 # The effort is recorded nowhere here: footers never render efforts because
 # the effective effort cannot be confirmed at posting time (issue #128).
-SEMANTIC_VERIFIER_ENGINE = ("Codex", "gpt-5.6-sol")
+SEMANTIC_VERIFIER_ENGINE = ("Codex", "gpt-6-astra")
 # review Step 3 records the two unconditional hunters in execution order.
 # The footer must not claim a partial, duplicated, or unknown reviewer set.
 REQUIRED_REVIEW_ENGINE_NAMES = ("Claude Code", "Codex")

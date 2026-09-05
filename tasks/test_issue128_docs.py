@@ -18,20 +18,20 @@ class Issue128DocsTest(unittest.TestCase):
         skill = SEND_SKILL.read_text(encoding="utf-8")
         for snippet in (
             "レビューは <name> <model> と <name> <model> により行われました。",
-            "投稿前検証 (semantic preflight) は Codex gpt-5.6-sol により行われました。",
+            "投稿前検証 (semantic preflight) は Codex gpt-6-astra により行われました。",
             "`effort` は記録のみでフッターには表示しない #128",
             "effort はどのフッター行にも表示しない。実行時の実効 effort は投稿時点で確定できないため、`review_engines[].effort` は記録の検証にだけ使い、表示は name と model に限定する（#128）",
         ):
             self.assertIn(snippet, skill)
         # 旧フッター形式（effort 付き）が残っていないこと。
         self.assertNotIn("<name> <model> (<effort>)", skill)
-        self.assertNotIn("gpt-5.6-sol (high) により行われました", skill)
+        self.assertNotIn("gpt-6-astra (high) により行われました", skill)
 
     def test_builder_renders_only_name_and_model(self) -> None:
         builder = BUILDER.read_text(encoding="utf-8")
         # フッターは name と model だけを描画する。
         self.assertIn("f\"{engine['name'].strip()} {engine['model'].strip()}\"", builder)
-        self.assertIn('SEMANTIC_VERIFIER_ENGINE = ("Codex", "gpt-5.6-sol")', builder)
+        self.assertIn('SEMANTIC_VERIFIER_ENGINE = ("Codex", "gpt-6-astra")', builder)
         # 表示専用の effort 正規化は撤去済み（記録の非空検証だけが残る）。
         self.assertNotIn("display_effort", builder)
         self.assertNotIn("EFFORT_DISPLAY_LABELS", builder)
