@@ -59,7 +59,7 @@ test -d "$plugin_root/tasks" && test -d "$plugin_root/schemas" && printf '%s\n' 
 cd ~/claude-loop-pr-codex && claude --permission-mode auto --effort max
 ```
 
-Codex CLI 側のレビュー実行は、本スキル内で `-m gpt-5.6-sol` と `model_reasoning_effort="max"` を指定して実行する。
+Codex CLI 側のレビュー実行は、本スキル内で `-m gpt-6-astra` と `model_reasoning_effort="max"` を指定して実行する。
 
 起動後:
 
@@ -533,11 +533,11 @@ BEAR.Sunday 判定は `bear/sunday` dependency だけを見る。`bear/resource`
 
 `$claude_model` は、Claude CLI が full model name として受け付ける `claude-fable-5-1` に固定する。Step 4a の Claude hunter はこの同じ値を `--model "$claude_model"` で明示指定して実行する（#124）。CLI の既定値やメインコンテキストのモデルを推測してはならない。モデルを変更する場合は直後の代入を明示的に更新し、値が無効な場合は Step 4a の CLI エラーから Step 5 の failed 更新へ遷移する（誤った記録のまま投稿へ進まない）。
 
-`review_engines` は Step 4a / 4b の実行構成（Claude Code: `--model "$claude_model"` + `--effort max`、Codex: `-m gpt-5.6-sol` + `model_reasoning_effort="max"`）を初期値として記録する配列である（#124）。各要素の `model` は Step 4c の実使用モデル転記で、実行証跡（`claude-review.result.json` の `modelUsage`、`codex.log` の `model:` 行）から取得した実際に使用されたモデル名へ上書きされ、send の投稿フッターには上書き後の値が表示される（#143）。effort は両 hunter とも最大値に固定する（現在はいずれも `max`）。4a / 4b のコマンドテンプレートのモデル・effort を変更する場合は、この `review_engines` の値も併せて更新する。記録する effort は実行リテラルのままとする。ただし実行時の実効 effort は投稿時点で確定できないため、send の builder はフッターに effort を表示せず、記録の検証にだけ使う（フッターに表示するのは name と model のみ。#128）。
+`review_engines` は Step 4a / 4b の実行構成（Claude Code: `--model "$claude_model"` + `--effort max`、Codex: `-m gpt-6-astra` + `model_reasoning_effort="max"`）を初期値として記録する配列である（#124）。各要素の `model` は Step 4c の実使用モデル転記で、実行証跡（`claude-review.result.json` の `modelUsage`、`codex.log` の `model:` 行）から取得した実際に使用されたモデル名へ上書きされ、send の投稿フッターには上書き後の値が表示される（#143）。effort は両 hunter とも最大値に固定する（現在はいずれも `max`）。4a / 4b のコマンドテンプレートのモデル・effort を変更する場合は、この `review_engines` の値も併せて更新する。記録する effort は実行リテラルのままとする。ただし実行時の実効 effort は投稿時点で確定できないため、send の builder はフッターに effort を表示せず、記録の検証にだけ使う（フッターに表示するのは name と model のみ。#128）。
 
 ```bash
 claude_model="claude-fable-5-1"
-jq -n --arg org "$org" --arg repository "$repository" --arg repository_full_name "$repository_full_name" --argjson pr_number "$pr_number" --arg pr_url "$pr_url" --arg head_sha "$head_sha" --arg base_sha "$base_sha" --arg branch "$branch" --arg base_branch "$base_branch" --arg merge_commit_sha "$merge_commit_sha" --arg title "$title" --argjson files "$files_json" --arg claude_model "$claude_model" '{org:$org,repository:$repository,repository_full_name:$repository_full_name,pr_number:$pr_number,pr_url:$pr_url,head_sha:$head_sha,base_sha:$base_sha,branch:$branch,base_branch:$base_branch,merge_commit_sha:(if $merge_commit_sha == "" then null else $merge_commit_sha end),title:$title,files:$files,review_engines:[{name:"Claude Code",model:$claude_model,effort:"max"},{name:"Codex",model:"gpt-5.6-sol",effort:"max"}]}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json
+jq -n --arg org "$org" --arg repository "$repository" --arg repository_full_name "$repository_full_name" --argjson pr_number "$pr_number" --arg pr_url "$pr_url" --arg head_sha "$head_sha" --arg base_sha "$base_sha" --arg branch "$branch" --arg base_branch "$base_branch" --arg merge_commit_sha "$merge_commit_sha" --arg title "$title" --argjson files "$files_json" --arg claude_model "$claude_model" '{org:$org,repository:$repository,repository_full_name:$repository_full_name,pr_number:$pr_number,pr_url:$pr_url,head_sha:$head_sha,base_sha:$base_sha,branch:$branch,base_branch:$base_branch,merge_commit_sha:(if $merge_commit_sha == "" then null else $merge_commit_sha end),title:$title,files:$files,review_engines:[{name:"Claude Code",model:$claude_model,effort:"max"},{name:"Codex",model:"gpt-6-astra",effort:"max"}]}' > ~/claude-loop-pr-codex/$org-$repository-$pr_number/metadata.json
 ```
 
 - いつ使うか: `metadata.json` 作成直後に必ず実行する
@@ -944,7 +944,7 @@ pr.diff.ranges.txt 範囲内で実発火・影響を確認できないものは 
 ```bash
 codex \
   --ask-for-approval never \
-  -m gpt-5.6-sol \
+  -m gpt-6-astra \
   -c 'model_reasoning_effort="max"' \
   -c sandbox_mode=read-only \
   exec \
@@ -963,8 +963,8 @@ codex \
 
 - `$plugin_root` — `$org` などと同じ置換対象変数。セットアップで解決した絶対パスの実値に置換してから Bash ツールへ渡す（コマンド構造は変えない）
 - `--ask-for-approval never` — 承認プロンプトを無効化し非対話で実行する。global flag のため `exec` の前に置く（`exec` の後ろに付けると `unexpected argument` で拒否される）
-- `-m gpt-5.6-sol` — Codex CLI の hunter を GPT-5.6 Sol に固定する。global flag のため `exec` の前に置く。モデルを変更する場合は Step 3 の `review_engines`（投稿フッター用の記録。#124）も併せて更新する
-- `-c 'model_reasoning_effort="max"'` — GPT-5.6 Sol hunter の reasoning effort を最大値 `max` に明示固定する（#124。Claude hunter の `--effort max` に対応し、Step 3 の `review_engines` の記録値と一致させる）。`--ignore-user-config` により user config は読まないため、固定しない場合は CLI 既定値で実行されてしまい、投稿フッターの表示と実行構成が乖離し得る。global flag のため `exec` の前に置く（`codex-cli 0.146.0` + `gpt-5.6-sol` で `reasoning effort: max` の実行を確認済み）
+- `-m gpt-6-astra` — Codex CLI の hunter を GPT-6 Astra に固定する。global flag のため `exec` の前に置く。モデルを変更する場合は Step 3 の `review_engines`（投稿フッター用の記録。#124）も併せて更新する
+- `-c 'model_reasoning_effort="max"'` — GPT-6 Astra hunter の reasoning effort を最大値 `max` に明示固定する（#124。Claude hunter の `--effort max` に対応し、Step 3 の `review_engines` の記録値と一致させる）。`--ignore-user-config` により user config は読まないため、固定しない場合は CLI 既定値で実行されてしまい、投稿フッターの表示と実行構成が乖離し得る。global flag のため `exec` の前に置く（`codex-cli 0.146.0` + `gpt-6-astra` で `reasoning effort: max` の実行を確認済み）
 - `-c sandbox_mode=read-only` — シェル実行を read-only サンドボックスに固定し、ローカルファイル書き込みを禁止する（レビュー専用）。`--sandbox read-only` と等価だが、config override として明示するため `-c` に統一する
 - `exec` — 非対話サブコマンド。prompt は位置引数 `-`（stdin から読む指定）と stdin redirection で渡す（Codex の `-p` は `--profile` のため使わない）。この時点ではすでに global flag は前置されている
 - `--ignore-user-config` — `$CODEX_HOME/config.toml` / `~/.codex/config.toml` を読み込まず、user config 由来の外部 MCP（`github-mcp-server` / `backlog-mcp-server` / `docbase-mcp-server` 等）を hunter から切り離す。auth は引き続き `CODEX_HOME` を使う。`exec` サブコマンド側の option のため `exec` の後ろに置く

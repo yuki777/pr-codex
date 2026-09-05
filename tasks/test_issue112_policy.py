@@ -106,7 +106,7 @@ class Issue112PolicyTest(unittest.TestCase):
     def test_semantic_preflight_uses_evaluated_high_effort(self) -> None:
         text = SEND_SKILL.read_text(encoding="utf-8")
         command = text[text.index("#### Codex semantic コマンド") : text.index("#### preflight-result")]
-        self.assertIn("-m gpt-5.6-sol", command)
+        self.assertIn("-m gpt-6-astra", command)
         self.assertIn("-c 'model_reasoning_effort=\"high\"'", command)
         self.assertLess(
             command.index("model_reasoning_effort"),

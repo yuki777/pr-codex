@@ -83,7 +83,7 @@ def metadata() -> dict[str, Any]:
         "files": ["src/App.py", "src/Other.py"],
         "review_engines": [
             {"name": "Claude Code", "model": "claude-fable-5-1", "effort": "max"},
-            {"name": "Codex", "model": "gpt-5.6-sol", "effort": "max"},
+            {"name": "Codex", "model": "gpt-6-astra", "effort": "max"},
         ],
     }
 
@@ -428,7 +428,7 @@ class BuildReviewPayloadTest(unittest.TestCase):
                 )
                 self.assertEqual(manifest["semantic_targets"], [identifier])
                 self.assertIn(
-                    "投稿前検証 (semantic preflight) は Codex gpt-5.6-sol により行われました。",
+                    "投稿前検証 (semantic preflight) は Codex gpt-6-astra により行われました。",
                     payload["body"],
                 )
                 self.assertEqual(manifest["counts"]["must_fix_withheld"], 1)
@@ -881,8 +881,8 @@ class BuildReviewPayloadTest(unittest.TestCase):
         self.assertIn("problem should-out", body)
 
     def test_body_always_ends_with_automated_review_footer(self) -> None:
-        hunter_line = "レビューは Claude Code claude-fable-5-1 と Codex gpt-5.6-sol により行われました。"
-        verifier_line = "投稿前検証 (semantic preflight) は Codex gpt-5.6-sol により行われました。"
+        hunter_line = "レビューは Claude Code claude-fable-5-1 と Codex gpt-6-astra により行われました。"
+        verifier_line = "投稿前検証 (semantic preflight) は Codex gpt-6-astra により行われました。"
         cases = (
             ("approve-skips-verifier", [], hunter_line),
             ("request-changes-shows-verifier", [finding("far-away", start_line=120)], f"{hunter_line}\n{verifier_line}"),
@@ -909,7 +909,7 @@ class BuildReviewPayloadTest(unittest.TestCase):
 
     def test_footer_never_renders_effort(self) -> None:
         # effort は確定できないため、記録値に関係なくフッターに表示しない (#128)。
-        effort_free_line = "レビューは Claude Code claude-fable-5-1 と Codex gpt-5.6-sol により行われました。"
+        effort_free_line = "レビューは Claude Code claude-fable-5-1 と Codex gpt-6-astra により行われました。"
         cases = (
             ("current-max", "max"),
             ("legacy-xhigh", "xhigh"),

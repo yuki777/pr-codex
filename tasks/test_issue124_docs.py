@@ -24,7 +24,7 @@ class Issue124DocsTest(unittest.TestCase):
             "`findings.verified.json` の `producer.version` と `metadata.json.review_engines[]`",
             "これは [pr-codex](https://github.com/yuki777/pr-codex):v<producer.version> による自動レビューです。",
             "レビューは <name> <model> と <name> <model> により行われました。",
-            "投稿前検証 (semantic preflight) は Codex gpt-5.6-sol により行われました。",
+            "投稿前検証 (semantic preflight) は Codex gpt-6-astra により行われました。",
             "欠落・不正なら deterministic failure として非ゼロ終了する（フッターを省略した投稿は行わない fail-closed。#124）",
             "3 行目（投稿前検証）は `counts.must_fix_total` が 1 件以上の場合のみ builder が追加する",
             "Must Fix 0 件の skip 時は表示しない",
@@ -58,10 +58,10 @@ class Issue124DocsTest(unittest.TestCase):
         self.assertEqual(codex_engine.group(1), codex_models[0])
         # The recorded effort must match every `-c 'model_reasoning_effort="..."'`
         # literal in the review skill, and both hunters are pinned to their
-        # maximum tier (Claude: max, Codex GPT-5.6 Sol: max).
+        # maximum tier (Claude: max, Codex GPT-6 Astra: max).
         codex_efforts = set(EFFORT_OVERRIDE_RE.findall(skill))
         self.assertEqual(codex_efforts, {codex_engine.group(2)})
-        self.assertEqual(codex_engine.group(1), "gpt-5.6-sol")
+        self.assertEqual(codex_engine.group(1), "gpt-6-astra")
         self.assertEqual(codex_engine.group(2), "max")
 
         claude_engine = re.search(r'\{name:"Claude Code",model:(\$[a-z_]+),effort:"([^"]+)"\}', skill)
@@ -102,7 +102,7 @@ class Issue124DocsTest(unittest.TestCase):
         readme = README.read_text(encoding="utf-8")
         for snippet in (
             "自動レビューフッターの付加（body 末尾に pr-codex のバージョン（`producer.version`）とレビューに使ったモデル（実行順の `Claude Code`、`Codex` の2件ちょうどを要求する `metadata.json.review_engines`）を明記し、Must Fix があり Step 4.5 の semantic preflight を実行する投稿では検証側モデルも表示する。effort は確定できないため表示しない（#128）。欠落・不正なら builder が非ゼロ終了する fail-closed。#124）",
-            "Codex CLI 側のレビュー (hunter) は、スキル内で `-m gpt-5.6-sol` と `model_reasoning_effort=\"max\"` を指定して実行する（#124）",
+            "Codex CLI 側のレビュー (hunter) は、スキル内で `-m gpt-6-astra` と `model_reasoning_effort=\"max\"` を指定して実行する（#124）",
         ):
             self.assertIn(snippet, readme)
 
